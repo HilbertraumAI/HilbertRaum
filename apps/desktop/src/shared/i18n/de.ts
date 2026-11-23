@@ -69,10 +69,6 @@ export const de: Record<keyof typeof en, string> = {
   // #530: the engine notice leads to the AI Model screen, where the engine banner names the fix.
   'app.noticeGoToModels': 'KI-Modell öffnen',
   'app.fatal.title': 'Die App konnte nicht starten',
-  'app.fatal.hintBefore':
-    'Das lokale Backend ist nicht gestartet, daher kann nichts geladen werden. Starte die ' +
-    'App neu; wenn das öfter passiert, prüf ',
-  'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
   'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
   'app.loadingScreen': 'Wird geladen…',
 
@@ -2522,6 +2518,21 @@ export const de: Record<keyof typeof en, string> = {
   'gate.create.submit': 'Arbeitsbereich erstellen',
   'gate.create.submitBusy': 'Wird erstellt…',
   'gate.error.generic': 'Etwas ist schiefgelaufen. Bitte versuch es noch einmal.',
+  // #1024: der Start des Backends ist fehlgeschlagen.
+  'gate.startFailed.notWritable':
+    'HilbertRaum kann nicht auf dieses Laufwerk schreiben und konnte deshalb nicht starten. Prüf, ob das Laufwerk ' +
+    'schreibgeschützt ist (manche USB-Sticks und SD-Karten haben einen kleinen Schreibschutzschalter) und ob du darauf ' +
+    'Ordner anlegen darfst. Starte die App dann neu.',
+  'gate.startFailed.full':
+    'Das Laufwerk ist voll, deshalb konnte HilbertRaum nicht starten. Gib auf dem Laufwerk Speicherplatz frei und ' +
+    'starte die App dann neu.',
+  'gate.startFailed.other':
+    'Beim Start von HilbertRaum ist etwas schiefgelaufen. Prüf, ob das Laufwerk noch angeschlossen ist und ob darauf ' +
+    'geschrieben werden kann, und starte die App dann neu.',
+  'gate.startFailed.help':
+    'Wenn das immer wieder passiert, sieh in der Anleitung zur Fehlerbehebung im Ordner docs auf dem Laufwerk nach.',
+  'gate.startFailed.code': 'Fehlercode: {code}',
+  'gate.startFailed.copyDetails': 'Details für den Support kopieren',
 
   // ---- Main-process strings (Phase 41, §3.3 two-rule boundary) ----
   // Persist-canonical set (D-L4): the DB keeps the ENGLISH value; these German values

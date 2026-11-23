@@ -69,6 +69,9 @@ function offlineNow(read: () => boolean): boolean {
   }
 }
 
+/** #1024 final round: how many tripwires are in place (each install counts once, until its uninstaller runs). */
+let guardsInstalled = 0
+
 /**
  * Install a defensive tripwire over `net.Socket.prototype.connect`. Any connection to a remote host
  * while `isOffline()` says so invokes `onViolation` (which logs). It NEVER blocks the connection or
@@ -89,10 +92,20 @@ export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => voi
     }
     return original.apply(this, args)
   }
+  guardsInstalled += 1
 
+  let uninstalled = false
   return () => {
     proto.connect = original
+    if (!uninstalled) guardsInstalled -= 1
+    uninstalled = true
   }
+}
+
+/** #1024 final round: is a tripwire in place? A start that threw installs one itself (`main/index.ts`), unless
+ *  `initBackend` got as far as installing it: two would log every remote connect twice. */
+export function offlineGuardInstalled(): boolean {
+  return guardsInstalled > 0
 }
 
 /** The two `PolicyStatus` fields the self-check reads, so a `PolicyStatus` is a posture as it stands. */

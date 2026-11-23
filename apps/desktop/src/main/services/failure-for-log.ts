@@ -70,6 +70,20 @@ export function failureForLog(err: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * {@link failureForLog} for the lines that log whatever was thrown (#1024 review L-1, L-3): the back end's start, the
+ * uncaught exception, the unhandled rejection. It never throws: `failureForLog` falls back to `String(err)`, which throws
+ * for an object with no prototype, and reading a `code` getter may throw too. Then the line says only that the error
+ * could not be read, so a start still gets its failure state and the crash handler still reaches its emergency lock.
+ */
+export function safeFailureForLog(err: unknown): Record<string, unknown> {
+  try {
+    return failureForLog(err)
+  } catch {
+    return { error: 'unreadable' }
+  }
+}
+
 /** What a content-free error keeps of its cause (`VaultLockError`, #956 S-5): never the cause's message. */
 export interface CauseFailure {
   /** The cause's `name` (`Error`, `LockStoppedError`, …), or its `typeof`. */

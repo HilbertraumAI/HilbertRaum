@@ -1,5 +1,5 @@
 import type { MessageKey } from './i18n'
-import type { WorkspaceActionResult } from './types'
+import type { BackendStartFailure, StartFailureCause, WorkspaceActionResult } from './types'
 
 // The copy for a failed unlock or create, by `reason` (UI languages wave, UI-languages owner
 // call D-17 (a), 2026-11-11). Before unlock the gate (`renderer/screens/WorkspaceGate.tsx`)
@@ -64,3 +64,23 @@ export const CREATE_FAILURE_KEYS = {
   refused: 'main.workspace.passwordTooShort',
   error: 'main.workspace.createFailed'
 } satisfies Record<WorkspaceFailureReason, MessageKey | null>
+
+/**
+ * #1024: the gate's copy for a back-end start that failed, by the cause main sent (`WorkspaceStateInfo.startFailure`).
+ * Main sends no text for it at all: the gate words the cause in its own language, and each text says what helps. The
+ * fatal screen (the state itself could not be read) shows `other`'s text too.
+ */
+export const START_FAILURE_KEYS = {
+  drive_not_writable: 'gate.startFailed.notWritable',
+  drive_full: 'gate.startFailed.full',
+  other: 'gate.startFailed.other'
+} satisfies Record<StartFailureCause, MessageKey>
+
+/** The copy key for `failure`'s cause; an own-property read (the cause comes over IPC), and `other` for one the gate does
+ *  not know, such as a cause a newer main sends. */
+export function startFailureKey(failure: BackendStartFailure | null | undefined): MessageKey {
+  const cause = failure?.cause
+  return typeof cause === 'string' && Object.hasOwn(START_FAILURE_KEYS, cause)
+    ? START_FAILURE_KEYS[cause as StartFailureCause]
+    : START_FAILURE_KEYS.other
+}

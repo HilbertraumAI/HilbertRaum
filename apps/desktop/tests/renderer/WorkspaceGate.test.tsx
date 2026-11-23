@@ -8,6 +8,7 @@ import { passwordStrength } from '../../src/renderer/components'
 import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
   MIN_PASSWORD_LENGTH,
+  type StartFailureCause,
   type WorkspaceStateInfo,
   type WorkspaceActionResult,
   type ModelInfo,
@@ -559,5 +560,111 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
   // something, in its own language, instead of leaving the user on a silent gate.
   it.each(['unlock', 'create'] as const)('%s: a call that rejects shows the generic failure in German', async (call) => {
     await failIn(call, new Error('ipc broke'), t('de', 'gate.error.generic'))
+  })
+})
+
+// #1024: a back-end start that threw. Main answers `getWorkspaceState` with `start_failed` and a cause plus the error's
+// code (backend-start-failure.test.ts), and the gate says what happened and what helps, in its own language, with the
+// code on a quiet line and "Copy details for support" for the session's log lines. Nothing can be unlocked or created.
+describe('WorkspaceGate — a back-end start that failed (#1024)', () => {
+  afterEach(() => window.localStorage.clear())
+
+  const startFailed = (cause: string, code: string | null): WorkspaceStateInfo => ({
+    state: 'start_failed',
+    mode: null,
+    plaintextAllowed: false,
+    encryptionRequired: true,
+    startFailure: { cause: cause as StartFailureCause, code }
+  })
+
+  it.each([
+    ['drive_not_writable', 'EPERM', 'gate.startFailed.notWritable'],
+    ['drive_full', 'ENOSPC', 'gate.startFailed.full'],
+    ['other', 'EEXIST', 'gate.startFailed.other']
+  ] as const)('%s (%s) says %s and offers no password field', async (cause, code, key) => {
+    stubApi({})
+    render(<WorkspaceGate state={startFailed(cause, code)} onUnlocked={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: t('en', 'app.fatal.title') })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(t('en', key)))
+    expect(screen.getByText(t('en', 'gate.startFailed.help'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'gate.startFailed.code', { code }))).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText(t('en', 'gate.passwordPlaceholder'))).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'gate.unlock.submit') })).not.toBeInTheDocument()
+  })
+
+  // The cause comes over IPC: one the gate has no copy for, or one naming an inherited member, reads as "something
+  // else" (an own-property read, as `failureText` does), and a failure with no code shows no code line.
+  it.each(['toString', 'a_cause_from_a_newer_main'])('an unknown cause %s shows the general text and no code line', async (cause) => {
+    stubApi({})
+    render(<WorkspaceGate state={startFailed(cause, null)} onUnlocked={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(t('en', 'gate.startFailed.other')))
+    const codeLine = t('en', 'gate.startFailed.code', { code: '\u0000' }).split('\u0000')[0].trim() // "Error code:"
+    expect(screen.queryByText((text) => text.startsWith(codeLine))).not.toBeInTheDocument()
+  })
+
+  // #436 / M-U1: a region inserted already holding its text is missed by screen readers. Measured in the dev app, an
+  // effect alone still put the region and its text in the same frame; the text now waits two animation frames. The
+  // frames themselves are the real app's to show; this row holds that the first render leaves the region empty.
+  it('mounts the alert region empty and puts the text in it afterwards', async () => {
+    stubApi({})
+    render(<WorkspaceGate state={startFailed('drive_full', 'ENOSPC')} onUnlocked={vi.fn()} />)
+    expect(screen.getByRole('alert')).toBeEmptyDOMElement()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(t('en', 'gate.startFailed.full')))
+  })
+
+  it('reads in the gate’s language: German', async () => {
+    stubApi({})
+    renderInLanguage(<WorkspaceGate state={startFailed('drive_full', 'ENOSPC')} onUnlocked={vi.fn()} />, 'de')
+    expect(screen.getByRole('heading', { name: t('de', 'app.fatal.title') })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(t('de', 'gate.startFailed.full')))
+    expect(screen.getByText(t('de', 'gate.startFailed.code', { code: 'ENOSPC' }))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'gate.startFailed.copyDetails') })).toBeInTheDocument()
+  })
+
+  it.each([
+    ['the copy lands', async (): Promise<boolean> => true, 'diag.copied'],
+    ['the clipboard refuses it', async (): Promise<boolean> => false, 'diag.copyFailed'],
+    [
+      'the call fails',
+      async (): Promise<boolean> => {
+        throw new Error('ipc broke')
+      },
+      'diag.copyFailed'
+    ]
+  ] as const)('Copy details for support copies the session’s log lines: %s', async (_label, copy, statusKey) => {
+    const user = userEvent.setup()
+    const getLogTail = vi.fn(async () => ['first line', 'the failure line'])
+    const copyToClipboard = vi.fn(copy)
+    stubApi({ getLogTail, copyToClipboard })
+    render(<WorkspaceGate state={startFailed('other', null)} onUnlocked={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: t('en', 'gate.startFailed.copyDetails') }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', statusKey)))
+    expect(copyToClipboard).toHaveBeenCalledWith('first line\nthe failure line')
+  })
+
+  // #1024 final round: with no log lines there is nothing for support, so "Copied" would be untrue: the clipboard is
+  // left as it is and the status says the copy failed.
+  it('Copy details with no log lines writes nothing and says the copy failed', async () => {
+    const user = userEvent.setup()
+    const copyToClipboard = vi.fn(async () => true)
+    stubApi({ getLogTail: vi.fn(async () => []), copyToClipboard })
+    render(<WorkspaceGate state={startFailed('other', null)} onUnlocked={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: t('en', 'gate.startFailed.copyDetails') }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', 'diag.copyFailed')))
+    expect(copyToClipboard).not.toHaveBeenCalled()
+  })
+
+  // #1024 CR-5: a live region announces a change; the same text set again is no change, so a second press (or a third)
+  // was silent. Each press empties the status first and sets its text a frame later, so every press is heard.
+  it('a second Copy details press empties the status first, then says it again', async () => {
+    const user = userEvent.setup()
+    stubApi({ getLogTail: vi.fn(async () => ['the failure line']), copyToClipboard: vi.fn(async () => true) })
+    render(<WorkspaceGate state={startFailed('other', null)} onUnlocked={vi.fn()} />)
+    const copy = screen.getByRole('button', { name: t('en', 'gate.startFailed.copyDetails') })
+    await user.click(copy)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', 'diag.copied')))
+    await user.click(copy)
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', 'diag.copied')))
   })
 })

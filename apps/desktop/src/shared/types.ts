@@ -318,8 +318,25 @@ export interface PolicyStatus {
 
 // ---- Workspace vault / encryption (spec §3.5/§7.9) ----
 
-/** Lifecycle state of the workspace as seen by the app shell / unlock gate. */
-export type WorkspaceStateName = 'uninitialized' | 'locked' | 'unlocked'
+/** Lifecycle state of the workspace as seen by the app shell / unlock gate. `start_failed` (#1024): the back end's start
+ *  threw, so nothing can be opened in this run; only the failure state's `getWorkspaceState` answers it
+ *  (`main/ipc/registerStartFailureIpc.ts`), never the workspace controller. */
+export type WorkspaceStateName = 'uninitialized' | 'locked' | 'unlocked' | 'start_failed'
+
+/**
+ * #1024: what the gate words about a back-end start that threw. `drive_not_writable`: the drive refused a write (an
+ * access rule that denies new folders, a folder mode without write, a read-only mount, SQLite's read-only result);
+ * `drive_full`: no space left (or a quota, or SQLite's full result); `other`: anything else, a fault of the app included.
+ */
+export type StartFailureCause = 'drive_not_writable' | 'drive_full' | 'other'
+
+/** #1024: why the back end could not start. Content-free by construction: a cause and the error's code, never its
+ *  message (which names the drive's paths) and never free text (`main/services/start-failure.ts`). */
+export interface BackendStartFailure {
+  cause: StartFailureCause
+  /** An errno code (`EPERM`, `ENOSPC`), a Node code (`ERR_…`), `SQLITE_<n>` for SQLite's result code, or null. */
+  code: string | null
+}
 
 /** What `getWorkspaceState()` returns — drives the onboarding/unlock gate. */
 export interface WorkspaceStateInfo {
@@ -347,6 +364,8 @@ export interface WorkspaceStateInfo {
    * right password encrypts it again. Nothing is lost. Read from the disk at every start (no marker).
    */
   lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full' | 'encrypted_file_missing'
+  /** #1024: present exactly when `state` is `start_failed`: the cause the gate words and the code it shows. */
+  startFailure?: BackendStartFailure
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).

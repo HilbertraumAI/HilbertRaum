@@ -80,8 +80,9 @@ describe('the application menu template (#912)', () => {
     // Source-text pin (the window-security.test.ts idiom): index.ts cannot be imported under vitest. Electron installs
     // its default menu unless the app sets one, and each window on Windows and Linux takes the menu set at its creation.
     const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
-    const set = src.indexOf(
-      'Menu.setApplicationMenu(\n    Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))\n  )'
+    // Any indentation: #1024 (review M-2) moved the window steps into `runWindowStart`'s callback, one level deeper.
+    const set = src.search(
+      /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(appMenuTemplate\(\{ platform: process\.platform, packaged: app\.isPackaged \}\)\)\s*\)/
     )
     const whenReady = src.indexOf('app.whenReady().then(')
     expect(whenReady).toBeGreaterThan(0)

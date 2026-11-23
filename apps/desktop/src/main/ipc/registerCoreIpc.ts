@@ -1,5 +1,6 @@
-import { app, clipboard } from 'electron'
+import { app } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
+import { registerLogCopyHandlers } from './log-copy'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
@@ -11,7 +12,7 @@ import { applyLocalApiSettings } from '../services/local-api/lifecycle'
 import { LOCAL_API_SETTINGS_KEYS } from '../../shared/local-api'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
-import { log, readLogTail, readLogFull } from '../services/logging'
+import { log, readLogFull } from '../services/logging'
 import { engineProblems } from '../services/runtime/engine-load'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
@@ -152,21 +153,8 @@ export function registerCoreIpc(ctx: AppContext): void {
   // same reader at every remote connect (#758), so it records a connection opened while this says offline.
   ipcHandle(IPC.getPolicy, (): PolicyStatus => currentPolicyStatus(ctx, (m) => log.warn(m)))
 
-  // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
-  ipcHandle(IPC.getLogTail, (): string[] => readLogTail())
-
-  // Copy text to the OS clipboard. Done in MAIN because the sandboxed preload has no access
-  // to Electron's `clipboard` module and `navigator.clipboard` is unreliable in the
-  // packaged renderer (it threw the "can't copy" error). Returns false on failure so
-  // the renderer can show a friendly message rather than throw.
-  ipcHandle(IPC.writeClipboard, (_e, text: string): boolean => {
-    try {
-      clipboard.writeText(String(text ?? ''))
-      return true
-    } catch {
-      return false
-    }
-  })
+  // The log tail and the clipboard write (Diagnostics' Copy), shared with the start-failure state (#1024).
+  registerLogCopyHandlers(ipcHandle)
 
   // Save the WHOLE current log to a user-chosen file as plaintext (".txt"), so a user can
   // hand diagnostics to support without unsealing the workspace. The dialog + write run in

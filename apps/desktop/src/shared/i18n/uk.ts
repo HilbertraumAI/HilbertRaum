@@ -69,10 +69,6 @@ export const uk: UiCatalog<'uk'> = {
   'app.noticeDetails': 'Докладніше',
   'app.noticeGoToModels': 'Відкрити ШІ-модель',
   'app.fatal.title': 'Не вдалося запустити застосунок',
-  'app.fatal.hintBefore':
-    'Локальна серверна частина не запустилася, тому нічого не вдасться відкрити. Перезапустіть ' +
-    'застосунок; якщо це повторюється, перегляньте файл ',
-  'app.fatal.hintAfter': ' на вашому диску та прочитайте документ «docs/troubleshooting.md».',
   'app.loadingWorkspace': 'Відкриття робочого простору…',
   'app.loadingScreen': 'Зачекайте…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2537,6 +2533,19 @@ export const uk: UiCatalog<'uk'> = {
   'gate.create.submit': 'Створити робочий простір',
   'gate.create.submitBusy': 'Створення…',
   'gate.error.generic': 'Щось пішло не так. Спробуйте ще раз.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum не може записувати на цей диск, тому застосунок не запустився. Перевірте, чи диск не захищений від ' +
+    'запису (деякі USB-накопичувачі та SD-картки мають маленький перемикач блокування) і чи можете ви створювати на ' +
+    'ньому папки, а потім запустіть застосунок знову.',
+  'gate.startFailed.full':
+    'Диск заповнений, тому застосунок не запустився. Звільніть місце на диску, а потім запустіть застосунок знову.',
+  'gate.startFailed.other':
+    'Щось перервало запуск HilbertRaum. Перевірте, чи диск досі підключений і чи можна на нього записувати, а потім ' +
+    'запустіть застосунок знову.',
+  'gate.startFailed.help':
+    'Якщо це повторюється, перегляньте посібник з усунення несправностей у папці docs на диску.',
+  'gate.startFailed.code': 'Код помилки: {code}',
+  'gate.startFailed.copyDetails': 'Скопіювати відомості для підтримки',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected':
     'Цей PDF-файл схожий на скан — у ньому ще немає придатного для читання тексту.',

@@ -3,7 +3,9 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
+import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot, type ResolvedPaths } from './services/workspace'
+import { runBackendStart, runWindowStart } from './backend-start'
+import { safeFailureForLog } from './services/failure-for-log'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
 import { recoverEngineSwaps } from './services/runtime-download'
@@ -27,7 +29,7 @@ import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
 import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
-import { assertOfflinePosture } from './services/offlineGuard'
+import { assertOfflinePosture, offlineGuardInstalled } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
 import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from './services/log-redact'
 import { initPerf, perfMark, perfMs } from './services/perf'
@@ -203,6 +205,9 @@ let mainWindow: BrowserWindow | null = null
 // createWindow. The OCR rasterizer window only `send`s and the print window has no preload.
 const trustedSenders = createTrustedSenders()
 let ctx: AppContext | null = null
+// #1024: the drive layout `initBackend` resolved, kept for a start that throws after it: the failure state's context
+// carries it (`backend-start.ts`), for the update plan's channels to find the drive.
+let backendPaths: ResolvedPaths | null = null
 
 // The three model resolvers + the four availability-driven service selectors that used to
 // live inline here were extracted (M-A3): `resolveModelByRole` (services/resolve-model.ts)
@@ -229,6 +234,7 @@ function initBackend(): void {
     envRoot: driveRoot.root,
     fallbackRoot: app.getPath('userData')
   })
+  backendPaths = paths
   // #975: the drive root joins the roots registered at the top of this module, before anything here touches the drive.
   addLogRedactionRoots({ driveRoot: paths.rootPath })
   ensureWorkspaceDirs(paths)
@@ -1220,29 +1226,58 @@ app.whenReady().then(() => {
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
   initMainI18n(app.getLocale())
   const backendT0 = performance.now()
-  try {
-    initBackend()
-  } catch (err) {
-    log.error('Backend initialization failed', String(err))
-  }
-  perfMark('backend_init_done', { ms: perfMs(backendT0) })
-  // The renderer's one allowed timing mark: the WorkspaceGate (password prompt) became
-  // visible. Hard allowlist, since the renderer is the untrusted boundary (M-S2); any
-  // other payload is dropped. No-op unless HILBERTRAUM_PERF_LOG=1.
-  ipcMain.on(IPC.perfMark, (_e, event: unknown) => {
-    if (event === 'gate_visible') perfMark('gate_visible')
-  })
-  // #560: serve the built renderer on `hilbertraum://app/` before the first window loads it.
-  const protocolT0 = performance.now()
-  const appFiles = installAppProtocol(join(__dirname, '../renderer'))
-  perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
-  // #912: the app's own menu (`app-menu.ts`) instead of Electron's default one, whose View → Reload
-  // drops a review change not saved yet and whose Toggle Developer Tools opens a console with
-  // `window.api`; a released build has neither. Set before the first window, which takes it.
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))
+  // #1024: a start that throws still answers the gate. The runner logs the failure by its code (never the message, which
+  // names the drive's paths), removes what the partial start registered, and registers the failure state: the gate
+  // says why and what helps, in its language, and offers "Copy details for support" (`backend-start.ts`).
+  const startFailure = runBackendStart(initBackend, { trustedSenders, isDev, paths: () => backendPaths })
+  // #1024 review M-2: everything after the back end runs inside `runWindowStart`. A throw here (the app's own renderer
+  // files, the menu, the window) used to open no window at all while this process held the single-instance lock, so
+  // every later launch only "focused" a window that did not exist. Now: a native error box with fixed text in main's
+  // language, the error's code in the log, and the app ends. The exit first runs the crash path's emergency lock, which
+  // reaps what the back end may have started (the engine check's child) and leaves a workspace that never opened as it is.
+  runWindowStart(
+    () => {
+      if (startFailure && !offlineGuardInstalled()) {
+        // #1024: the offline tripwire is `initBackend`'s last step, so a start that threw almost always never installed
+        // it (final round: when it did, a second guard would log every remote connect twice, so it is asked). Nothing in
+        // the failure state may reach the network, so it reads offline here, always; there is no workspace to ask.
+        assertOfflinePosture({
+          readPosture: () => ({ offlineMode: true, networkAllowed: false }),
+          log: (m, meta) => log.info(m, meta),
+          warn: (m, meta) => log.warn(m, meta)
+        })
+      }
+      perfMark('backend_init_done', { ms: perfMs(backendT0) })
+      // The renderer's one allowed timing mark: the WorkspaceGate (password prompt) became
+      // visible. Hard allowlist, since the renderer is the untrusted boundary (M-S2); any
+      // other payload is dropped. No-op unless HILBERTRAUM_PERF_LOG=1.
+      ipcMain.on(IPC.perfMark, (_e, event: unknown) => {
+        if (event === 'gate_visible') perfMark('gate_visible')
+      })
+      // #560: serve the built renderer on `hilbertraum://app/` before the first window loads it.
+      const protocolT0 = performance.now()
+      const appFiles = installAppProtocol(join(__dirname, '../renderer'))
+      perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
+      // #912: the app's own menu (`app-menu.ts`) instead of Electron's default one, whose View → Reload
+      // drops a review change not saved yet and whose Toggle Developer Tools opens a console with
+      // `window.api`; a released build has neither. Set before the first window, which takes it.
+      Menu.setApplicationMenu(
+        Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))
+      )
+      createWindow()
+    },
+    {
+      showErrorBox: (title, body) => dialog.showErrorBox(title, body),
+      exit: (code) => {
+        try {
+          emergencyLock(ctx)
+        } catch {
+          /* best-effort, as in the crash handler below; the exit still comes */
+        }
+        app.exit(code)
+      }
+    }
   )
-  createWindow()
 
   app.on('activate', lifecycle.onActivate)
 })
@@ -1267,7 +1302,9 @@ app.on('will-quit', lifecycle.onWillQuit)
 // and synchronous; the startup crash-recovery shred is the robust backstop on next launch.
 process.on('uncaughtException', (err) => {
   try {
-    log.error('Uncaught exception', String(err))
+    // #1024 review L-3: the error's code and system call, never a file error's message (a path), and a line that cannot
+    // throw itself (`String()` of an object with no prototype did, which skipped the emergency lock after it).
+    log.error('Uncaught exception', safeFailureForLog(err))
     emergencyLock(ctx)
   } catch {
     /* best-effort — the lock is throw-safe inside; this keeps exit(1) the exit code regardless */
@@ -1277,7 +1314,7 @@ process.on('uncaughtException', (err) => {
 // An unhandled rejection is usually NOT fatal (e.g. a stray `void promise()`), so only log
 // it — force-exiting here would turn a benign rejection into an app crash.
 process.on('unhandledRejection', (reason) => {
-  log.warn('Unhandled rejection', { reason: String(reason) })
+  log.warn('Unhandled rejection', safeFailureForLog(reason)) // #1024 review L-3, as the crash line above
 })
 
 // A fallback only (#910): on Windows and Linux the main window's `closed` already quit, and Electron

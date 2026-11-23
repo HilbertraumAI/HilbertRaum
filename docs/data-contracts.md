@@ -1698,10 +1698,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   way, or document work in progress: `VaultBusyError`, whose message is `tMain` text since #807), `error` (anything else, #845's refusals
   included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
-- **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
-  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`
+- **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked|start_failed`; the last, #1024,
+  only from the start-failure state below, never from the controller),
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice?, startFailure? }`
   (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892;
-  `encrypted_file_missing`, #911),
+  `encrypted_file_missing`, #911; `startFailure`: `BackendStartFailure`, #1024),
   `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
@@ -1713,6 +1714,40 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   vs plaintext choice when policy allows, confirm + strength hint, wrong-password error). `App.tsx`
   fetches `getWorkspaceState()` on mount and renders the gate until `unlocked`; sidebar **Lock now**
   button (encrypted only) calls `lockWorkspace`. The Settings workspace card reflects the real mode.
+✅ **Start failure (#1024)** — `main/backend-start.ts` `runBackendStart(initBackend, …)`. A back-end start that throws
+  (`initBackend` registers every channel at its end) logs one line, `Backend initialization failed` with
+  `safeFailureForLog` (a file error's code and bare system call, never its message; `{ "error": "unreadable" }` for a
+  value it cannot read, and then the failure is `{ cause: 'other', code: null }`), removes every handler the partial
+  start registered (`releaseGuardedHandlers`, `ipc/guarded-handle.ts`; their count is logged when there were any; a
+  channel registered before the start began, `guardedChannels`, stays), and registers the failure state
+  (`ipc/registerStartFailureIpc.ts`, which takes a `StartFailureContext { trustedSenders, failure, paths, isDev }` and no
+  `AppContext`):
+  - `getWorkspaceState` → `{ state: 'start_failed', mode: null, plaintextAllowed: false, encryptionRequired: true,
+    startFailure }`, with `startFailure: BackendStartFailure { cause, code }` (`services/start-failure.ts`): `cause` is
+    `drive_not_writable` (`EROFS`, `EPERM`, `EACCES` from a write: `mkdir`, `rename`, `write`, `unlink`, `rmdir`,
+    `copyfile`, `symlink`, or from no system call; not `open`, whose flags are not on the error and which the start
+    mostly uses to read; SQLite 8 READONLY) |
+    `drive_full` (`ENOSPC`, `EDQUOT`, SQLite 13 FULL) | `other` (deliberately also SQLite 14 CANTOPEN: a folder at the
+    database's name, a missing folder or lock file, not proof of a read-only drive); `code` is an errno code, a Node `ERR_…` code, `SQLITE_<n>`, or null, never free text (a `code`
+    property of any other shape, or longer than 40 characters, reads as null). No message, no path.
+  - `getLogTail` and `writeClipboard`: "Copy details for support", the same pair Diagnostics' Copy uses
+    (`ipc/log-copy.ts`), with the same #975 redaction.
+  - Every other `handle` channel has no handler: Electron refuses the invoke ("No handler registered for '<channel>'",
+    the channel only). The renderer calls nothing else in this state (the engine-problems read takes the refusal).
+  The gate (`WorkspaceGate.tsx`) shows the card for `start_failed`: the cause's text from `START_FAILURE_KEYS`
+  (`shared/workspace-failure-keys.ts`, own-property read; an unknown cause reads as `other`), "Error code: {code}" when
+  there is one, and the copy button. `index.ts` installs the offline tripwire after a failed start, always offline.
+  **Constraint for the update plan (W-82, P6 task T6.3):** F-14's update channels (and P7's hand-off channel) are
+  registered inside `registerStartFailureIpc`, so a release that cannot start can still take the update that repairs
+  it. Their registrar takes a narrow context built from `StartFailureContext` (the senders, the drive root from
+  `paths`, `isDev`, the app version), **never the full `AppContext`**: that context does not exist in this state, and
+  the same registrar call serves the normal start. P3's `update.log` line (W-14) goes in `runBackendStart`'s catch,
+  `failure.cause` and `failure.code` only.
+  **After the back end (review M-2):** the app protocol, the menu and the window start inside `runWindowStart`
+  (`main/backend-start.ts`). A throw there logs `App start failed after the back end` (`safeFailureForLog`), shows
+  `dialog.showErrorBox(tMain('app.fatal.title'), tMain('gate.startFailed.other') + '\n\n' + tMain('gate.startFailed.help'))`
+  (fixed text, never the error), runs the emergency lock and `app.exit(1)`: no windowless process keeps the
+  single-instance lock.
 
 ### Real runtime + embedder (Phase 10 live)
 ✅ **`services/runtime/sidecar.ts`** — discovery + `LlamaServer` lifecycle.

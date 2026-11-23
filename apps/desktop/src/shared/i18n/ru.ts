@@ -57,10 +57,6 @@ export const ru: UiCatalog<'ru'> = {
   'app.noticeDetails': 'Подробности',
   'app.noticeGoToModels': 'Открыть «ИИ-модель»',
   'app.fatal.title': 'Не удалось запустить приложение',
-  'app.fatal.hintBefore':
-    'Локальная серверная часть приложения не запустилась, поэтому загрузить ничего не получится. ' +
-    'Перезапустите приложение; если это повторяется, проверьте файл ',
-  'app.fatal.hintAfter': ' на вашем диске и загляните в «docs/troubleshooting.md».',
   'app.loadingWorkspace': 'Загрузка рабочего пространства…',
   'app.loadingScreen': 'Загрузка…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2523,6 +2519,19 @@ export const ru: UiCatalog<'ru'> = {
   'gate.create.submit': 'Создать рабочее пространство',
   'gate.create.submitBusy': 'Создание…',
   'gate.error.generic': 'Что-то пошло не так. Попробуйте еще раз.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum не может записывать на этот диск, поэтому приложение не запустилось. Проверьте, что диск не защищен ' +
+    'от записи (у некоторых USB-накопителей и SD-карт есть маленький переключатель блокировки) и что вы можете ' +
+    'создавать на нем папки, а затем снова запустите приложение.',
+  'gate.startFailed.full':
+    'Диск заполнен, поэтому приложение не запустилось. Освободите место на диске и снова запустите приложение.',
+  'gate.startFailed.other':
+    'Что-то прервало запуск HilbertRaum. Проверьте, что диск по-прежнему подключен и на него можно записывать, а ' +
+    'затем снова запустите приложение.',
+  'gate.startFailed.help':
+    'Если это повторяется, загляните в руководство по устранению неполадок в папке docs на диске.',
+  'gate.startFailed.code': 'Код ошибки: {code}',
+  'gate.startFailed.copyDetails': 'Скопировать сведения для поддержки',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected': 'Этот PDF-файл похож на скан — в нем пока нет читаемого текста.',
   'main.ingest.audioNeedsTranscriber':

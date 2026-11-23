@@ -509,7 +509,11 @@ AI Model screen uses the same distinction to explain why downloads are unavailab
 ### 2. Startup self-check (`services/offlineGuard.ts`)
 At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and installs a defensive
 tripwire over `net.Socket.prototype.connect` for the whole session, in **all builds** (so a production
-regression that tried to phone home would still be recorded locally). While the app is offline, any
+regression that tried to phone home would still be recorded locally). It is `initBackend`'s last step, so a start that
+throws never reaches it: since #1024 `main/index.ts` installs it after such a start too, with a posture that always
+reads offline (the failure state has no workspace to ask, and nothing in it may reach the network), unless one is
+already in place (`offlineGuardInstalled`: a start that threw after installing it would otherwise log every remote
+connect twice). While the app is offline, any
 connection to a **remote** host from the main process is logged as a violation, by whichever route it
 reached a socket: `fetch`, `http.request`, `net.connect` and TLS alike. (Until #751 only TLS was seen: the
 others pass Node's normalized argument array, which the guard did not read, so their host came back empty
@@ -809,7 +813,11 @@ matching the unencrypted dev DB.
 **Workspace failure lines name no path (#956).** Diagnostics → Copy and Save log hand the log out
 in readable form, so the workspace's failure lines carry no paths: the create's content-free line
 (#807) is the rule for every failure line of the unlock, the password change, the lock and the quit
-teardown (`main/shutdown.ts`), through `failureForLog` (`services/failure-for-log.ts`). A Node file
+teardown (`main/shutdown.ts`), and (#1024) of the back end's start and the window's (`main/backend-start.ts`: "Backend
+initialization failed", "App start failed after the back end") and of the uncaught-exception and unhandled-rejection
+lines (`main/index.ts`), which all logged `String(err)` before, through `failureForLog` (`services/failure-for-log.ts`);
+those four through `safeFailureForLog`, which never throws and logs `{ "error": "unreadable" }` for a value it cannot
+read (a `String()` of an object with no prototype threw, and in the crash handler skipped the emergency lock). A Node file
 error, one with a `syscall`, `path` or `dest`, or with an errno code (`E…`) or a Node `ERR_FS_*` code
 alone (a `cpSync` refusal carries only that), logs its kind, code and system call, never its message,
 which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
@@ -894,7 +902,11 @@ therefore runs as a three-state machine (`services/logging.ts`):
   boundary). **Nothing touches disk.** Lines logged before the user authenticates are lost if the
   app is killed while still locked — a deliberate trade for "no sensitive bytes on disk before
   unlock." The same applies to a session spent entirely at the unlock gate (never unlocked): it
-  stays in `buffering` and is discarded on quit.
+  stays in `buffering` and is discarded on quit. So does a run whose back-end start threw (#1024; also a
+  throw before `initLogging`, which is the module's initial state): its failure line is in this buffer only, and the
+  start-failure card's "Copy details for support" hands it out through the same `getLogTail` as Diagnostics' Copy,
+  redacted (#975). Nothing writes it to the drive in plaintext; only a plaintext developer workspace that the start
+  had already opened appends it to its plain `app.log`, as it does every line.
 - **`encrypted`** (after `attachVaultKey(key)`, called from the unlock/create IPC path): the buffer
   is folded together with any persisted history decrypted from `app.log.enc`, then re-sealed. New
   lines append to the in-memory buffer; the `.enc` snapshot is rewritten **on every `error`**

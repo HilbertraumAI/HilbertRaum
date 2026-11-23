@@ -62,10 +62,6 @@ export const it: UiCatalog<'it'> = {
   'app.noticeDetails': 'Dettagli',
   'app.noticeGoToModels': 'Vai a Modello IA',
   'app.fatal.title': 'L’app non è riuscita ad avviarsi',
-  'app.fatal.hintBefore':
-    'Il backend locale non si è avviato, quindi non è possibile caricare nulla. Riavvia l’app; ' +
-    'se il problema si ripete, controlla ',
-  'app.fatal.hintAfter': ' sulla tua unità e consulta «docs/troubleshooting.md».',
   'app.loadingWorkspace': 'Caricamento dell’area di lavoro…',
   'app.loadingScreen': 'Caricamento…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2543,6 +2539,19 @@ export const it: UiCatalog<'it'> = {
   'gate.create.submit': 'Crea l’area di lavoro',
   'gate.create.submitBusy': 'Creazione in corso…',
   'gate.error.generic': 'Qualcosa non ha funzionato. Riprova.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum non riesce a scrivere su questa unità, quindi l’app non è riuscita ad avviarsi. Controlla che ' +
+    'l’unità non sia protetta da scrittura (alcune chiavette USB e schede SD hanno un piccolo interruttore di blocco) ' +
+    'e che tu possa creare cartelle al suo interno, poi riavvia l’app.',
+  'gate.startFailed.full':
+    'L’unità è piena, quindi l’app non è riuscita ad avviarsi. Libera spazio sull’unità, poi riavvia l’app.',
+  'gate.startFailed.other':
+    'Qualcosa ha interrotto l’avvio di HilbertRaum. Controlla che l’unità sia ancora collegata e che sia possibile ' +
+    'scriverci, poi riavvia l’app.',
+  'gate.startFailed.help':
+    'Se il problema si ripete, consulta la guida alla risoluzione dei problemi nella cartella docs dell’unità.',
+  'gate.startFailed.code': 'Codice di errore: {code}',
+  'gate.startFailed.copyDetails': 'Copia i dettagli per l’assistenza',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected':
     'Questo PDF sembra una scansione: non contiene ancora testo leggibile.',
