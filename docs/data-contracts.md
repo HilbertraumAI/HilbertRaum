@@ -1724,8 +1724,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `AppContext`):
   - `getWorkspaceState` → `{ state: 'start_failed', mode: null, plaintextAllowed: false, encryptionRequired: true,
     startFailure }`, with `startFailure: BackendStartFailure { cause, code }` (`services/start-failure.ts`): `cause` is
-    `drive_not_writable` (`EROFS`, `EPERM`, `EACCES`, SQLite 8 READONLY) | `drive_full` (`ENOSPC`, `EDQUOT`, SQLite 13
-    FULL) | `other`; `code` is an errno code, a Node `ERR_…` code, `SQLITE_<n>`, or null, never free text (a `code`
+    `drive_not_writable` (`EROFS`, `EPERM`, `EACCES` from a write: `mkdir`, `rename`, `write`, `unlink`, `rmdir`,
+    `copyfile`, `symlink`, `open` (its flags are not on the error), or from no system call; SQLite 8 READONLY) |
+    `drive_full` (`ENOSPC`, `EDQUOT`, SQLite 13 FULL) | `other` (deliberately also SQLite 14 CANTOPEN: a folder at the
+    database's name, a missing folder or lock file, not proof of a read-only drive); `code` is an errno code, a Node `ERR_…` code, `SQLITE_<n>`, or null, never free text (a `code`
     property of any other shape, or longer than 40 characters, reads as null). No message, no path.
   - `getLogTail` and `writeClipboard`: "Copy details for support", the same pair Diagnostics' Copy uses
     (`ipc/log-copy.ts`), with the same #975 redaction.

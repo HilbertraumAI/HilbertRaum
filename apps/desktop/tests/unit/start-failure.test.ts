@@ -32,10 +32,27 @@ describe('startFailureFrom: the cause the gate words, and the code it shows (#10
     ['SQLite READONLY, an extended code (8 | 1 << 8)', sqliteError(264), { cause: 'drive_not_writable', code: 'SQLITE_264' }],
     ['SQLite FULL', sqliteError(13), { cause: 'drive_full', code: 'SQLITE_13' }],
     ['SQLite NOTADB', sqliteError(26), { cause: 'other', code: 'SQLITE_26' }],
+    // #1024 CR-4, a deliberate choice: CANTOPEN is also a folder at the database's name, a missing folder or a lock
+    // file it cannot create, so it reads as "something else", never as a drive that refuses writing.
+    ['SQLite CANTOPEN', sqliteError(14), { cause: 'other', code: 'SQLITE_14' }],
     ['SQLite CANTOPEN_ISDIR', sqliteError(526), { cause: 'other', code: 'SQLITE_526' }],
     ['a fault in the app', new TypeError("Cannot read properties of undefined (reading 'x')"), { cause: 'other', code: null }],
     ['a Node code from a fault', Object.assign(new TypeError('bad'), { code: 'ERR_INVALID_ARG_TYPE' }), { cause: 'other', code: 'ERR_INVALID_ARG_TYPE' }]
   ])('%s', (_label, err, expected) => {
+    expect(startFailureFrom(err)).toEqual(expected)
+  })
+
+  // #1024 CR-2: EPERM and EACCES say "refused", not "refused to write". Only a write (or a call that does not say which)
+  // reads as a drive that cannot be written; a refused program start or a refused listing is "something else", whose
+  // text does not send the user to a lock switch that is not the cause. `open` stays a write: a Node error does not say
+  // whether the file was opened for reading or writing. (`mkdir` EPERM, the write the start makes, is the table's first
+  // row above.)
+  it.each<[string, unknown, BackendStartFailure]>([
+    ['a program start refused (spawnSync EPERM)', fileError('EPERM', 'spawnSync C:\\drive\\runtime\\llama-server.exe'), { cause: 'other', code: 'EPERM' }],
+    ['a listing refused (scandir EACCES)', fileError('EACCES', 'scandir'), { cause: 'other', code: 'EACCES' }],
+    ['a file open refused (open EACCES: read or write, the error does not say)', fileError('EACCES', 'open'), { cause: 'drive_not_writable', code: 'EACCES' }],
+    ['a refusal that names no system call', Object.assign(new Error('EPERM: refused'), { code: 'EPERM' }), { cause: 'drive_not_writable', code: 'EPERM' }]
+  ])('%s (#1024 CR-2)', (_label, err, expected) => {
     expect(startFailureFrom(err)).toEqual(expected)
   })
 

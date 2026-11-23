@@ -283,11 +283,16 @@ password recovery — are documented in
     failure's class on the drive (when the drive can be written).
   - A write-protected card or a read-only mount: Node's recursive folder creation reports any refusal other than
     EACCES, ENOSPC, ENOTDIR and EPERM as the ENOENT of the check it makes next (review M-1, measured with an invalid
-    name and a dangling link), so the app makes one plain attempt at the folder to read the real error (`EROFS`, "can't
-    write to this drive"). That a lock-switched card answers `EROFS` is read from libuv's source (Windows'
-    ERROR_WRITE_PROTECT), not measured on a real card. Only when the drive's root folder itself is missing on such a
-    medium does the card still show `ENOENT` and the general text. With all four folders present such a drive starts,
+    name and a dangling link), so the app makes one plain attempt at the highest missing folder, right under the deepest
+    one that exists (the drive root and its parent may be missing too, code review CR-3), to read the real error
+    (`EROFS`, "can't write to this drive"). That a lock-switched card answers `EROFS` is read from libuv's source
+    (Windows' ERROR_WRITE_PROTECT), not measured on a real card. Only when no folder above exists (a drive that is gone)
+    does the card show `ENOENT`, and then that is the real answer. With all four folders present such a drive starts,
     and the unlock fails instead (`main.workspace.openFailed`).
+  - `EPERM` and `EACCES` read as "can't write to this drive" only for a write (`mkdir`, `rename`, `write`, `unlink`,
+    `rmdir`, `copyfile`, `symlink`) or an error that names no system call (code review CR-2); a refused program start
+    or listing reads as "something else". `open` counts as a write: a Node error does not say whether the file was
+    opened for reading or writing, so a refused read through `open` still gets the write text.
   - There is no "Try again" on the card: starting the app again is the retry.
   - The help line and the fatal screen point at the troubleshooting guide in the drive's `docs` folder. A drive
     prepared for HilbertRaum has one; the app-data folder a standalone install falls back to does not, and the guide

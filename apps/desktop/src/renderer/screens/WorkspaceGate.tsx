@@ -296,14 +296,20 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
   // copies the session's log lines, the one way they survive the quit of an encrypted workspace. The update plan adds
   // its "Install update from a file…" inside the banner (W-4) for the causes an update can fix.
 
+  // #1024 CR-5: a live region announces a change, and the same text set again is none, so a second press was silent.
+  // Each press empties the status first and sets its text two animation frames later, as the banner does: the empty
+  // region is painted in between, and every press is heard.
   async function copyDetails(): Promise<void> {
+    setCopyStatus(null)
+    let status: string
     try {
       const lines = await window.api.getLogTail()
       const ok = await window.api.copyToClipboard(lines.join('\n'))
-      setCopyStatus(t(ok ? 'diag.copied' : 'diag.copyFailed'))
+      status = t(ok ? 'diag.copied' : 'diag.copyFailed')
     } catch {
-      setCopyStatus(t('diag.copyFailed'))
+      status = t('diag.copyFailed')
     }
+    requestAnimationFrame(() => requestAnimationFrame(() => setCopyStatus(status)))
   }
 
   if (startFailed) {

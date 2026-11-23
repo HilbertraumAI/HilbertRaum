@@ -186,4 +186,22 @@ describe('workspace initialization', () => {
     }
     expect(thrown).toMatchObject({ code: 'EEXIST', syscall: 'mkdir' })
   })
+
+  // #1024 CR-3: the mask also hides a refusal several levels up, when the drive root itself and its parent are missing
+  // (a launcher pointed at `E:\Kits\HilbertRaum` on a write-protected card with no `Kits` folder). The real error is the
+  // one of the highest missing folder, right under the deepest folder that exists; the dangling link stands in for the
+  // refusing medium there.
+  it('reports the real error of the highest missing folder when the root and its parent are missing (#1024)', () => {
+    const base = tempRoot('init-masked-deep')
+    symlinkSync(join(base, 'nowhere'), join(base, 'kits'), process.platform === 'win32' ? 'junction' : 'dir')
+    const root = join(base, 'kits', 'hilbertraum')
+    const paths = resolvePaths({ envRoot: root, fallbackRoot: root })
+    let thrown: unknown
+    try {
+      ensureWorkspaceDirs(paths)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toMatchObject({ code: 'EEXIST', syscall: 'mkdir' })
+  })
 })

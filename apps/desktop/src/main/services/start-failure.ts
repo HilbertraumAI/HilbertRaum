@@ -15,14 +15,23 @@ const SHOWN_CODE_MAX = 40
  *  (`EACCES` on POSIX), a read-only mount (`EROFS`). At the start these come from `mkdir` (`ensureWorkspaceDirs`): the
  *  encrypted workspace's start steps absorb their own file errors (#242, #911, #1015). */
 const NOT_WRITABLE = new Set(['EROFS', 'EPERM', 'EACCES'])
+/** #1024 CR-2: the system calls a refusal above counts as a refused write for. EPERM and EACCES say "refused", not
+ *  "refused to write": a refused program start (`spawnSync <path>`) or listing (`scandir`) is "something else", whose
+ *  text does not point at a lock switch. `open` stays in: a Node error does not carry the open flags, so a refused read
+ *  and a refused write look the same, and the start's writes are what the text is for. No system call at all (an error
+ *  built with the code alone) stays in too. */
+const WRITE_SYSCALLS = new Set(['mkdir', 'rename', 'write', 'unlink', 'rmdir', 'copyfile', 'symlink', 'open'])
 const FULL = new Set(['ENOSPC', 'EDQUOT'])
-/** SQLite's primary result codes (`errcode & 0xff`) for the plaintext dev workspace's open. */
+/** SQLite's primary result codes (`errcode & 0xff`) for the plaintext dev workspace's open. #1024 CR-4, a deliberate
+ *  choice: CANTOPEN (14) stays "something else". It is also a folder at the database's name, a missing folder or a lock
+ *  file SQLite cannot create, so it does not prove a drive that refuses writing. */
 const SQLITE_READONLY = 8
 const SQLITE_FULL = 13
 
 /** The cause and the code of a thrown value (any value: a start can throw anything). */
 export function startFailureFrom(err: unknown): BackendStartFailure {
-  const e = typeof err === 'object' && err !== null ? (err as { code?: unknown; errcode?: unknown }) : null
+  const e =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown; errcode?: unknown; syscall?: unknown }) : null
   const errcode = e?.errcode
   // A `node:sqlite` error's `code` is always `ERR_SQLITE_ERROR`, which tells nobody anything: show SQLite's own number.
   if (typeof errcode === 'number' && Number.isInteger(errcode) && errcode >= 0 && errcode <= 0xffff) {
@@ -33,8 +42,14 @@ export function startFailureFrom(err: unknown): BackendStartFailure {
   }
   const raw = e?.code
   const code = typeof raw === 'string' && raw.length <= SHOWN_CODE_MAX && SHOWN_CODE.test(raw) ? raw : null
+  const syscall = e?.syscall
+  const aWrite = syscall === undefined || syscall === null || (typeof syscall === 'string' && WRITE_SYSCALLS.has(syscall))
   const cause: StartFailureCause =
-    code !== null && NOT_WRITABLE.has(code) ? 'drive_not_writable' : code !== null && FULL.has(code) ? 'drive_full' : 'other'
+    code !== null && NOT_WRITABLE.has(code) && aWrite
+      ? 'drive_not_writable'
+      : code !== null && FULL.has(code)
+        ? 'drive_full'
+        : 'other'
   return { cause, code }
 }
 

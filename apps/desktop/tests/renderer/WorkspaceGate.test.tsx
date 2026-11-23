@@ -641,4 +641,18 @@ describe('WorkspaceGate — a back-end start that failed (#1024)', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', statusKey)))
     expect(copyToClipboard).toHaveBeenCalledWith('first line\nthe failure line')
   })
+
+  // #1024 CR-5: a live region announces a change; the same text set again is no change, so a second press (or a third)
+  // was silent. Each press empties the status first and sets its text a frame later, so every press is heard.
+  it('a second Copy details press empties the status first, then says it again', async () => {
+    const user = userEvent.setup()
+    stubApi({ getLogTail: vi.fn(async () => ['the failure line']), copyToClipboard: vi.fn(async () => true) })
+    render(<WorkspaceGate state={startFailed('other', null)} onUnlocked={vi.fn()} />)
+    const copy = screen.getByRole('button', { name: t('en', 'gate.startFailed.copyDetails') })
+    await user.click(copy)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', 'diag.copied')))
+    await user.click(copy)
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(t('en', 'diag.copied')))
+  })
 })
