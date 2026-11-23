@@ -290,7 +290,11 @@ build comes from `model-manifests/runtime-sources.yaml`. See
   (and by the app's in-app install). `binaries` holds the SHA-256 of every file of that copy, keyed by
   its path relative to the dir with `/` (since #998 every file the archive put there, not only the
   programs; a nested `cpu/`, `cpu.new` or `cpu.old` has its own marker and is never in it), so the app,
-  the start's recovery and the sell gate judge each copy by its own list.
+  the start's recovery and the sell gate judge each copy by its own list. A marker that is there but is
+  no marker (cut short, garbled; the rules are in [`data-contracts.md`](data-contracts.md), #1028) makes
+  its copy damaged: the app does not start it and offers to install it again, and `fetch-runtime` fetches
+  it again (both twins read the marker as the app does). Should a script still report the engine already
+  installed, delete the engine folder and run it again.
   Re-runs skip only when the marker matches the pinned version + backend and every file it records is
   there — so bumping the pin or switching a CPU-era drive to the Vulkan default actually re-fetches (mere
   binary presence is not trusted). Canonical logic: `services/assets.ts` (`runtimeInstallCurrent`,

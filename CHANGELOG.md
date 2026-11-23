@@ -127,6 +127,18 @@ from its first public `1.0.0` release onward.
   again. The knowledge-pack tools cannot be installed again from the app. They are not started without
   their own program or a library either. A missing file they never use is noted in the app's log, and
   they start as before (#1012).
+- **An engine whose install record on the drive is cut short or damaged is no longer started
+  unchecked.** Each engine folder holds a small record of the files it was installed with, and the check
+  above reads it. When that record was cut short (by a copy of the drive that was interrupted, for
+  example) or garbled, the app treated it as missing and started the engine without checking any of its
+  files. Now the engine is not started, and the AI Model screen offers to install it again, as for a
+  missing file. The knowledge-pack tools are not started either; to repair them, delete their folder on
+  the drive, start the app again and install them again from the Knowledge packs panel. A drive set up
+  long ago with the bash drive script under Git Bash on Windows may carry such a record without anything
+  being wrong with the engine; it, too, is now asked to install its engine again, and "Install again" or a
+  new run of the drive script repairs it. The drive scripts now read that record the way the app does and
+  fetch an engine with a damaged one again instead of skipping it; should a script still say the engine is
+  already installed, delete the engine's folder and run it again (#1028).
 
 ## [0.1.66] — 2026-11-21
 

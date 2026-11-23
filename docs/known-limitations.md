@@ -475,6 +475,56 @@ password recovery — are documented in
   - A knowledge-pack tool file that cannot be read just now does not keep the packs down for the
     session: the next question that uses a pack tries again. A missing one does, until the pack set
     changes.
+
+  What an install marker that is there but damaged does (#1028, 2026-11-23: cut short by an interrupted
+  copy, garbled, or recording a file under something other than its SHA-256):
+  - **The engines:** refused as damaged engine files, with the "Install again" offer, exactly as for a
+    missing file. Before #1028 such a marker counted as none, and the engine started with nothing checked.
+  - **The knowledge-pack tools** stop, like a missing program or library (owner call 2026-11-23), and their
+    **repair is outside the app**: delete `runtime/kiwix-tools/<os>/` (the Knowledge-packs panel then offers
+    to install the tools), or re-run `fetch-runtime --family kiwix_tools`. Unlike the engines, the refusal is
+    **kept until the pack set changes or the app restarts** (code review CR-7): it has their `files` kind,
+    which the pack service latches, so a marker repaired while the app runs (by hand, or by a script run) is
+    not picked up by the next question. Restart the app after the repair.
+  - **An old drive set up with the bash script under Git Bash on Windows may be asked to install its engine
+    again** (code review CR-1). Between 2026-06-21 and a later fix, `fetch-runtime.sh` on Git Bash, for a
+    target path with a backslash and an archive whose pin had no real hash yet, wrote a marker whose hash
+    entry could not be parsed. Before #1028 the app took that marker for none and started the engine without
+    checking it; now it refuses the copy as damaged engine files. This is the intended outcome, and very few
+    drives carry such a marker. "Install again" on the AI Model screen, or a re-run of `fetch-runtime`, writes a
+    good one.
+  - **A marker edited by hand** is held to the same rule. Only the byte-order mark an editor may add is read
+    past; a UTF-16 save, a missing field or an entry that is not a hash makes it damaged.
+  - **`fetch-runtime` reads the marker as the app does** (review round 2: both twins carry a small JSON reader of
+    their own, `marker_readable` and `$ReadInstallMarker`), so it fetches again every marker the app refuses.
+    On a doubt it fetches again too, a needless download, for markers no writer writes: one over 64 KiB (the
+    app reads up to 1 MiB; final review: the `.sh` reader is plain bash, slow on a large text — measured on Git
+    Bash, a marker shaped like a real one takes 0.25 s at 5 KB and 2.2 s near 64 KiB, and a crafted one of tiny
+    strings 20 s near 64 KiB), a control character (DEL included) or an escape in a field name, a map naming one file twice, two names that differ only in
+    case (`.ps1`), and a recorded file name holding `,`, `"`, `{`, `}` or `\` — the `.sh` twin's older readers of
+    the recorded names and hashes cannot read such a name, so that engine is fetched again on every run.
+    llama.cpp, whisper.cpp and kiwix-tools ship no such names. Should a script still report the engine already
+    installed while the app refuses it, delete the engine folder and run the script again.
+  - **Residual — a garble of the word `binaries` itself.** The marker then reads as one with an unknown field
+    and no map, a hash-less marker, so the copy is not checked (`skip-legacy`). Unknown fields must stay
+    accepted (a later release may add one, data-contracts.md), so this cannot be told from a real hash-less
+    marker. **For the engines,** a garble anywhere else is caught: a structural character or a field name
+    makes the marker damaged, a hash makes its file changed, and a recorded name makes the program unrecorded
+    (damaged) or the named file missing (damaged files). One exception: a garble that turns the single key of
+    a marker written before #998 (it records the program alone) into a name under `cpu/` leaves a map that
+    records nothing of the copy, so the copy is not checked.
+  - **Residual — the knowledge-pack tools and a garbled name.** A garble in the name of a file that is neither
+    their program nor a library (`kiwix-search`, a licence text) — or one that turns a library's name into a
+    name that is neither (`icuuc74.dlm`) — reads as that file missing. The tools start on `missing-other` (owner
+    call on #1012), and the real file under the true name is not checked: a changed library then runs.
+  - **Residual — a second top-level `binaries`.** `JSON.parse` keeps the last of two same-named fields, so a
+    marker that carries a map and then `"binaries":{}` reads as hash-less and its copy is not checked. Only
+    someone who can write the marker writes that (no damage makes a second field), and that person can also
+    rewrite the hashes.
+  - **Residual — a link at the marker's path.** The marker is found with `stat`, which follows a link: a
+    link to a file is read as that file, and a dangling link reads as no marker (a hand-placed bundle,
+    `skip-legacy`). exFAT, the Kit's file system, has no links; on another file system only someone who can
+    write the engine folder can place one.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

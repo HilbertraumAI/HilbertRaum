@@ -1,15 +1,15 @@
-import { readFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { log } from './logging'
 import {
   NESTED_NET_FOLDERS,
+  fileErrorCode,
   markerBinaryKey,
-  parseRuntimeMarker,
   readRuntimeMarker,
+  readRuntimeMarkerState,
   recordedFilePath,
-  runtimeMarkerPath,
-  type RuntimeInstallMarker
+  type RuntimeInstallMarker,
+  type RuntimeMarkerFault
 } from './assets'
 import { sha256File } from './models'
 
@@ -57,9 +57,16 @@ import { sha256File } from './models'
 // exception (code review round 7): the `missing-other` of a caller that starts on it (the
 // knowledge-pack tools, `startsOnMissingOther`), reached after every present file was hashed and
 // started on like `ok`, is kept like `ok` — under its own cache key.
+//
+// #1028: a marker that is there but cannot be read as one (cut short by an interrupted copy, garbled)
+// was taken for no marker: the copy was `skip-legacy`, cached, and its engine started unchecked, and a
+// `cpu/` net's own marker fell back to the family's. The walk now stops at the first marker FILE it finds,
+// readable or not: a damaged one is `marker-damaged` — the engines refuse it as damaged files, with the
+// "Install again" offer — and it is never cached, so a marker put back is read by the next attempt.
 
 /**
- * The verification outcomes (#1012 adds the last three; all of them refuse at the engines' seams):
+ * The verification outcomes (#1012 adds `missing`, `missing-other` and `unreadable`, #1028 `marker-damaged`;
+ * all of them refuse at the engines' seams):
  *  - `mismatch`: a recorded file differs, or a key leaves the copy's folder — a tamper; every seam refuses.
  *  - `missing`: the program or a recorded library (`.dll`, `.so`, `.so.N`, `.dylib`) is gone, and
  *    nothing present differs. The OS loader would look for it elsewhere (the working directory
@@ -72,6 +79,10 @@ import { sha256File } from './models'
  *  - `unreadable`: a recorded file could not be read just now, or the copy changed during the
  *    check: no verdict about the copy. Seams refuse this attempt without blaming anything (the
  *    probe gives no answer, the start ladder sees no GPU evidence), and the next attempt reads again.
+ *  - `marker-damaged` (#1028): the copy's install marker is there but cannot be read as one (cut short,
+ *    garbled, a folder at its path), or it records files of the copy but not the program asked about.
+ *    With the record gone nothing can be checked, so every seam refuses it: the engines as damaged
+ *    files, the knowledge-pack tools like a missing program or library (owner call 2026-11-23).
  */
 export type BinaryVerifyResult =
   | 'ok'
@@ -81,19 +92,21 @@ export type BinaryVerifyResult =
   | 'missing'
   | 'missing-other'
   | 'unreadable'
+  | 'marker-damaged'
 
 /**
  * #1012: the copy is not what was installed — a recorded file is gone (`missing`, `missing-other`) or
- * differs (`mismatch`; code review round 6: a copy cut short or bit-rot looks just like a tamper). The
- * engines refuse all three as their own files damaged, with the reinstall offer; the verifier's log
- * line still tells a changed file (a possible tamper) from a missing one.
+ * differs (`mismatch`; code review round 6: a copy cut short or bit-rot looks just like a tamper). #1028:
+ * or its record of what was installed is damaged (`marker-damaged`). The engines refuse all four as their
+ * own files damaged, with the reinstall offer; the verifier's log line still tells a changed file (a
+ * possible tamper) from a missing one and from a damaged marker.
  */
 export function isDamagedFilesVerdict(verdict: BinaryVerifyResult): boolean {
-  return verdict === 'mismatch' || verdict === 'missing' || verdict === 'missing-other'
+  return verdict === 'mismatch' || verdict === 'missing' || verdict === 'missing-other' || verdict === 'marker-damaged'
 }
 
 /** The verdicts no later spawn may reuse (see the cache note above). */
-const RECHECKED: ReadonlySet<BinaryVerifyResult> = new Set(['unreadable', 'missing', 'missing-other'])
+const RECHECKED: ReadonlySet<BinaryVerifyResult> = new Set(['unreadable', 'missing', 'missing-other', 'marker-damaged'])
 
 /**
  * A name the OS loader, or llama.cpp's backend loader, loads as code: a shared library. Matched on
@@ -172,12 +185,6 @@ function keysToVerify(binaries: Record<string, string>, markerDir: string, binPa
   return [program, ...Object.keys(binaries).filter((key) => key !== program && covered(key)).sort()]
 }
 
-/** A read error's errno code (`EBUSY`, `EACCES`, …), validated as one — never the message, which names the path. */
-function readErrorCode(err: unknown): string | null {
-  const code = (err as NodeJS.ErrnoException | null)?.code
-  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : null
-}
-
 /**
  * A read error that says the file is not there (no file, or no folder on its path). A folder or another
  * non-regular file AT the path is caught before the read (round 5: the `stat` in the hashing loop). A
@@ -185,7 +192,7 @@ function readErrorCode(err: unknown): string | null {
  * EBUSY for both), so it stays `unreadable`.
  */
 function isAbsent(err: unknown): boolean {
-  const code = readErrorCode(err)
+  const code = fileErrorCode(err)
   return code === 'ENOENT' || code === 'ENOTDIR'
 }
 
@@ -196,9 +203,22 @@ function isAbsent(err: unknown): boolean {
  */
 function readFailure(err: unknown): 'unreadable' {
   log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
-    code: readErrorCode(err) ?? 'read-failed'
+    code: fileErrorCode(err) ?? 'read-failed'
   })
   return 'unreadable'
+}
+
+/**
+ * #1028: the copy's install marker is there but is no marker (`fault`, `RuntimeMarkerFault`), or it records
+ * files of the copy but not the program (`program-unrecorded`). Refused, never cached (`RECHECKED`). Logs
+ * fixed words only: no path, no marker text.
+ */
+function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded'): 'marker-damaged' {
+  log.warn('An engine install marker is there but cannot be read as one — refusing to spawn (the copy counts as damaged; checked again next spawn)', {
+    code: 'marker-damaged',
+    fault
+  })
+  return 'marker-damaged'
 }
 
 /**
@@ -212,7 +232,8 @@ function readFailure(err: unknown): 'unreadable' {
  * for a caller that refuses it anyway (the engines, code review round 7); only once nothing present
  * differs for one that starts on it (`startsOnMissingOther`, the knowledge-pack tools — a changed
  * file must still win). Never throws: a file or marker that can't be read right now resolves
- * `unreadable` (the cache layer won't persist it).
+ * `unreadable` (the cache layer won't persist it). #1028: the walk stops at the first marker FILE it
+ * finds; one that is there but is no marker resolves `marker-damaged` (not persisted either).
  */
 async function computeRawVerification(binPath: string, startsOnMissingOther: boolean): Promise<BinaryVerifyResult> {
   const dir = dirname(binPath)
@@ -222,44 +243,50 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
   let markerDir: string | null = null
   let marker: RuntimeInstallMarker | null = null
   for (const candidate of [dir, dirname(dir)]) {
-    // Code review round 6: a marker that is there but cannot be READ just now is no legacy drive (that
-    // would be cached as `skip-legacy`, or refused for good on a Kit that refuses hash-less markers), and
-    // a `cpu/` net's own marker that cannot be read must not fall back to the family's: `unreadable`,
-    // re-checked. A marker that is read but does not PARSE (truncated, garbled) is still taken as no
-    // marker, as before #1012: the walk goes on to the folder above (a `cpu/` net's to the family's), and
-    // with no recorded hash found the copy is `skip-legacy`, cached for the session (round 7: known).
-    let text: string
-    try {
-      text = readFileSync(runtimeMarkerPath(candidate), 'utf8')
-    } catch (err) {
-      if (isAbsent(err)) continue
+    // Only a marker that is not there at all lets the walk go on to the folder above. Code review round 6:
+    // one that is there but cannot be READ just now is no legacy drive (that would be cached as
+    // `skip-legacy`, or refused for good on a Kit that refuses hash-less markers): `unreadable`, re-checked.
+    // #1028: nor is one that is there but is no marker (cut short by an interrupted copy, garbled, a folder
+    // at its path): `marker-damaged`. A `cpu/` net's own marker in either state never falls back to the
+    // family's, which records nothing of the net (no writer puts `cpu/` keys there), or not what is there now.
+    const state = readRuntimeMarkerState(candidate)
+    if (state.kind === 'absent') continue
+    if (state.kind === 'unreadable') {
       log.warn('Could not read an engine install marker before spawn — refusing this attempt (will re-check next spawn)', {
-        code: readErrorCode(err) ?? 'read-failed'
+        code: state.code ?? 'read-failed'
       })
       return 'unreadable'
     }
-    const found = parseRuntimeMarker(text)
-    if (found) {
-      markerDir = candidate
-      marker = found
-      break
-    }
+    if (state.kind === 'damaged') return markerDamaged(state.fault)
+    markerDir = candidate
+    marker = state.marker
+    break
   }
 
   const binaries = marker?.binaries
-  if (!marker || !markerDir || !binaries?.[markerBinaryKey(markerDir, binPath)]) {
-    // No marker, no recorded hash for this binary, or a legacy (hash-less) marker — a
-    // drive provisioned before this control shipped. Tolerate it (content-free log).
+  if (!marker || !markerDir || !binaries) {
+    // No marker, or a legacy (hash-less) marker — a drive provisioned before this control
+    // shipped, or a bundle placed by hand. Tolerate it (content-free log).
     log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
     return 'skip-legacy'
   }
-
   // The marker is a file on the drive: a key that leaves the copy's folder is no file of this copy, and
   // no writer records one — refused, before anything is read. EVERY key, before a nested net's keys are
-  // set aside (code review round 3): `cpu/../../x` names no file of the net.
+  // set aside (code review round 3): `cpu/../../x` names no file of the net. #1028 code review (CR-2): and
+  // before the program's own key is looked up, so such a marker stays a tamper even when it does not record
+  // the program (the log line below, the knowledge-pack tools' `integrity` kind), never `marker-damaged`.
   if (Object.keys(binaries).some((key) => recordedFilePath(markerDir, key) === null)) {
     log.warn('An engine install marker records a file outside its folder — refusing to spawn', { code: 'marker-key-outside' })
     return 'mismatch'
+  }
+  if (!binaries[markerBinaryKey(markerDir, binPath)]) {
+    // #1028: every writer records the program it installs, first. A map that records files of this copy but
+    // not the program (a garbled key, a hand edit) is damaged: refused, not taken for a legacy drive. A map
+    // that records nothing of this copy (a `cpu/` net without a marker of its own, checked against a family
+    // marker that has no `cpu/` key) is the legacy case it always was.
+    if (keysToVerify(binaries, markerDir, binPath).length > 1) return markerDamaged('program-unrecorded')
+    log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
+    return 'skip-legacy'
   }
   const program = markerBinaryKey(markerDir, binPath)
   const files = keysToVerify(binaries, markerDir, binPath).map((key) => ({

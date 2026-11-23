@@ -5901,6 +5901,41 @@ log line still records a possible tamper.
     verifier), the kiwix-manage refusals in `zim-service-lifecycle.test.ts`, and the changed-file rows
     in `binary-verify-spawn.test.ts` and `engine-recheck.test.ts`.
 
+### §14 #1028 amendment — an install marker that is there but damaged is the same verdict (2026-11-23)
+
+Until #1028 the pre-spawn check took a marker that is there but cannot be read as one (cut short by an
+interrupted copy, garbled) for no marker: the copy was `skip-legacy`, cached for the session, and the engine
+started with nothing checked. A `cpu/` net's own damaged marker fell back to the family marker one folder up.
+- **The rule.** Every reader reads the marker one way (`readRuntimeMarkerState`, `assets.ts`): absent,
+  unreadable just now, damaged, or a marker (what counts as damaged: `security-model.md` "Re-hash sidecar
+  binaries before spawn", and `data-contracts.md`, which also holds the rules every later writer keeps). The
+  walk stops at the first marker file it finds; a damaged one is the verdict `marker-damaged`, and so is a
+  map that records files of the copy but not the program it was asked about.
+- **What each site does.** `isDamagedFilesVerdict` includes it, so `LlamaServer`, the probe,
+  `checkProgramLoads` and whisper-cli treat it exactly as §13's missing file: this record's `files-damaged`
+  with `exit: 'not started'`, the ladder walks on, the probe answers `null`, "Check again" stays `refused`,
+  and the #532 offer comes up. The knowledge-pack tools refuse it with their `files` kind (owner call
+  2026-11-23), latched until the pack set changes or the app restarts, like a missing program or library: a
+  marker repaired while the app runs is picked up only then (code review CR-7; the latch is kept). A key that
+  leaves the folder is checked before the program's own key, so it stays a tamper (`mismatch`, CR-2).
+- **Not cached,** like `missing`: one `stat` and one small read per attempt, nothing hashed. A marker read
+  while `fetch-runtime` rewrites it in place is read whole by the next attempt, whose healthy start drops the
+  verdict (§9); a marker put back by hand is found without a restart. A reinstall clears the cache anyway.
+- **The repair.** The #532/#678 reinstall reads no marker of the copy it replaces: the damaged copy goes to
+  `.old` and is deleted marker first, and the new copy carries a fresh marker. `engine-consent-ipc.test.ts`
+  holds that loop end to end with nothing injected. Both `fetch-runtime` twins fetch a copy whose marker is
+  damaged again (the `.sh` twin used to read the version out of a cut text and skip it). Since review round 2
+  each twin reads the marker with a small JSON reader of its own, the app's rule step by step (a raw control
+  byte, garbage or a trailing comma, single quotes or a capitalised name no longer slip through), and on a
+  doubt fetches again; the sell gate's line adds "if it reports the engine already installed, delete the
+  engine folder first".
+- **Unchanged:** the dev posture (`skip-dev`, no read); a hash-less marker (`skip-legacy`, the #234 posture);
+  the status, relation and "complete" readers, which read a damaged marker as none (relation `unknown`).
+- **Tests:** `binary-verifier.test.ts` "(#1028)" (the walk, the net, the cache, the postures);
+  `assets.test.ts` (the reading table, and "complete"); `binary-verify-spawn.test.ts` "#1028" (one engine
+  row, both kiwix seams); `engine-consent-ipc.test.ts` (the repair); `commercial-drive.test.ts` (the gate's
+  lines); `script-execution.test.ts` (both twins re-fetch, and a byte-order mark still skips).
+
 ## In-app engine updates — design record (#516, 2026-10-05)
 
 _A drive set up before a pin bump keeps its engines: after #514 (llama.cpp b9849 → b11146) every
@@ -6189,7 +6224,10 @@ in place on a read-only drive) stays the app-update plan's.
    *Review round 2:* a copy is judged by ITS OWN marker: the marker parses and every file its `binaries`
    map records is there (the plan's list only for a marker without the map). Judged by the current pin's
    list, an old copy that lacks a file a newer pin adds read as incomplete, and the start deleted it
-   instead of rolling back to it (and finished an update it should have dropped).
+   instead of rolling back to it (and finished an update it should have dropped). *#1028:* "parses" is the
+   one reading every reader shares (`readRuntimeMarkerState`): a `binaries` that is no map, or an entry that
+   is no SHA-256, makes the marker damaged, so the copy is incomplete (before, such a map read as none and
+   the plan's list made the copy complete).
 4. **No rename onto an existing folder:** a stale `.old` is deleted (marker first) before the swap, and
    one that cannot go fails the step before the install folder is touched.
 

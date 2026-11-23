@@ -17,7 +17,7 @@ import {
   markerBinaryKey,
   planOcrDownloads,
   planRuntimeDownload,
-  readRuntimeMarker,
+  readRuntimeMarkerState,
   recordedFilePath,
   requiredInstallFiles,
   sidecarFamilySpec,
@@ -410,6 +410,14 @@ function engineSwapLeftovers(rootPath: string, extractTo: string): string[] {
   return [dirs.staging, dirs.previous].filter(there).map((p) => relative(resolve(rootPath), p).split(sep).join('/'))
 }
 
+/** #1028: the gate's line for an install marker that is there but could not be read just now (`code`: its errno code). */
+function unreadableMarkerLine(label: string, extractTo: string, code: string | null): string {
+  return (
+    `${label}: the .hilbertraum-runtime.json install marker under ${extractTo} could not be read ` +
+    `(${code ?? 'read failed'}) — check the drive, then run the gate again`
+  )
+}
+
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
@@ -605,7 +613,11 @@ export async function assertCommercialDrive(
         }
       }
       if (planFailed || plans.length === 0) continue
-      const marker = readRuntimeMarker(plans[0]!.plan.extractTo)
+      // #1028: which of the three a marker that is no marker is — not there, not readable just now, or there but
+      // damaged (cut short, garbled) — so the builder is told which, and only a marker that is not there makes an
+      // optional family absent.
+      const markerState = readRuntimeMarkerState(plans[0]!.plan.extractTo)
+      const marker = markerState.kind === 'marker' ? markerState.marker : null
       const { build, plan } = plans.find((p) => marker !== null && p.build.arch === marker.arch) ?? plans[0]!
       const label = `${familyLabel} build ${build.os}/${build.arch} ${build.backend}`
       // #986: an engine install interrupted on this drive leaves `<extract_to>.new` / `.old` beside the
@@ -629,8 +641,24 @@ export async function assertCommercialDrive(
       const required = requiredInstallFiles(plan)
       const present = required.filter((p) => existsSync(p) && statSync(p).isFile())
       // An optional family that is ENTIRELY absent — no marker, none of its files — is not a
-      // defect: a Kit may deliberately ship without the knowledge-pack tools.
-      if (optional && marker === null && present.length === 0) continue
+      // defect: a Kit may deliberately ship without the knowledge-pack tools. (#1028: a damaged
+      // marker left behind is no absent family.)
+      if (optional && markerState.kind === 'absent' && present.length === 0) continue
+      if (optional && markerState.kind === 'damaged' && present.length === 0) {
+        // #1028 review round 2 (L-7): only a leftover marker, none of the family's files — say which way out fits.
+        fail(
+          'current',
+          `${label}: ${build.extractTo} holds only a damaged .hilbertraum-runtime.json install marker — for a Kit ` +
+            'without this family, delete the leftover marker; else re-run fetch-runtime for this build'
+        )
+        continue
+      }
+      if (optional && markerState.kind === 'unreadable' && present.length === 0) {
+        // #1028 code review (CR-3): a marker that cannot be read just now, and none of the family's files: the read
+        // failed, which no missing binary explains.
+        fail('current', unreadableMarkerLine(label, build.extractTo, markerState.code))
+        continue
+      }
       const missing = required.filter((p) => !present.includes(p))
       // A marker alone is not an install: every declared file must exist too (mirrors
       // runtimeInstallCurrent — a half-deleted or half-installed family must fail the gate).
@@ -647,8 +675,14 @@ export async function assertCommercialDrive(
       if (!marker) {
         fail(
           'current',
-          `${label}: no .hilbertraum-runtime.json ` +
-            `install marker under ${build.extractTo} — run fetch-runtime for this build`
+          markerState.kind === 'damaged'
+            ? `${label}: the .hilbertraum-runtime.json install marker under ${build.extractTo} is cut short or ` +
+                'damaged — re-run fetch-runtime for this build; if it reports the engine already installed, delete ' +
+                'the engine folder first'
+            : markerState.kind === 'unreadable'
+              ? unreadableMarkerLine(label, build.extractTo, markerState.code)
+              : `${label}: no .hilbertraum-runtime.json ` +
+                `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )
         continue
       }

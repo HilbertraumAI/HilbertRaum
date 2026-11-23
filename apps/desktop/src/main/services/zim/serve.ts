@@ -148,7 +148,8 @@ export class KiwixServeStartError extends Error {
         message = 'kiwix-serve failed pre-spawn integrity verification'
         break
       case 'files':
-        message = 'kiwix-serve was not started: a file of its install is missing'
+        // #1028: also the kind for an install record that is there but damaged (`marker-damaged`).
+        message = 'kiwix-serve was not started: a file of its install is missing, or its install record is damaged'
         break
       case 'filesUnreadable':
         message = 'kiwix-serve was not started: a file of its install could not be read just now'
@@ -413,10 +414,13 @@ export class KiwixServer {
     if (verdict === 'mismatch') throw new KiwixServeStartError('integrity')
     // (Code review round 3: its own kinds — a missing or locked file is no tamper. Round 5: a file that
     // cannot be read JUST NOW is a kind of its own, which the service never latches.)
-    if (verdict === 'missing') throw new KiwixServeStartError('files')
+    // #1028 (owner call 2026-11-23): an install marker that is there but cannot be read as one is refused like a
+    // missing file. With the record gone nothing can say that no library is missing — the case review R-1 refuses.
+    if (verdict === 'missing' || verdict === 'marker-damaged') throw new KiwixServeStartError('files')
     if (verdict === 'unreadable') throw new KiwixServeStartError('filesUnreadable')
     // #339 P8-1: an in-app install records a hash for kiwix-serve, so `skip-legacy` now means
-    // exactly one thing — a bundle placed by hand with no marker. Say so once per process, the
+    // exactly one thing — a bundle placed by hand with no marker (#1028: a damaged marker no longer lands
+    // here). Say so once per process, the
     // way `tools.ts` does for kiwix-manage, so the R-1 closure is auditable for BOTH binaries.
     if (verdict === 'skip-legacy' && !warnedServeSkipLegacy) {
       warnedServeSkipLegacy = true

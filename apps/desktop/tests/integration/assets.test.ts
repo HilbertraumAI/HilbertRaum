@@ -493,28 +493,51 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     })
   })
 
-  it('readRuntimeMarker drops a malformed `binaries` field (tamper-tolerant)', () => {
-    const root = tempDir('hilbertraum-marker-')
-    // Non-string values are dropped; an all-bad map leaves `binaries` absent entirely.
-    writeFileSync(
-      runtimeMarkerPath(root),
-      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: { x: 5, y: 'ok' } })
-    )
-    expect(readRuntimeMarker(root)?.binaries).toEqual({ y: 'ok' })
-    writeFileSync(
-      runtimeMarkerPath(root),
-      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: ['not', 'a', 'map'] })
-    )
-    expect(readRuntimeMarker(root)?.binaries).toBeUndefined()
+  // #1028: one reading for every reader. A marker that is there but is not one this app can read is no marker to
+  // the version relation, the install skip, the status and the swap's "complete" check, and the pre-spawn check
+  // refuses it as damaged engine files (binary-verifier.test.ts). Before #1028 a bad `binaries` entry was dropped
+  // and the marker read on without it, so the file it named went unchecked; a map that was no map read as none.
+  const FIELDS = { version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64' } as const
+  const WHOLE = { ...FIELDS, binaries: { 'llama-server.exe': 'a'.repeat(64) } }
+  const text = (marker: unknown): string => JSON.stringify(marker)
+
+  it('readRuntimeMarker reads no file as no marker', () => {
+    expect(readRuntimeMarker(tempDir('hilbertraum-marker-'))).toBeNull()
   })
 
-  it('readRuntimeMarker never throws: missing or malformed → null', () => {
+  it.each<[string, string]>([
+    ['not JSON', 'not-json'],
+    ['cut short', text(WHOLE).slice(0, 40)],
+    ['JSON null', 'null'],
+    ['a JSON array', '[]'],
+    ['incomplete (no backend, os or arch)', text({ version: 'b9585' })],
+    ['a field that is not a string', text({ ...WHOLE, arch: 64 })],
+    ['`binaries` that is an array', text({ ...FIELDS, binaries: ['not', 'a', 'map'] })],
+    ['`binaries` that is null', text({ ...FIELDS, binaries: null })],
+    ['a `binaries` entry that is a number', text({ ...FIELDS, binaries: { x: 5, y: 'b'.repeat(64) } })],
+    ['a `binaries` entry that is an object', text({ ...FIELDS, binaries: { 'llama-server.exe': { sha256: 'a'.repeat(64) } } })],
+    ['a `binaries` entry that is not a SHA-256', text({ ...FIELDS, binaries: { 'llama-server.exe': 'ok' } })],
+    // No writer writes more than a few KB; a larger file is not read into memory at all.
+    ['larger than 1 MiB', text(WHOLE) + ' '.repeat(1024 * 1024)]
+  ])('readRuntimeMarker reads a marker that is %s as no marker, and never throws', (_name, body) => {
     const root = tempDir('hilbertraum-marker-')
+    writeFileSync(runtimeMarkerPath(root), body)
     expect(readRuntimeMarker(root)).toBeNull()
-    writeFileSync(runtimeMarkerPath(root), 'not-json')
-    expect(readRuntimeMarker(root)).toBeNull()
-    writeFileSync(runtimeMarkerPath(root), JSON.stringify({ version: 'b9585' })) // incomplete
-    expect(readRuntimeMarker(root)).toBeNull()
+  })
+
+  it.each<[string, string, unknown]>([
+    // No writer writes one, but an editor may, and both fetch-runtime twins read past it.
+    ['a UTF-8 byte-order mark before it', String.fromCharCode(0xfeff) + text(WHOLE), WHOLE],
+    // What a later writer adds at the top level (a signing record, G-28) is ignored, never a reason to refuse.
+    ['an unknown top-level field', text({ ...WHOLE, signature: { alg: 'x' } }), WHOLE],
+    ['a version of no known shape', text({ ...WHOLE, version: 'custom-1' }), { ...WHOLE, version: 'custom-1' }],
+    ['an upper-case SHA-256', text({ ...FIELDS, binaries: { 'llama-server.exe': 'A'.repeat(64) } }), { ...FIELDS, binaries: { 'llama-server.exe': 'A'.repeat(64) } }],
+    // A map that records nothing is a hash-less marker, as one with no map.
+    ['an empty `binaries` map', text({ ...FIELDS, binaries: {} }), FIELDS]
+  ])('readRuntimeMarker reads a whole marker with %s', (_name, body, expected) => {
+    const root = tempDir('hilbertraum-marker-')
+    writeFileSync(runtimeMarkerPath(root), body)
+    expect(readRuntimeMarker(root)).toEqual(expected)
   })
 
   it('runtimeInstallCurrent is false with no binary', () => {
@@ -926,6 +949,9 @@ describe('the staged swap’s folders (#986)', () => {
     expect(engineFolderComplete(plan, dir)).toBe(false) // no map: the plan's list, newdep.dll missing
     writeFileSync(join(dir, 'newdep.dll'), 'library')
     expect(engineFolderComplete(plan, dir)).toBe(true)
+    // #1028: a map that is no map is a damaged marker, not a marker without one: never complete by the plan's list.
+    writeFileSync(runtimeMarkerPath(dir), JSON.stringify({ ...marker, binaries: ['llama-server.exe', 'newdep.dll'] }))
+    expect(engineFolderComplete(plan, dir)).toBe(false)
   })
 })
 

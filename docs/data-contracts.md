@@ -2664,7 +2664,55 @@ whole renderer-visible surface.
   key whose file is gone is `missing` (the program or a library: `.dll`, `.so`, `.so.N`, `.dylib`) or
   `missing-other` (any other file), a key whose file cannot be read is `unreadable`, and a key that
   leaves the copy's folder (`recordedFilePath`) is refused. Only `ok`, `mismatch`, `skip-*` (and, code review round 7, the knowledge-pack tools' hashed `missing-other`) are
-  cached for the session. Same shape; a marker that records the program alone checks the program alone.* `CommercialGateOptions` (the sell-gate options object) gains
+  cached for the session. Same shape; a marker that records the program alone checks the program alone.*
+  **#1028 — how every reader reads the marker, and what every later writer keeps (2026-11-23).** One
+  reading, `readRuntimeMarkerState` (`assets.ts`), for every reader in the app; the `fetch-runtime` twins
+  (`$ReadInstallMarker` in the `.ps1`, `marker_readable` in the `.sh`, each a small RFC 8259 reader since review
+  round 2, neither `ConvertFrom-Json` nor `sed`) mirror it and, on a doubt, say "damaged" (a needless download); they
+  read at most 64 KiB, and the `.sh` reader runs under `LC_ALL=C` (final review). The marker at a copy's
+  `.hilbertraum-runtime.json` is one of four things:
+  - **absent** — ENOENT or ENOTDIR: a bundle placed by hand, or a drive older than the marker;
+  - **unreadable** — there, but the `stat` or the read failed just now (an antivirus hold, a denied read);
+  - **damaged** — there, but no marker: a non-regular file at the path; more than 1 MiB; text that is not
+    JSON; JSON that is not an object; `version`, `backend`, `os` or `arch` missing or not a string; or a
+    `binaries` that is not a plain object whose every value is a SHA-256 (64 hex digits, either case);
+  - **a marker** — anything else. One leading UTF-8 byte-order mark is read past. **Top-level fields the
+    reader does not know are ignored, whatever they hold.** `binaries: {}` is a hash-less marker.
+
+  What each reader makes of it: the pre-spawn check walks from the program's folder to the one above
+  and stops at the first marker file that is not absent — `unreadable` is its own verdict, damaged is the
+  new `BinaryVerifyResult` **`marker-damaged`** (never cached; the engines refuse it as `'files-damaged'`,
+  the same `EngineProblem` and "Install again" offer as #1012, so no new channel or shape; the
+  knowledge-pack tools refuse it with their `files` kind). A map that records files of the copy but not
+  the program asked about is `marker-damaged` as well (`fault: 'program-unrecorded'`). The version
+  relation, the install skip, the status, Diagnostics and the swap's "complete" check read every state but
+  a marker as "no marker" (`readRuntimeMarker` → `null`: relation `unknown`, never updated). The sell gate
+  fails a damaged or unreadable marker with its own line, and only an absent one lets an optional family
+  count as absent. No reader writes anything new to the drive: an older build reads the same files.
+  **Frozen for every later writer** (release 1 reads markers this way for life, the in-field update plan's
+  F-24; a writer that breaks a rule gets its copy refused by release 1 as damaged engine files):
+  - `binaries` stays a map from the file's path relative to the copy (`markerBinaryKey`: `/` separators)
+    to that file's **lower-case SHA-256 in hex**, and it records every file of the copy, the program
+    first. A value never becomes an object, a list or another digest;
+  - **anything new goes into a new top-level field** (an engine signature, G-28; a second digest): never
+    inside `binaries`, and never a new meaning for `version`, `backend`, `os` or `arch`, which stay strings
+    (`version` keeps the upstream tag shapes, F-24);
+  - the file stays **under 64 KiB, or release 1's scripts re-download it** (final review: the app reads markers
+    up to 1 MiB, but both `fetch-runtime` twins refuse a larger one at once, since the `.sh` reader is plain bash and
+    slow on a large text; today's markers are about 5 KB for 52 files);
+  - the file stays one line of UTF-8 JSON without a byte-order mark and without blanks between its tokens,
+    with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `version`,
+    `backend`, `os`, `arch` or `binaries` anywhere but the top level** (review round 2, L-2; code review CR-4).
+    Both twins read the whole object with a JSON reader of their own and judge only the top-level fields, and
+    the `.sh` skip decision takes the version and backend from that reader (CR-4), so a nested one is no
+    problem for them; but the `.sh` twin still finds the recorded names and hashes with `sed`, which takes the
+    last `"binaries":{` on the line and splits the map at its commas, and the builders' native pre-flight
+    (`build-commercial-drive.{sh,ps1}`, left to the update plan's P3) still takes the last `"version"` and
+    `"backend"` on the line. A later writer that breaks one of these rules is not refused by the app, but
+    release 1's `fetch-runtime` then fetches that engine again on every run (the safe side), and the builder's
+    pre-flight may report a mismatch the canonical gate does not.
+
+  `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
