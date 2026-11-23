@@ -559,6 +559,210 @@ marker_recorded_names() {
   { sed -n 's/.*"binaries":{\([^}]*\)}.*/\1/p' "$1"; printf '\n'; } | tr ',' '\n' | sed -n 's/^"\(.*\)":"[a-fA-F0-9]\{64\}"$/\1/p'
 }
 
+# marker_readable MARKER_PATH — #1028: is the install marker one the app can read? The app refuses a marker that is
+# there but is no marker (cut short by an interrupted copy, garbled) as damaged engine files, so a re-run must fetch
+# the engine again instead of skipping it, in any mode. The rule is the app's (assets.ts readRuntimeMarkerState):
+#  - at most 1 MiB, with no NUL byte (a bash variable cannot hold one, so the bytes are counted first);
+#  - after one leading UTF-8 byte-order mark, exactly ONE JSON object (RFC 8259), read by the small reader below:
+#    nothing before or after it but blanks, no raw control byte inside a string, only JSON's escapes, numbers in
+#    JSON's form, no trailing comma, no comment;
+#  - its own (top-level) version, backend, os and arch are strings, and its own `binaries`, when there, is an object
+#    whose every value is a SHA-256 (64 hex digits). As in JavaScript, the last of two same-named fields counts.
+#    Any other field, nested objects and arrays included, is read past (a later release may add one).
+# On any doubt it says no: a needless download is the safe side. Two such cases (both never written): a name written
+# with an escape (`version`) is not taken for the plain one, and a map naming one file twice is judged by both.
+# Parameter expansion, `[[ == ]]` patterns and `case` only: no `=~`, so a caller's BASH_REMATCH survives (#765), no
+# sed (BSD sed on macOS differs), no character ranges (bash 3.2 matches them by the locale's collation), so macOS's
+# bash 3.2 runs it as bash 5 does. Mirrored by fetch-runtime.ps1 ($ReadInstallMarker).
+marker_readable() {
+  local bytes kept text bom len pos=0 c state=value stack='' top where='' key='' str='' in_map=0 map=absent object=0
+  local f_version=0 f_backend=0 f_os=0 f_arch=0 is_string
+  bytes="$(wc -c < "$1")" || return 1
+  kept="$(tr -d '\000' < "$1" | wc -c)" || return 1
+  [[ $((bytes)) -le 1048576 && $((bytes)) -eq $((kept)) ]] || return 1
+  text="$(cat "$1")" || return 1
+  bom=$'\xef\xbb\xbf'
+  text="${text#"$bom"}"
+  len=${#text}
+  while [[ $pos -lt $len ]]; do
+    c="${text:pos:1}"
+    case "$c" in
+      ' ' | $'\t' | $'\n' | $'\r')
+        pos=$((pos + 1))
+        continue
+        ;;
+    esac
+    case "$state" in
+      value | value-or-close)
+        if [[ "$state" == value-or-close && "$c" == ']' ]]; then
+          stack="${stack%?}"
+          state=after
+          pos=$((pos + 1))
+          continue
+        fi
+        # Where this value sits: one of the object's own fields (`top`), an entry of its own map (`map`), or deeper.
+        where=''
+        if [[ "$stack" == '{' ]]; then
+          where=top
+        elif [[ "$stack" == '{{' && $in_map -eq 1 ]]; then
+          where=map
+        elif [[ -z "$stack" && "$c" != '{' ]]; then
+          return 1 # the marker itself is not an object
+        fi
+        is_string=0
+        case "$c" in
+          '{')
+            [[ -n "$stack" ]] || object=1
+            stack="$stack{"
+            state=key-or-close
+            pos=$((pos + 1))
+            ;;
+          '[')
+            stack="$stack["
+            state=value-or-close
+            pos=$((pos + 1))
+            ;;
+          '"')
+            marker_json_string || return 1
+            is_string=1
+            state=after
+            ;;
+          t | f | n)
+            case "$c" in
+              t) [[ "${text:pos:4}" == true ]] || return 1; pos=$((pos + 4)) ;;
+              f) [[ "${text:pos:5}" == false ]] || return 1; pos=$((pos + 5)) ;;
+              n) [[ "${text:pos:4}" == null ]] || return 1; pos=$((pos + 4)) ;;
+            esac
+            state=after
+            ;;
+          - | [0123456789])
+            marker_json_number || return 1
+            state=after
+            ;;
+          *) return 1 ;;
+        esac
+        if [[ "$where" == top ]]; then
+          case "$key" in
+            version) f_version=$is_string ;;
+            backend) f_backend=$is_string ;;
+            os) f_os=$is_string ;;
+            arch) f_arch=$is_string ;;
+            binaries)
+              if [[ "$c" == '{' ]]; then
+                map=ok
+                in_map=1
+              else
+                map=bad
+              fi
+              ;;
+          esac
+        elif [[ "$where" == map ]]; then
+          if [[ $is_string -ne 1 || ${#str} -ne 64 || "$str" == *[!0123456789abcdefABCDEF]* ]]; then map=bad; fi
+        fi
+        ;;
+      key | key-or-close)
+        if [[ "$state" == key-or-close && "$c" == '}' ]]; then
+          if [[ "$stack" == '{{' && $in_map -eq 1 ]]; then in_map=0; fi
+          stack="${stack%?}"
+          state=after
+          pos=$((pos + 1))
+          continue
+        fi
+        [[ "$c" == '"' ]] || return 1
+        marker_json_string || return 1
+        key="$str"
+        state=colon
+        ;;
+      colon)
+        [[ "$c" == : ]] || return 1
+        state=value
+        pos=$((pos + 1))
+        ;;
+      after)
+        [[ -n "$stack" ]] || return 1 # anything after the object
+        top="${stack#"${stack%?}"}"
+        case "$c" in
+          ,)
+            if [[ "$top" == '{' ]]; then state=key; else state=value; fi
+            ;;
+          '}')
+            [[ "$top" == '{' ]] || return 1
+            if [[ "$stack" == '{{' && $in_map -eq 1 ]]; then in_map=0; fi
+            stack="${stack%?}"
+            ;;
+          ']')
+            [[ "$top" == '[' ]] || return 1
+            stack="${stack%?}"
+            ;;
+          *) return 1 ;;
+        esac
+        pos=$((pos + 1))
+        ;;
+    esac
+  done
+  [[ $object -eq 1 && -z "$stack" && "$state" == after ]] || return 1
+  [[ $f_version -eq 1 && $f_backend -eq 1 && $f_os -eq 1 && $f_arch -eq 1 && "$map" != bad ]]
+}
+
+# marker_json_string — marker_readable's string reader (#1028): the JSON string that starts at $pos in $text, its
+# text (escapes as written) into $str, $pos past its closing quote. Fails on a raw control byte, an escape JSON does
+# not have, or no closing quote.
+marker_json_string() {
+  local rest run esc
+  str=''
+  pos=$((pos + 1))
+  while :; do
+    rest="${text:pos}"
+    run=${rest%%[\"\\]*}
+    [[ "$run" != "$rest" ]] || return 1
+    [[ "$run" != *[[:cntrl:]]* ]] || return 1
+    str="$str$run"
+    pos=$((pos + ${#run}))
+    if [[ "${text:pos:1}" == '"' ]]; then
+      pos=$((pos + 1))
+      return 0
+    fi
+    esc="${text:pos+1:1}"
+    case "$esc" in
+      '"' | '\' | / | b | f | n | r | t)
+        str="$str\\$esc"
+        pos=$((pos + 2))
+        ;;
+      u)
+        [[ "${text:pos+2:4}" == [0123456789abcdefABCDEF][0123456789abcdefABCDEF][0123456789abcdefABCDEF][0123456789abcdefABCDEF] ]] || return 1
+        str="$str\\u${text:pos+2:4}"
+        pos=$((pos + 6))
+        ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+# marker_json_number — marker_readable's number reader (#1028): a JSON number at $pos (`-`? then `0` or a digit run
+# without a leading zero, an optional fraction, an optional exponent), $pos past it.
+marker_json_number() {
+  if [[ "${text:pos:1}" == - ]]; then pos=$((pos + 1)); fi
+  if [[ "${text:pos:1}" == 0 ]]; then
+    pos=$((pos + 1))
+  elif [[ "${text:pos:1}" == [123456789] ]]; then
+    while [[ "${text:pos:1}" == [0123456789] ]]; do pos=$((pos + 1)); done
+  else
+    return 1
+  fi
+  if [[ "${text:pos:1}" == . ]]; then
+    pos=$((pos + 1))
+    [[ "${text:pos:1}" == [0123456789] ]] || return 1
+    while [[ "${text:pos:1}" == [0123456789] ]]; do pos=$((pos + 1)); done
+  fi
+  if [[ "${text:pos:1}" == [eE] ]]; then
+    pos=$((pos + 1))
+    if [[ "${text:pos:1}" == [+-] ]]; then pos=$((pos + 1)); fi
+    [[ "${text:pos:1}" == [0123456789] ]] || return 1
+    while [[ "${text:pos:1}" == [0123456789] ]]; do pos=$((pos + 1)); done
+  fi
+  return 0
+}
+
 # installed_file_names DIR — #998: every file an install holds, relative to it with `/` (the app's
 # markerBinaryKey form): the files and the links that resolve to a file (a link by its own name, never
 # entered; a link to a folder or a dangling one is not recorded, with a line), without the marker, without
@@ -596,7 +800,9 @@ if [[ -f "$BIN_PATH" ]]; then
   done
   if [[ $ALL_PRESENT -eq 0 ]]; then
     WHY="one or more required files are missing"
-  elif [[ -f "$MARKER_PATH" ]]; then
+  # #1028: a marker that is there but is no marker the app can read is as good as none (the default WHY): the app
+  # refuses that copy, so it is fetched again — never skipped, never kept as newer — before any field is read.
+  elif [[ -f "$MARKER_PATH" ]] && marker_readable "$MARKER_PATH"; then
     m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     if [[ "$(compare_runtime_versions "$m_version" "$VERSION")" == "1" ]]; then

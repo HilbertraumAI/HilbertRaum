@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -33,8 +34,10 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
-import { SIDECAR_FAMILY_SPECS, writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
-import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } from '../../src/main/services/runtime/sidecar'
+import { SIDECAR_FAMILY_SPECS, readRuntimeMarker, runtimeMarkerPath, writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
+import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
+import { checkProgramLoads } from '../../src/main/services/engine-health'
+import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { whisperCliBinaryName } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
@@ -48,6 +51,7 @@ import { closePerformanceFixture, ctxWith, freshRoot, seededDb, START_READS } fr
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { verifierInert } from '../helpers/binary-fixtures'
 
 const handlers = ipcState.handlers as IpcHandlers
 const HOST_OS = hostRuntimeOs()
@@ -555,6 +559,38 @@ describe('downloadEngine({ families, reinstall }) — the damaged-files repair (
     // too, the verdict says so — and the screen offers no second reinstall.
     reportEngineProblem(DAMAGED, llamaBin(d.root))
     expect(engineProblemFor('llama_cpp')?.afterInstall).toBe(true)
+  })
+
+  // #1028: the whole repair, with nothing injected. An install marker cut short (an interrupted copy) read as a
+  // hand-placed bundle: the check was skipped, the engine started unchecked, no verdict was recorded, and so the
+  // reinstall had "nothing to repair". Now the real check refuses the copy as damaged files, which is the offer.
+  it('a chat engine whose install marker is cut short: the real check refuses it, and the reinstall repairs it (#1028)', async () => {
+    const d = makeDrive()
+    await installChatEngine(d)
+    const dir = join(d.root, 'runtime', 'llama.cpp', HOST_OS)
+    const whole = readFileSync(runtimeMarkerPath(dir), 'utf8')
+    writeFileSync(runtimeMarkerPath(dir), whole.slice(0, Math.floor(whole.length / 2)))
+    initBinaryVerification(false) // a packaged build: the check is enforced
+    try {
+      const spawned: string[] = []
+      const spawn: SpawnFn = (command) => {
+        spawned.push(command)
+        const child = Object.assign(new EventEmitter(), { killed: false, kill: () => true })
+        queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) started, it loads at once
+        return child
+      }
+      // "Check again" (the same check the probe and every start make).
+      expect(await checkProgramLoads('llama_cpp', llamaBin(d.root), ['--version'], { spawn, timeoutMs: 200 })).toBe('refused')
+      expect(spawned).toEqual([])
+      expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'files-damaged', exit: 'not started' })
+
+      const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+      expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+      expect(readRuntimeMarker(dir)).toMatchObject({ version: 'btest', backend: 'cpu' })
+      expect(await verifyBinaryBeforeSpawn(llamaBin(d.root))).toBe('ok')
+    } finally {
+      verifierInert()
+    }
   })
 
   it.each<[string, EngineProblem | null]>([

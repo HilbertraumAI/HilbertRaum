@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -502,5 +502,152 @@ describe('commercial posture: hashless markers (#234)', () => {
     initBinaryVerification(true)
     setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
     expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-dev')
+  })
+})
+
+// #1028: an install marker that is there but cannot be read as one (cut short by an interrupted copy, garbled) used to
+// read as no marker at all: the copy was `skip-legacy`, cached for the session, and its engine started unchecked; a `cpu/`
+// net's own marker fell back to the family marker one folder up. It is `marker-damaged` now — the engines refuse it as
+// damaged files, with the "Install again" offer — and it is read again on every attempt. Which texts are damaged is
+// `readRuntimeMarker`'s table (assets.test.ts); these rows hold the walk, the cache and the postures to the verdict.
+describe('an install marker that is there but cannot be read as one (#1028)', () => {
+  const sha = (bytes: string): string => createHash('sha256').update(bytes).digest('hex')
+  const FIELDS = { version: 'b12110', backend: 'vulkan', os: 'win', arch: 'x64' } as const
+  const cut = (text: string): string => text.slice(0, Math.floor(text.length / 2))
+  const withMap = (binaries: unknown): string => JSON.stringify({ ...FIELDS, binaries })
+
+  /** The program and a library beside it in `dir`, under a whole marker that records both. Returns the program and the marker's text. */
+  function copyIn(dir: string): { bin: string; whole: string } {
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'the program')
+    writeFileSync(join(dir, 'ggml.dll'), 'the library')
+    writeRuntimeMarker(dir, { ...FIELDS, binaries: { 'llama-server.exe': sha('the program'), 'ggml.dll': sha('the library') } })
+    return { bin, whole: readFileSync(runtimeMarkerPath(dir), 'utf8') }
+  }
+
+  it.each<[string, (whole: string) => string]>([
+    ['cut short (an interrupted copy)', (whole) => cut(whole)],
+    ['that is empty', () => ''],
+    ['that is JSON but no object', () => '[]'],
+    ['without its os field', () => JSON.stringify({ version: 'b12110', backend: 'vulkan', arch: 'x64' })],
+    ['recording a file under a value that is not a SHA-256', () => withMap({ 'llama-server.exe': sha('the program'), 'ggml.dll': { sha256: sha('the library') } })],
+    // A one-letter garble of the program's key: the map records the copy's files, but not the program it was asked about.
+    ['recording the library but not the program', () => withMap({ 'llama-servar.exe': sha('the program'), 'ggml.dll': sha('the library') })],
+    // Review round 2 (L-3): the smallest such map — a marker written before #998 records the program alone, so a garble of
+    // its one key leaves a map of one file that is not the program.
+    ['recording one file, not the program (a program-only marker, its key garbled)', () => withMap({ 'llama-servar.exe': sha('the program') })]
+  ])("in the program's own folder, a marker %s is marker-damaged, never skip-legacy", async (_name, text) => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const { bin, whole } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), text(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
+  })
+
+  it('a folder at the marker path is marker-damaged: it never heals by waiting, so it is no read that failed just now', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const { bin } = copyIn(dir)
+    rmSync(runtimeMarkerPath(dir))
+    mkdirSync(runtimeMarkerPath(dir))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
+  })
+
+  it.each<[string, (whole: string) => string]>([
+    // No writer writes one, but an editor may, and both fetch-runtime twins read past it.
+    ['a UTF-8 byte-order mark before it', (whole) => String.fromCharCode(0xfeff) + whole],
+    // Release 1's reader must keep accepting what a later writer adds at the top level (a signing record, G-28).
+    ['an unknown top-level field holding an object', (whole) => JSON.stringify({ ...JSON.parse(whole), signature: { alg: 'x', of: ['ggml.dll'] } })]
+  ])('a whole marker with %s is read, and the copy verifies ok', async (_name, text) => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const { bin, whole } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), text(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  // The family marker records the net under `cpu/`, with its true hash (it would answer ok) or a wrong one (mismatch):
+  // neither may stand in for the net's own marker.
+  it.each([
+    ['its true hash', true],
+    ['a wrong hash', false]
+  ])("a cpu/ net's own marker cut short never falls back to the family marker (which records the net with %s)", async (_name, trueHash) => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    copyIn(dir)
+    mkdirSync(join(dir, 'cpu'))
+    const { bin, whole } = copyIn(join(dir, 'cpu'))
+    writeRuntimeMarker(dir, {
+      ...FIELDS,
+      binaries: {
+        'llama-server.exe': sha('the program'),
+        'ggml.dll': sha('the library'),
+        'cpu/llama-server.exe': trueHash ? sha('the program') : 'e'.repeat(64)
+      }
+    })
+    writeFileSync(runtimeMarkerPath(join(dir, 'cpu')), cut(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
+  })
+
+  it('a cpu/ net with no marker of its own: over a damaged family marker marker-damaged, over a whole one that records no cpu/ file skip-legacy', async () => {
+    initBinaryVerification(false)
+    const damagedFamily = tmp()
+    const { whole } = copyIn(damagedFamily)
+    mkdirSync(join(damagedFamily, 'cpu'))
+    writeFileSync(join(damagedFamily, 'cpu', 'llama-server.exe'), 'the net')
+    writeFileSync(runtimeMarkerPath(damagedFamily), cut(whole))
+    expect(await verifyBinaryBeforeSpawn(join(damagedFamily, 'cpu', 'llama-server.exe'))).toBe('marker-damaged')
+
+    const wholeFamily = tmp()
+    copyIn(wholeFamily)
+    mkdirSync(join(wholeFamily, 'cpu'))
+    writeFileSync(join(wholeFamily, 'cpu', 'llama-server.exe'), 'the net')
+    expect(await verifyBinaryBeforeSpawn(join(wholeFamily, 'cpu', 'llama-server.exe'))).toBe('skip-legacy')
+  })
+
+  // Review round 2 (L-3): the family marker records files of the net (under `cpu/`) but not the net's program — the net
+  // copy is recorded, so its program's missing key is damage, not a legacy drive.
+  it("a cpu/ net with no marker of its own, over a family marker that records the net's files but not its program, is marker-damaged", async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    copyIn(dir)
+    mkdirSync(join(dir, 'cpu'))
+    writeFileSync(join(dir, 'cpu', 'llama-server.exe'), 'the net')
+    writeFileSync(join(dir, 'cpu', 'ggml.dll'), 'the net library')
+    writeRuntimeMarker(dir, {
+      ...FIELDS,
+      binaries: { 'llama-server.exe': sha('the program'), 'ggml.dll': sha('the library'), 'cpu/ggml.dll': sha('the net library') }
+    })
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'cpu', 'llama-server.exe'))).toBe('marker-damaged')
+  })
+
+  it('is not cached: the whole marker put back without a reinstall is read by the next attempt, and a changed program is caught', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const { bin, whole } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), cut(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
+    writeFileSync(runtimeMarkerPath(dir), whole)
+    writeFileSync(bin, 'changed while the marker was cut short')
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+  })
+
+  it('on a commercial drive that refuses hash-less markers it is marker-damaged too, never the cached refusal of a hash-less one', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    const dir = tmp()
+    const { bin, whole } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), cut(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
+    writeFileSync(runtimeMarkerPath(dir), whole)
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  it('a dev build reads no marker at all (skip-dev)', async () => {
+    initBinaryVerification(true)
+    const dir = tmp()
+    const { bin, whole } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), cut(whole))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-dev')
   })
 })

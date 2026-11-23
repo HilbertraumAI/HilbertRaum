@@ -31,6 +31,9 @@ if (!toolBuilt) {
 
 const PLACEHOLDER = 'REPLACE_WITH_REAL_HASH'
 const REAL_SHA = 'a'.repeat(64)
+/** #1028: a raw control byte and a NUL byte, for the markers the app refuses. */
+const CTRL = String.fromCharCode(1)
+const NUL = String.fromCharCode(0)
 
 /** A runtime-sources.yaml whose sha256 fields are all `sha`; URLs on a reserved TLD. */
 function runtimeSourcesYaml(sha: string): string {
@@ -1103,7 +1106,44 @@ for (const leg of SCRIPT_LEGS) {
         ['a stale version', withMarker({ version: 'b1' })],
         ['a stale backend', withMarker({ backend: 'cpu' })],
         ['a missing marker', (root) => rmSync(markerFile(root))],
-        ['an unreadable marker', (root) => writeFileSync(markerFile(root), 'not json')]
+        ['an unreadable marker', (root) => writeFileSync(markerFile(root), 'not json')],
+        // #1028: the app refuses a marker that is there but is not one it can read as damaged engine files, so a re-run
+        // must fetch the engine again. The .sh twin read the version and backend out of a cut text and skipped it, and
+        // both twins skipped a whole marker whose fields or entries had the wrong type.
+        ['a marker cut short after its version and backend', (root) => writeFileSync(markerFile(root), '{"version":"b9585","backend":"vulkan","os":"win"')],
+        ['a marker whose arch is not a string', (root) => writeFileSync(markerFile(root), JSON.stringify({ version: 'b9585', backend: 'vulkan', os: 'win', arch: 64 }))],
+        [
+          'a marker recording a file under a value that is not a SHA-256',
+          (root) =>
+            writeFileSync(markerFile(root), JSON.stringify({ version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': 'not-a-hash' } }))
+        ],
+        [
+          'a marker whose binaries is no map',
+          (root) => writeFileSync(markerFile(root), JSON.stringify({ version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64', binaries: ['llama-server.exe'] }))
+        ],
+        [
+          'a marker whose binaries is null',
+          (root) => writeFileSync(markerFile(root), JSON.stringify({ version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64', binaries: null }))
+        ],
+        // #1028 review round 2: more of what the app refuses and a twin read on. Each one reads its version and backend
+        // as matching (or newer), so a twin that takes it for a marker skips the engine (or keeps it as newer).
+        ['a marker with a raw control byte in a value', (root) => writeFileSync(markerFile(root), `{"version":"b9585","backend":"vulkan","os":"w${CTRL}n","arch":"x64"}`)],
+        [
+          'a marker with a raw control byte in a recorded name',
+          (root) => writeFileSync(markerFile(root), `{"version":"b9585","backend":"vulkan","os":"win","arch":"x64","binaries":{"llama-${CTRL}erver.exe":"${REAL_SHA}"}}`)
+        ],
+        ['a marker with garbage between its fields', (root) => writeFileSync(markerFile(root), '{"version":"b9585","backend":"vulkan","os":"win","arch":"x64" @@@@ }')],
+        ['a marker with a second object after its closing brace', (root) => writeFileSync(markerFile(root), '{"version":"b9585","backend":"vulkan","os":"win","arch":"x64"}{}')],
+        ['a marker with NUL bytes after its closing brace', (root) => writeFileSync(markerFile(root), `{"version":"b9585","backend":"vulkan","os":"win","arch":"x64"}${NUL.repeat(4)}`)],
+        ['a marker with a trailing comma', (root) => writeFileSync(markerFile(root), '{"version":"b9585","backend":"vulkan","os":"win","arch":"x64",}')],
+        ['a marker in single quotes', (root) => writeFileSync(markerFile(root), "{'version':'b9585','backend':'vulkan','os':'win','arch':'x64'}")],
+        ['a marker whose field names are capitalised', (root) => writeFileSync(markerFile(root), '{"Version":"b9585","Backend":"vulkan","OS":"win","Arch":"x64"}')],
+        [
+          'a marker whose hash ends in an escaped line break',
+          (root) => writeFileSync(markerFile(root), `{"version":"b9585","backend":"vulkan","os":"win","arch":"x64","binaries":{"llama-server.exe":"${REAL_SHA}\\n"}}`)
+        ],
+        // L-4: a damaged marker of a NEWER build is fetched again too, never kept as newer than the pin (#873).
+        ['a damaged marker of a newer build', (root) => writeFileSync(markerFile(root), JSON.stringify({ version: 'b99999', backend: 'vulkan', os: 'win', arch: 64 }))]
       ]
 
       it.each(markers)('%s: the present binary is re-fetched, not skipped', (_title, marker) => {
@@ -1113,8 +1153,35 @@ for (const leg of SCRIPT_LEGS) {
         const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('DryRun')])
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
-        expect(out).toContain('present but install marker is missing or differs')
+        expect(out, out).toContain('present but install marker is missing or differs')
         expect(out).not.toMatch(/skip \(/)
+      })
+
+      // #1028: commercial mode reads the recorded hashes too; a marker cut before its last brace still shows them all.
+      it('a marker cut before its last brace is re-fetched in commercial mode too, not skipped (#1028)', () => {
+        const root = scratchTarget(REAL_SHA)
+        installWinBuild(root, true)
+        writeFileSync(markerFile(root), readFileSync(markerFile(root), 'utf8').slice(0, -1))
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('Commercial'), f('DryRun')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out, out).toContain('present but install marker is missing or differs')
+        expect(out).not.toMatch(/skip \(/)
+      })
+
+      // #1028: the whole-marker check must not refuse what the app reads: a byte-order mark an editor put in front, and
+      // (review round 2, L-2) a field a later release adds after the map, an object holding a list.
+      it.each<[string, (whole: string) => string]>([
+        ['behind a UTF-8 byte-order mark', (whole) => String.fromCharCode(0xfeff) + whole],
+        ['with an unknown top-level object after its map', (whole) => `${whole.slice(0, -1)},"signature":{"alg":"x","of":["llama-server.exe"],"n":-1.5e3}}`]
+      ])('a whole marker %s is still skipped (#1028)', (_title, edit) => {
+        const root = scratchTarget(REAL_SHA)
+        installWinBuild(root, true)
+        writeFileSync(markerFile(root), edit(readFileSync(markerFile(root), 'utf8')))
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('DryRun')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out, out).toMatch(/skip \(/)
       })
 
       const kiwix: Array<[string, (root: string) => void, string[], string, boolean]> = [

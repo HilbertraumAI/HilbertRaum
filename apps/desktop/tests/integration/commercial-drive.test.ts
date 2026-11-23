@@ -10,6 +10,7 @@ import { writeRuntimeMarker } from '../../src/main/services/assets'
 import type { ModelManifest } from '../../src/shared/manifest'
 import { validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
+import { allowReading, denyReading } from '../helpers/binary-fixtures'
 import {
   validateRuntimeSources,
   type KitPlatform,
@@ -246,6 +247,21 @@ describe('assertCommercialDrive', () => {
       // …and a null entry means "not declared on this drive" — nothing to check.
       const none = await assertCommercialDrive(root, [chat], null, null, null, { ...kit(), families: { kiwix_tools: null } })
       expect(none.ok).toBe(true)
+    })
+
+    // #1028: only an ABSENT marker makes an optional family absent. A damaged one left behind (a copy cut short) is a
+    // half-shipped install, not a Kit without the tools.
+    it('a kiwix_tools folder holding only a damaged marker fails the gate: the family is not absent (#1028)', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-cut-')
+      writeDriveFile(root, 'runtime/kiwix-tools/win/.hilbertraum-runtime.json', '{"version":"3.8.1","backend":"cpu","os":"win"')
+      const res = await gate(root, chat)
+      expect(res.ok).toBe(false)
+      expect(res.checks.optionalRuntimesConsistent).toBe(false)
+      // Review round 2 (L-7): the line names the marker, and the way out for a Kit sold without the tools.
+      expect(res.problems, res.problems.join('\n')).toContain(
+        'kiwix_tools build win/x64 cpu: runtime/kiwix-tools/win holds only a damaged .hilbertraum-runtime.json install marker — ' +
+          'for a Kit without this family, delete the leftover marker; else re-run fetch-runtime for this build'
+      )
     })
 
     it.each([
@@ -973,6 +989,69 @@ describe('assertCommercialDrive', () => {
       expect(res.ok).toBe(false)
       expect(res.checks.runtimeCurrent).toBe(false)
       expect(res.problems.some((p) => /\.hilbertraum-runtime\.json/.test(p))).toBe(true)
+    })
+
+    // #1028: a marker that is there but cut short is no missing marker: the builder is told which it is.
+    it('fails when a pinned build has a marker cut short, and says so (#1028)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-cut-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      writeFileSync(join(root, 'runtime', 'llama.cpp', 'win', 'cpu', '.hilbertraum-runtime.json'), '{"version":"b9585","backend":"cpu"')
+      const res = await assertCommercialDrive(root, [chat], sources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      // Review round 2 (L-7): and what to do when the script finds nothing to fetch.
+      expect(res.problems, res.problems.join('\n')).toContain(
+        'runtime build win/x64 cpu: the .hilbertraum-runtime.json install marker under runtime/llama.cpp/win/cpu is cut short or damaged — ' +
+          're-run fetch-runtime for this build; if it reports the engine already installed, delete the engine folder first'
+      )
+    })
+
+    // #1028: a marker that is there but cannot be read just now (a denied read) is neither missing nor damaged.
+    it('fails when a pinned build has a marker that cannot be read, and says so (#1028)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-deny-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      const marker = join(root, 'runtime', 'llama.cpp', 'win', 'cpu', '.hilbertraum-runtime.json')
+      denyReading(marker)
+      try {
+        const res = await assertCommercialDrive(root, [chat], sources())
+        expect(res.ok).toBe(false)
+        expect(
+          res.problems.some((p) => /win\/x64 cpu: the \.hilbertraum-runtime\.json install marker under runtime\/llama\.cpp\/win\/cpu could not be read \(E[A-Z]+\)/.test(p)),
+          res.problems.join('\n')
+        ).toBe(true)
+      } finally {
+        allowReading(marker)
+      }
+    })
+
+    // #1028: before, a further file whose entry was no hash was dropped from the marker as read, so the gate never looked at it.
+    it('fails when the marker records a further file under a value that is not a SHA-256 (#1028)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-entry-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      provisionApp(root)
+      const win = join(root, 'runtime', 'llama.cpp', 'win')
+      writeFileSync(join(win, 'ggml.dll'), 'a library')
+      writeFileSync(
+        join(win, '.hilbertraum-runtime.json'),
+        JSON.stringify({
+          version: 'b9585',
+          backend: 'vulkan',
+          os: 'win',
+          arch: 'x64',
+          binaries: { 'llama-server.exe': createHash('sha256').update('fake-binary').digest('hex'), 'ggml.dll': { sha256: 'any' } }
+        })
+      )
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.problems.some((p) => /win\/x64 vulkan: the \.hilbertraum-runtime\.json install marker under runtime\/llama\.cpp\/win is cut short or damaged/.test(p)), res.problems.join('\n')).toBe(true)
     })
 
     it('fails when a marker exists but the binary is missing (half-deleted install)', async () => {
