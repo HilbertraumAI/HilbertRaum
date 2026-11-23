@@ -141,6 +141,10 @@ from its first public `1.0.0` release onward.
   new run of the drive script repairs it. The drive scripts now read that record the way the app does and
   fetch an engine with a damaged one again instead of skipping it; should a script still say the engine is
   already installed, delete the engine's folder and run it again (#1028).
+- **A crafted spreadsheet file (CSV) can no longer keep an import busy for hours.** HilbertRaum reads CSV
+  files with the papaparse library. Before its version 5.7.1, a file built around quoted values made the
+  work grow with the square of the file's size: a file at the 64 MB import limit could keep the processor
+  busy for hours. Version 5.7.1 removes that slowdown; ordinary CSV files are read exactly as before (#1037).
 
 ## [0.1.66] — 2026-11-21
 

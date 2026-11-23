@@ -188,7 +188,7 @@ node-fetch@2.7.0
 opencollective-postinstall@2.0.3
 option@0.2.4
 pako@1.0.11
-papaparse@5.7.0
+papaparse@5.7.1
 parse-entities@4.0.2
 parse5@7.3.0
 pdfjs-dist@6.5.438
@@ -6074,7 +6074,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### papaparse@5.7.0
+### papaparse@5.7.1
 
 - License: MIT
 - Author: Matthew Holt
