@@ -48,12 +48,13 @@ function startsThroughRunner(src: string): boolean {
   return run !== null && /^\s*initBackend\s*,/.test(run.args) && !/(?<!function\s+)\binitBackend\(\s*\)/.test(src)
 }
 
-/** After the runner, an `if` on its answer installs the tripwire with an always-offline posture. */
+/** After the runner, an `if` on its answer installs the tripwire with an always-offline posture, and only when
+ *  `initBackend` did not get as far as installing it (final round: two guards log every remote connect twice). */
 function failureInstallsTripwire(src: string): boolean {
   const body = whenReady(src)
   const run = body.match(/const\s+(\w+)\s*=\s*runBackendStart\(/)
   if (!run || run.index === undefined) return false
-  const guard = body.indexOf(`if (${run[1]})`, run.index)
+  const guard = body.indexOf(`if (${run[1]} && !offlineGuardInstalled())`, run.index)
   if (guard === -1) return false
   const tripwire = callArgs(body, 'assertOfflinePosture', guard)
   return tripwire !== null && /readPosture:\s*\(\)\s*=>\s*\(\{\s*offlineMode:\s*true\b/.test(tripwire.args)
@@ -111,10 +112,13 @@ describe('wiring pin: index.ts starts the back end through the failure-state run
     expect(startsThroughRunner(mutated)).toBe(false)
   })
 
-  it('a start that failed installs the offline tripwire with a posture that reads offline', () => {
+  it('a start that failed installs the offline tripwire, once, with a posture that reads offline', () => {
     expect(failureInstallsTripwire(indexSrc)).toBe(true)
     const mutated = indexSrc.replace(/offlineMode:\s*true\b/, 'offlineMode: false')
     expect(mutated).not.toBe(indexSrc)
     expect(failureInstallsTripwire(mutated)).toBe(false)
+    const twice = indexSrc.replace(/ && !offlineGuardInstalled\(\)/, '')
+    expect(twice).not.toBe(indexSrc)
+    expect(failureInstallsTripwire(twice)).toBe(false)
   })
 })

@@ -17,10 +17,11 @@ const SHOWN_CODE_MAX = 40
 const NOT_WRITABLE = new Set(['EROFS', 'EPERM', 'EACCES'])
 /** #1024 CR-2: the system calls a refusal above counts as a refused write for. EPERM and EACCES say "refused", not
  *  "refused to write": a refused program start (`spawnSync <path>`) or listing (`scandir`) is "something else", whose
- *  text does not point at a lock switch. `open` stays in: a Node error does not carry the open flags, so a refused read
- *  and a refused write look the same, and the start's writes are what the text is for. No system call at all (an error
- *  built with the code alone) stays in too. */
-const WRITE_SYSCALLS = new Set(['mkdir', 'rename', 'write', 'unlink', 'rmdir', 'copyfile', 'symlink', 'open'])
+ *  text does not point at a lock switch. `open` is out (final round): a Node error does not carry the open flags, so a
+ *  refused read and a refused write look the same, and the start's files are mostly read (`config/policy.json` under a
+ *  deny-read rule); the general text still says to check that the drive can be written to. No system call at all (an
+ *  error built with the code alone) stays in. */
+const WRITE_SYSCALLS = new Set(['mkdir', 'rename', 'write', 'unlink', 'rmdir', 'copyfile', 'symlink'])
 const FULL = new Set(['ENOSPC', 'EDQUOT'])
 /** SQLite's primary result codes (`errcode & 0xff`) for the plaintext dev workspace's open. #1024 CR-4, a deliberate
  *  choice: CANTOPEN (14) stays "something else". It is also a folder at the database's name, a missing folder or a lock

@@ -29,7 +29,7 @@ import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
 import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
-import { assertOfflinePosture } from './services/offlineGuard'
+import { assertOfflinePosture, offlineGuardInstalled } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
 import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from './services/log-redact'
 import { initPerf, perfMark, perfMs } from './services/perf'
@@ -1237,8 +1237,9 @@ app.whenReady().then(() => {
   // reaps what the back end may have started (the engine check's child) and leaves a workspace that never opened as it is.
   runWindowStart(
     () => {
-      if (startFailure) {
-        // #1024: the offline tripwire is `initBackend`'s last step, so a start that threw never installed it. Nothing in
+      if (startFailure && !offlineGuardInstalled()) {
+        // #1024: the offline tripwire is `initBackend`'s last step, so a start that threw almost always never installed
+        // it (final round: when it did, a second guard would log every remote connect twice, so it is asked). Nothing in
         // the failure state may reach the network, so it reads offline here, always; there is no workspace to ask.
         assertOfflinePosture({
           readPosture: () => ({ offlineMode: true, networkAllowed: false }),

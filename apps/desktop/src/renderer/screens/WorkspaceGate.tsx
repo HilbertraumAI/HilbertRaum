@@ -304,7 +304,8 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     let status: string
     try {
       const lines = await window.api.getLogTail()
-      const ok = await window.api.copyToClipboard(lines.join('\n'))
+      // Final round: no lines, nothing for support: "Copied" would be untrue, so the clipboard is left as it is.
+      const ok = lines.length > 0 && (await window.api.copyToClipboard(lines.join('\n')))
       status = t(ok ? 'diag.copied' : 'diag.copyFailed')
     } catch {
       status = t('diag.copyFailed')

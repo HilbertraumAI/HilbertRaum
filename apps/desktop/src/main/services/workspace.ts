@@ -127,35 +127,37 @@ export function ensureWorkspaceDirs(paths: ResolvedPaths): void {
  * `mkdir -p` that reports the folder's own error (#1024 review M-1). Node's recursive mkdir passes on only EACCES,
  * ENOSPC, ENOTDIR and EPERM as they are; any other refusal of a missing folder (EROFS from a write-protected card or a
  * read-only mount, EIO, EINVAL) it replaces with the ENOENT of the `stat` it makes next. The start-failure card words
- * that as "something else" with "ENOENT", so a lock-switched card did not read as one. So one plain mkdir of the
- * highest missing folder, right under the deepest one that exists (CR-3: the drive root and its parent may both be
- * missing), reads the real error. When nothing above exists (a drive that is gone), the ENOENT is the real answer. A
- * folder made meanwhile (a second start) is fine: then the rest is made as before.
+ * that as "something else" with "ENOENT", so a lock-switched card did not read as one. So the missing folders are made
+ * again one plain mkdir at a time, from the highest one, right under the deepest folder that exists (CR-3: the drive
+ * root and its parent may both be missing), down to `dir`: the first that fails reports its own error (final round: a
+ * second recursive mkdir from there masked a deeper refusal again). When nothing above exists (a drive that is gone),
+ * the ENOENT is the real answer. A folder made meanwhile (a second start) is fine.
  */
 function createFolder(dir: string): void {
   try {
     mkdirSync(dir, { recursive: true })
   } catch (err) {
     if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw err
-    const missing = highestMissingFolder(dir)
+    const missing = missingFolders(dir)
     if (missing === null) throw err
-    try {
-      mkdirSync(missing)
-    } catch (real) {
-      if (!isFolder(missing)) throw real
+    for (const folder of missing) {
+      try {
+        mkdirSync(folder)
+      } catch (real) {
+        if (!isFolder(folder)) throw real
+      }
     }
-    mkdirSync(dir, { recursive: true })
   }
 }
 
-/** The highest folder on `dir`'s path that is missing, right under the deepest one that exists; null when no folder
- *  above `dir` exists. A dangling link counts as missing (`existsSync` follows it). */
-function highestMissingFolder(dir: string): string | null {
-  let missing = dir
+/** The missing folders on `dir`'s path, from the highest one, right under the deepest folder that exists, down to `dir`
+ *  itself; null when no folder above `dir` exists. A dangling link counts as missing (`existsSync` follows it). */
+function missingFolders(dir: string): string[] | null {
+  const missing = [dir]
   let parent = dirname(dir)
-  while (parent !== missing) {
+  while (parent !== missing[0]) {
     if (existsSync(parent)) return missing
-    missing = parent
+    missing.unshift(parent)
     parent = dirname(parent)
   }
   return null

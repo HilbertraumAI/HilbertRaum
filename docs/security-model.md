@@ -511,7 +511,9 @@ At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture 
 tripwire over `net.Socket.prototype.connect` for the whole session, in **all builds** (so a production
 regression that tried to phone home would still be recorded locally). It is `initBackend`'s last step, so a start that
 throws never reaches it: since #1024 `main/index.ts` installs it after such a start too, with a posture that always
-reads offline (the failure state has no workspace to ask, and nothing in it may reach the network). While the app is offline, any
+reads offline (the failure state has no workspace to ask, and nothing in it may reach the network), unless one is
+already in place (`offlineGuardInstalled`: a start that threw after installing it would otherwise log every remote
+connect twice). While the app is offline, any
 connection to a **remote** host from the main process is logged as a violation, by whichever route it
 reached a socket: `fetch`, `http.request`, `net.connect` and TLS alike. (Until #751 only TLS was seen: the
 others pass Node's normalized argument array, which the guard did not read, so their host came back empty

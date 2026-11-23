@@ -38,7 +38,7 @@ vi.mock('../../src/main/ipc/registerStartFailureIpc', async (importOriginal) => 
 })
 
 import { runBackendStart } from '../../src/main/backend-start'
-import { releaseGuardedHandlers } from '../../src/main/ipc/guarded-handle'
+import { guardedHandle, releaseGuardedHandlers } from '../../src/main/ipc/guarded-handle'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { initLogging, readLogTail } from '../../src/main/services/logging'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
@@ -174,6 +174,20 @@ describe('a back-end start that throws answers the gate with the failure state (
     expect(failureLine(lines).fields).toMatchObject({ error: 'TypeError', message: 'a fault in a later step' })
     // How many the start had registered: support reads a late throw (a back end half started behind the card) from it.
     expect(lines.some((l) => l.endsWith('Backend start: removed the channels the partial start had registered {"released":5}'))).toBe(true)
+  })
+
+  // #1024 final round: the release takes back only what the partial start registered. A channel registered before the
+  // start began (the update plan's hand-off channel may be one) keeps answering after a late throw.
+  it('a channel registered before the start keeps answering after a late throw', async () => {
+    guardedHandle('updates:handOff', () => 'still here', { trustedSenders: ANY_SENDER })
+    const ctx = { trustedSenders: ANY_SENDER, workspace: workspaceStandIn({ unlocked: false }) } as unknown as AppContext
+    const start = (): void => {
+      registerWorkspaceIpc(ctx)
+      throw new TypeError('a fault in a later step')
+    }
+    runBackendStart(start, deps)
+    expect((await invoke(handlers, 'updates:handOff')).result).toBe('still here')
+    expect([...handlers.keys()].sort()).toEqual([...FAILURE_CHANNELS, 'updates:handOff'].sort())
   })
 
   it('a failure state that cannot be registered: the runner still returns and says so in the log', async () => {

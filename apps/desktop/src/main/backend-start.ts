@@ -1,4 +1,4 @@
-import { releaseGuardedHandlers, type TrustedSenders } from './ipc/guarded-handle'
+import { guardedChannels, releaseGuardedHandlers, type TrustedSenders } from './ipc/guarded-handle'
 import { registerStartFailureIpc } from './ipc/registerStartFailureIpc'
 import { safeFailureForLog } from './services/failure-for-log'
 import { tMain } from './services/i18n'
@@ -37,13 +37,15 @@ const UNREADABLE_FAILURE: BackendStartFailure = { cause: 'other', code: null }
  * - one log line with `safeFailureForLog` (#956: a file error logs its code and system call, never its message, which
  *   names paths; any other error keeps its message; a value that cannot be read logs a fixed line);
  * - every handler the partial start had registered is removed (a throw after some registrars ran), and their count is
- *   logged, so a late throw (a back end half started behind the card) can be told apart;
+ *   logged, so a late throw (a back end half started behind the card) can be told apart; a channel registered before
+ *   the start began stays (final round);
  * - the failure state's channels are registered (`registerStartFailureIpc`), so the gate shows why, in its language.
  * Returns the failure, or null when the start went through. Never throws: nothing in the catch may throw out of it
  * (review L-1), and a failure state that cannot be registered is logged too, and the window still opens onto the
  * renderer's fatal screen.
  */
 export function runBackendStart(start: () => void, deps: BackendStartDeps): BackendStartFailure | null {
+  const registeredBefore = guardedChannels()
   try {
     start()
     return null
@@ -58,7 +60,7 @@ export function runBackendStart(start: () => void, deps: BackendStartDeps): Back
     // The update plan's P3 (W-14) writes the failure's class to `updates/update.log` here, best-effort (the drive may
     // be what failed): `failure.cause` and `failure.code`, both content-free.
     try {
-      const released = releaseGuardedHandlers()
+      const released = releaseGuardedHandlers(registeredBefore)
       if (released > 0) log.info('Backend start: removed the channels the partial start had registered', { released })
       registerStartFailureIpc({
         trustedSenders: deps.trustedSenders,

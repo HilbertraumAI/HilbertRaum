@@ -1718,14 +1718,15 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   (`initBackend` registers every channel at its end) logs one line, `Backend initialization failed` with
   `safeFailureForLog` (a file error's code and bare system call, never its message; `{ "error": "unreadable" }` for a
   value it cannot read, and then the failure is `{ cause: 'other', code: null }`), removes every handler the partial
-  start registered (`releaseGuardedHandlers`, `ipc/guarded-handle.ts`; their count is logged when there were any), and
-  registers the failure state
+  start registered (`releaseGuardedHandlers`, `ipc/guarded-handle.ts`; their count is logged when there were any; a
+  channel registered before the start began, `guardedChannels`, stays), and registers the failure state
   (`ipc/registerStartFailureIpc.ts`, which takes a `StartFailureContext { trustedSenders, failure, paths, isDev }` and no
   `AppContext`):
   - `getWorkspaceState` → `{ state: 'start_failed', mode: null, plaintextAllowed: false, encryptionRequired: true,
     startFailure }`, with `startFailure: BackendStartFailure { cause, code }` (`services/start-failure.ts`): `cause` is
     `drive_not_writable` (`EROFS`, `EPERM`, `EACCES` from a write: `mkdir`, `rename`, `write`, `unlink`, `rmdir`,
-    `copyfile`, `symlink`, `open` (its flags are not on the error), or from no system call; SQLite 8 READONLY) |
+    `copyfile`, `symlink`, or from no system call; not `open`, whose flags are not on the error and which the start
+    mostly uses to read; SQLite 8 READONLY) |
     `drive_full` (`ENOSPC`, `EDQUOT`, SQLite 13 FULL) | `other` (deliberately also SQLite 14 CANTOPEN: a folder at the
     database's name, a missing folder or lock file, not proof of a read-only drive); `code` is an errno code, a Node `ERR_…` code, `SQLITE_<n>`, or null, never free text (a `code`
     property of any other shape, or longer than 40 characters, reads as null). No message, no path.
