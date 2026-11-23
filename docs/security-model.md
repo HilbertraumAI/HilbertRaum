@@ -3927,11 +3927,11 @@ refuse `marker-damaged` as they refuse `missing`):**
   - `unreadable`: `unchecked` (the verdict is left as it was, no damage recorded; choosing Check again
     re-reads the copy).
 - **`KiwixServer` (`zim/serve.ts`) and `kiwixManageAdd` (`zim/tools.ts`)** — `mismatch`, `missing` (the
-  program or a library) and `unreadable` refuse before spawn.
+  program or a library), `marker-damaged` (#1028) and `unreadable` refuse before spawn.
   - A changed file keeps the integrity error.
-  - A missing file gets its own kind, `files` ("a file of its install is missing"), and one that cannot
-    be read just now gets `filesUnreadable` (round 5). Neither uses the tamper wording, and only
-    `files` latches.
+  - A missing file and a damaged install marker get their own kind, `files` ("a file of its install is
+    missing, or its install record is damaged"), and one that cannot be read just now gets `filesUnreadable`
+    (round 5). Neither uses the tamper wording, and only `files` latches.
   - `missing-other` is logged with its code only and the program starts (no in-app repair exists for the
     knowledge-pack tools).
 
@@ -3950,7 +3950,11 @@ the version out of a cut text and skip it), so the script repairs what the app r
 markers the twins still read on (a raw control byte, garbage between or after the fields, a trailing comma
 for the `.sh`; single quotes, a capitalised name, a hash ending in an escaped line break for the `.ps1`, whose
 `ConvertFrom-Json` is loose): each twin now reads the marker with a small JSON reader of its own, the app's
-rule step for step, and fetches again on any doubt. The gate's line for a damaged marker says what to do if
+rule step for step, and fetches again on any doubt. Final review: both twins read at most 64 KiB (the `.ps1`
+checks the size before it reads), because the `.sh` reader is plain bash and slow on a large text (a garbled
+1 MiB file could have held it for minutes); and the `.sh` reader runs under `LC_ALL=C` in a subshell, so a C1
+control the app accepts is no control byte to it, and the caller's locale and `BASH_REMATCH` stay as they were.
+The gate's line for a damaged marker says what to do if
 the script still reports the engine installed: delete the engine folder first. Code review (CR-3): a marker
 that cannot be read just now, alone in an optional family's folder, gets the "could not be read (CODE)" line,
 not "binary missing". (CR-4): the `.sh` skip decision compares the object's own version and backend, as its

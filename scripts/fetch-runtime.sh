@@ -562,7 +562,10 @@ marker_recorded_names() {
 # marker_readable MARKER_PATH — #1028: is the install marker one the app can read? The app refuses a marker that is
 # there but is no marker (cut short by an interrupted copy, garbled) as damaged engine files, so a re-run must fetch
 # the engine again instead of skipping it, in any mode. The rule is the app's (assets.ts readRuntimeMarkerState):
-#  - at most 1 MiB, with no NUL byte (a bash variable cannot hold one, so the bytes are counted first);
+#  - at most 64 KiB here (the app reads up to 1 MiB; no writer writes more than a few KB — the b12110 Windows copy
+#    records 52 files in about 5 KB — and this reader is plain bash, slow on a large text, so a larger marker is fetched
+#    again at once instead of read through), with no NUL byte (a bash variable cannot hold one, so the bytes are
+#    counted first);
 #  - after one leading UTF-8 byte-order mark, exactly ONE JSON object (RFC 8259), read by the small reader below:
 #    nothing before or after it but blanks, no raw control byte inside a string, only JSON's escapes, numbers in
 #    JSON's form, no trailing comma, no comment;
@@ -570,21 +573,36 @@ marker_recorded_names() {
 #    whose every value is a SHA-256 (64 hex digits). As in JavaScript, the last of two same-named fields counts.
 #    Any other field, nested objects and arrays included, is read past (a later release may add one).
 # On any doubt it says no: a needless download is the safe side. Two such cases (both never written): a name written
-# with an escape (`version`) is not taken for the plain one, and a map naming one file twice is judged by both.
-# Parameter expansion, `[[ == ]]` patterns and `case` only: no `=~`, so a caller's BASH_REMATCH survives (#765), no
-# sed (BSD sed on macOS differs), no character ranges (bash 3.2 matches them by the locale's collation), so macOS's
-# bash 3.2 runs it as bash 5 does. Mirrored by fetch-runtime.ps1 ($ReadInstallMarker).
+# with a backslash-u escape is not taken for the plain one, and a map naming one file twice is judged by both.
+# The reader runs in a subshell under LC_ALL=C (final review): bytes, not characters, whatever the caller's locale —
+# under a UTF-8 locale [[:cntrl:]] also matches the C1 controls (U+0080-U+009F), which JSON and the app accept, and
+# taking one character at a time costs a walk from the start — and the caller's locale and BASH_REMATCH stay as they
+# were. Parameter expansion, `[[ == ]]` patterns and `case` only: no `=~` (#765), no sed (BSD sed on macOS differs), no
+# character ranges, so macOS's bash 3.2 runs it as bash 5 does. Mirrored by fetch-runtime.ps1 ($ReadInstallMarker).
 # It also leaves the object's own version and backend in MARKER_VERSION and MARKER_BACKEND (escapes as written), for
 # the skip decision (code review CR-4: never the last `"version":"…"` on the line, which a field nested in a later one
 # can be).
 marker_readable() {
-  local bytes kept text bom len pos=0 c state=value stack='' top where='' key='' str='' in_map=0 map=absent object=0
-  local f_version=0 f_backend=0 f_os=0 f_arch=0 is_string
+  local found
   MARKER_VERSION=''
   MARKER_BACKEND=''
+  found="$(export LC_ALL=C; marker_read_bytes "$1")" || return 1
+  # marker_read_bytes prints the version, a line break, the backend, a line break and a dot (so an empty backend
+  # survives the command substitution's trimming).
+  MARKER_VERSION="${found%%$'\n'*}"
+  found="${found#*$'\n'}"
+  MARKER_BACKEND="${found%%$'\n'*}"
+  return 0
+}
+
+# marker_read_bytes MARKER_PATH — marker_readable's reader (#1028), run under LC_ALL=C in a subshell: 0 and the
+# object's own version and backend on stdout when the marker is one the app reads, else 1.
+marker_read_bytes() {
+  local bytes kept text bom len pos=0 c state=value stack='' top where='' key='' str='' in_map=0 map=absent object=0
+  local f_version=0 f_backend=0 f_os=0 f_arch=0 is_string
   bytes="$(wc -c < "$1")" || return 1
   kept="$(tr -d '\000' < "$1" | wc -c)" || return 1
-  [[ $((bytes)) -le 1048576 && $((bytes)) -eq $((kept)) ]] || return 1
+  [[ $((bytes)) -le 65536 && $((bytes)) -eq $((kept)) ]] || return 1
   text="$(cat "$1")" || return 1
   bom=$'\xef\xbb\xbf'
   text="${text#"$bom"}"
@@ -712,7 +730,8 @@ marker_readable() {
     esac
   done
   [[ $object -eq 1 && -z "$stack" && "$state" == after ]] || return 1
-  [[ $f_version -eq 1 && $f_backend -eq 1 && $f_os -eq 1 && $f_arch -eq 1 && "$map" != bad ]]
+  [[ $f_version -eq 1 && $f_backend -eq 1 && $f_os -eq 1 && $f_arch -eq 1 && "$map" != bad ]] || return 1
+  printf '%s\n%s\n.' "$MARKER_VERSION" "$MARKER_BACKEND"
 }
 
 # marker_json_string — marker_readable's string reader (#1028): the JSON string that starts at $pos in $text, its

@@ -490,7 +490,8 @@ $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 # #1028: read the install marker at $path as the app reads it (assets.ts readRuntimeMarkerState): the marker, or $null
 # when it is no marker the app can read. The app refuses a marker that is there but is no marker -- cut short by an
 # interrupted copy, garbled -- as damaged engine files, so a re-run must fetch the engine again, never skip it. The rule:
-#  - at most 1 MiB, its bytes read as UTF-8 (never UTF-16 by a byte-order mark, as the app reads them);
+#  - at most 64 KiB here (the app: 1 MiB; see below), its bytes read as UTF-8 (never UTF-16 by a byte-order mark, as
+#    the app reads them);
 #  - after one leading byte-order mark, exactly ONE JSON object (RFC 8259), checked by the small reader below, not by
 #    ConvertFrom-Json, which takes single quotes, comments and trailing commas, and matches names in any case: nothing
 #    before or after it but blanks, no raw control character inside a string, only JSON's escapes, numbers in JSON's
@@ -504,8 +505,11 @@ $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 # marker_readable, step for step.
 $ReadInstallMarker = {
   param($path)
+  # The size before the read (final review), so an oversized file is never taken into memory. 64 KiB here, as in the
+  # .sh twin: the app reads up to 1 MiB, but no writer writes more than a few KB (the b12110 Windows copy records 52
+  # files in about 5 KB), and this reader is plain PowerShell; a larger marker is fetched again at once.
+  if ((New-Object System.IO.FileInfo $path).Length -gt 65536) { return $null }
   $bytes = [System.IO.File]::ReadAllBytes($path)
-  if ($bytes.Length -gt 1048576) { return $null }
   $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes)
   if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
   $n = $text.Length

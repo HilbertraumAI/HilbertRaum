@@ -34,6 +34,9 @@ const REAL_SHA = 'a'.repeat(64)
 /** #1028: a raw control byte and a NUL byte, for the markers the app refuses. */
 const CTRL = String.fromCharCode(1)
 const NUL = String.fromCharCode(0)
+/** #1028 final review: a C1 control (U+0085), and a UTF-8 locale this runner has (Ubuntu ships C.UTF-8; macOS and Git Bash en_US.UTF-8). */
+const C1 = String.fromCharCode(0x85)
+const UTF8_LOCALE = process.platform === 'linux' ? 'C.UTF-8' : 'en_US.UTF-8'
 
 /** A runtime-sources.yaml whose sha256 fields are all `sha`; URLs on a reserved TLD. */
 function runtimeSourcesYaml(sha: string): string {
@@ -1171,20 +1174,39 @@ for (const leg of SCRIPT_LEGS) {
 
       // #1028: the whole-marker check must not refuse what the app reads: a byte-order mark an editor put in front, and
       // (review round 2, L-2) a field a later release adds after the map, an object holding a list.
-      it.each<[string, (whole: string) => string]>([
+      it.each<[string, (whole: string) => string, NodeJS.ProcessEnv?]>([
         ['behind a UTF-8 byte-order mark', (whole) => String.fromCharCode(0xfeff) + whole],
         ['with an unknown top-level object after its map', (whole) => `${whole.slice(0, -1)},"signature":{"alg":"x","of":["llama-server.exe"],"n":-1.5e3}}`],
         // Code review (CR-4): a field a later release adds may hold its own `version` (a signature's format, G-28); the
         // marker's own version is the top-level one, never the last `"version":"…"` on the line.
-        ['with a nested version and backend after its map', (whole) => `${whole.slice(0, -1)},"signature":{"version":"1","backend":"ed25519"}}`]
-      ])('a whole marker %s is still skipped (#1028)', (_title, edit) => {
+        ['with a nested version and backend after its map', (whole) => `${whole.slice(0, -1)},"signature":{"version":"1","backend":"ed25519"}}`],
+        // Final review: a C1 control (U+0085, bytes C2 85) is no control character to JSON, so the app reads it, and so must
+        // the .sh twin under a UTF-8 locale, where bash's [[:cntrl:]] matches it (its reader runs under LC_ALL=C).
+        ['with a C1 control in an unknown field, under a UTF-8 locale', (whole) => `${whole.slice(0, -1)},"note":"a${C1}b"}`, { LC_ALL: UTF8_LOCALE }]
+      ])('a whole marker %s is still skipped (#1028)', (_title, edit, env) => {
         const root = scratchTarget(REAL_SHA)
         installWinBuild(root, true)
         writeFileSync(markerFile(root), edit(readFileSync(markerFile(root), 'utf8')))
-        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('DryRun')])
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('DryRun')], env ? { env } : {})
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(out, out).toMatch(/skip \(/)
+      })
+
+      // Final review: the scripts read a marker up to 64 KiB, far above what any writer writes (~5 KB for 52 files); a
+      // larger one is fetched again without being read through (the .sh reader is plain bash, slow on a large text, and
+      // a garbled 1 MiB file would have held the script for minutes). The app reads markers up to 1 MiB.
+      it('a marker over the scripts’ 64 KiB cap is fetched again, not read through (#1028)', () => {
+        const root = scratchTarget(REAL_SHA)
+        installWinBuild(root, true)
+        const whole = readFileSync(markerFile(root), 'utf8')
+        // A well-formed marker the app reads (under its 1 MiB), made large by a later field of many short strings.
+        writeFileSync(markerFile(root), `${whole.slice(0, -1)},"pad":[${Array<string>(40_000).fill('"x"').join(',')}]}`)
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win', f('DryRun')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out, out).toContain('present but install marker is missing or differs')
+        expect(out).not.toMatch(/skip \(/)
       })
 
       const kiwix: Array<[string, (root: string) => void, string[], string, boolean]> = [

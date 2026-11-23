@@ -459,8 +459,10 @@ password recovery — are documented in
     past; a UTF-16 save, a missing field or an entry that is not a hash makes it damaged.
   - **`fetch-runtime` reads the marker as the app does** (review round 2: both twins carry a small JSON reader of
     their own, `marker_readable` and `$ReadInstallMarker`), so it fetches again every marker the app refuses.
-    On a doubt it fetches again too, a needless download, for markers no writer writes: a control character
-    (DEL included) or an escape in a field name, a map naming one file twice, two names that differ only in
+    On a doubt it fetches again too, a needless download, for markers no writer writes: one over 64 KiB (the
+    app reads up to 1 MiB; final review: the `.sh` reader is plain bash, slow on a large text — measured on Git
+    Bash, a marker shaped like a real one takes 0.25 s at 5 KB and 2.2 s near 64 KiB, and a crafted one of tiny
+    strings 20 s near 64 KiB), a control character (DEL included) or an escape in a field name, a map naming one file twice, two names that differ only in
     case (`.ps1`), and a recorded file name holding `,`, `"`, `{`, `}` or `\` — the `.sh` twin's older readers of
     the recorded names and hashes cannot read such a name, so that engine is fetched again on every run.
     llama.cpp, whisper.cpp and kiwix-tools ship no such names. Should a script still report the engine already

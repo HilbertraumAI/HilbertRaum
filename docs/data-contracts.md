@@ -2633,7 +2633,8 @@ whole renderer-visible surface.
   **#1028 — how every reader reads the marker, and what every later writer keeps (2026-11-23).** One
   reading, `readRuntimeMarkerState` (`assets.ts`), for every reader in the app; the `fetch-runtime` twins
   (`$ReadInstallMarker` in the `.ps1`, `marker_readable` in the `.sh`, each a small RFC 8259 reader since review
-  round 2, neither `ConvertFrom-Json` nor `sed`) mirror it and, on a doubt, say "damaged" (a needless download). The marker at a copy's
+  round 2, neither `ConvertFrom-Json` nor `sed`) mirror it and, on a doubt, say "damaged" (a needless download); they
+  read at most 64 KiB, and the `.sh` reader runs under `LC_ALL=C` (final review). The marker at a copy's
   `.hilbertraum-runtime.json` is one of four things:
   - **absent** — ENOENT or ENOTDIR: a bundle placed by hand, or a drive older than the marker;
   - **unreadable** — there, but the `stat` or the read failed just now (an antivirus hold, a denied read);
@@ -2661,8 +2662,11 @@ whole renderer-visible surface.
   - **anything new goes into a new top-level field** (an engine signature, G-28; a second digest): never
     inside `binaries`, and never a new meaning for `version`, `backend`, `os` or `arch`, which stay strings
     (`version` keeps the upstream tag shapes, F-24);
+  - the file stays **under 64 KiB, or release 1's scripts re-download it** (final review: the app reads markers
+    up to 1 MiB, but both `fetch-runtime` twins refuse a larger one at once, since the `.sh` reader is plain bash and
+    slow on a large text; today's markers are about 5 KB for 52 files);
   - the file stays one line of UTF-8 JSON without a byte-order mark and without blanks between its tokens,
-    under 1 MiB, with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `version`,
+    with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `version`,
     `backend`, `os`, `arch` or `binaries` anywhere but the top level** (review round 2, L-2; code review CR-4).
     Both twins read the whole object with a JSON reader of their own and judge only the top-level fields, and
     the `.sh` skip decision takes the version and backend from that reader (CR-4), so a nested one is no
