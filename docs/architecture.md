@@ -6954,7 +6954,8 @@ one, and each glossary is pinned on top of its catalog file.
   locale from `useT().lang` (`useGrouping: false` keeps English output byte-identical to
   the old `toFixed`).
 - Inline JSX islands (`<code>`, `<strong>`) use before/after key pairs
-  (`app.fatal.hintBefore/After`).
+  (`diag.logs.hintBefore/After`; the fatal screen's `app.fatal.hintBefore/After`, around `logs/app.log`, went with
+  #1024).
 - **A label and its value, a figure and its unit, and a figure and its percent sign are joined
   the language's way, never by code** (open-issues wave, #804, 2026-11-14; open-issues wave owner
   calls G-3, G-4). A `": "` or `" — "` typed between a label and its value, or a plain space

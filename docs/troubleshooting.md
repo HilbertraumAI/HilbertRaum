@@ -941,6 +941,41 @@ right after.
 
 ---
 
+## "The app could not start"
+
+HilbertRaum shows this when it could not finish starting (#1024). Nothing can be opened in this run,
+so the screen has no password field. Under the title it says what went wrong and what helps:
+
+- **"HilbertRaum can’t write to this drive"**: at the top of the drive the app needs its folders
+  `workspace`, `models`, `logs` and `config`, and the drive refused to create one. Check that the
+  drive isn’t write-protected: some USB sticks and SD cards have a small lock switch on the side. On
+  Windows, check that your account may create folders there (right-click the drive or the folder →
+  **Properties → Security**: "Create folders / append data" must not be denied). On Linux or macOS,
+  check that the drive isn’t mounted read-only and that you can write to it. Then start the app
+  again.
+- **"The drive is full"**: free some space on the drive, then start the app again.
+- **"Something stopped HilbertRaum while it was starting"**: check that the drive is still
+  connected and that it can be written to, then start the app again.
+
+The **error code** under the text says more:
+
+| Code | What it means |
+|---|---|
+| `EPERM`, `EACCES`, `EROFS` | The drive refused the write: a lock switch, an access rule, a read-only mount. `EPERM` and `EACCES` can also come from a security program that guards folders (for example Windows **Controlled folder access**, or an antivirus): allow HilbertRaum there, or start it from a drive the program does not guard. |
+| `ENOSPC` | The drive is full. |
+| `ENOENT` | The drive, or the folder the app was started for, is not there any more (a stick pulled out while the app started, a drive letter that no longer exists). |
+| `EEXIST`, `ENOTDIR` | A file sits where one of the app’s folders (`workspace`, `models`, `logs`, `config`) should be. Rename or move that file. |
+| `SQLITE_…` | A developer workspace that is not encrypted could not be opened. |
+| Anything else, or no code | Most likely a fault in this version of the app. Start it again; if it keeps happening, report it with **Copy details for support**. |
+
+**Copy details for support** copies this run’s log lines, the same lines **Settings → Diagnostics
+(advanced) → Recent logs → Copy** hands out, with your drive and home folder shown as `<drive>` and
+`<home>` (see "Where are my data and logs?" below). Paste them into your support request. On an
+encrypted workspace these lines exist only while the app is open: nothing is written to `logs/`
+before an unlock, so copy them before you close the app.
+
+---
+
 ## The app won't start from the drive
 
 - Use the **launcher** at the drive root (`Start HilbertRaum`) rather than opening the
@@ -966,7 +1001,8 @@ right after.
   when that happened: if the app quits right away every time on this Mac, delete the folder named
   after the zip in `~/Library/Caches/HilbertRaum/` the same way.
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
-  screen if the drive is read-only, low on space, or slow (none of these block you).
+  screen if the drive is read-only, low on space, or slow (none of these block you, except a drive
+  the app cannot create its folders on: see **"The app could not start"** above).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
 
 ---
@@ -1371,7 +1407,9 @@ Everything is on the drive:
   as `<user>` too. The rest of each path stays, so support can still see which file failed
   (`<drive>\runtime\llama.cpp\win\llama-server.exe`). A name in an unusual place can remain, for
   example in a folder you named yourself, so read a log before you share it. The log on the drive
-  keeps the full paths.
+  keeps the full paths. On an encrypted workspace, the lines from before you unlock are kept in
+  memory only and are gone when the app closes without an unlock: no log reaches the drive before
+  you have typed your password.
 - `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
   your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 
