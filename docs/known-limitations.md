@@ -275,6 +275,44 @@ password recovery — are documented in
     and could not lock the workspace either (the drive still full).
   A line in the log says when the change could not move its copy into place. Unlocking once with
   this version, after the other program lets go of the file, removes the leftover.
+- **A start that fails shows "The app could not start", and some of it is owed a real-app check (#1024).**
+  A back-end start that throws (a drive that refuses the app's folders, a full drive, a fault in this version) shows
+  the gate's failure card with the cause and the error code. What is left:
+  - On an encrypted workspace the failure's log lines live in memory only, so they are gone when the app closes:
+    "Copy details for support" is the way to keep them. The update plan's `updates/update.log` will record the
+    failure's class on the drive (when the drive can be written).
+  - A write-protected card or a read-only mount: Node's recursive folder creation reports any refusal other than
+    EACCES, ENOSPC, ENOTDIR and EPERM as the ENOENT of the check it makes next (review M-1, measured with an invalid
+    name and a dangling link), so the app makes the missing folders again one plain attempt at a time, from the highest
+    one, right under the deepest that exists (the drive root and its parent may be missing too, code review CR-3), and
+    the first that fails reports its real error (`EROFS`, "can't write to this drive"). That a lock-switched card answers `EROFS` is read from libuv's source
+    (Windows' ERROR_WRITE_PROTECT), not measured on a real card. Only when no folder above exists (a drive that is gone)
+    does the card show `ENOENT`, and then that is the real answer. With all four folders present such a drive starts,
+    and the unlock fails instead (`main.workspace.openFailed`).
+  - `EPERM` and `EACCES` read as "can't write to this drive" only for a write (`mkdir`, `rename`, `write`, `unlink`,
+    `rmdir`, `copyfile`, `symlink`) or an error that names no system call (code review CR-2); a refused program start
+    or listing reads as "something else". So does a refused `open`: a Node error does not say whether the file was
+    opened for reading or writing, and the start mostly reads (a `config/policy.json` behind a deny-read rule), so a
+    refused write through `open` gets the general text, which also says to check that the drive can be written to.
+  - There is no "Try again" on the card: starting the app again is the retry.
+  - The help line and the fatal screen point at the troubleshooting guide in the drive's `docs` folder. A drive
+    prepared for HilbertRaum has one; the app-data folder a standalone install falls back to does not, and the guide
+    is in English only.
+  - A throw after the back end's start (the app's own renderer files, the menu, the window) has no window to show the
+    card in: the app shows a native error box with the card's title and its general text in main's language (the
+    computer's language before an unlock), logs the error's code, and ends (review M-2). A throw before the app is
+    ready (in the main module itself) still ends with Electron's own error dialog.
+  - A throw late in the back end's start (after some of its services were built or started) leaves that half-started
+    back end running behind the card (review L-2): on a plaintext developer workspace its database stays open until
+    the quit, and on a locked Kit nothing it built is reachable (no channel answers but the card's). The quit's
+    teardown stops and closes what the context (`ctx`) holds by then; the log says how many channels the start had
+    registered when it threw.
+  - Measured in the dev app (a drive root that refuses new folders): the state, the code (`EPERM`), the log line
+    without a path, "Copy details for support", the other channels refused by Electron, and the card's text arriving
+    two frames after its alert region (an effect alone had put both in one frame, the #436 trap; the text now waits
+    two animation frames). Still owed: a by-ear Narrator listen of the card, and Electron's own removal and
+    re-registration of handlers after a throw that comes after some registrations (the dev app's start failed before
+    any; the rows use the IPC harness, which models Electron's refusal of a second handler).
 - **Shredding never follows a link, so it cannot reach a file another name shares (#1014).** A
   symbolic link, a junction or a file with more than one hard link at a name the app shreds is
   only unlinked: a plaintext file someone hard-linked keeps its bytes under the other name. Mounts
@@ -3954,9 +3992,11 @@ Accepted as-is, with reasons:
 - **Hairline `--border` separators are ~1.3:1.** They are decorative row/card separators,
   never the sole identifier of a component (cards pair them with surface fill + shadow;
   inputs use `--border-strong`). WCAG 1.4.11 applies to required boundaries only.
-- **The fatal "app could not start" screen shows the raw error string.** §7 keeps error
-  codes inside Diagnostics, but when the backend never came up Diagnostics is unreachable —
-  the raw string (plus the log pointer) is the only diagnostic the user can relay.
+- **"The app could not start" shows an error code, and its last-resort form a raw error string.** §7 keeps error
+  codes inside Diagnostics, but when the back end never came up Diagnostics is unreachable. Since #1024 a start that
+  throws shows the gate's card with the error's code alone (`EPERM`, never a message or a path) and "Copy details for
+  support"; the fatal screen, now only for a failure state that could not be registered either, still shows
+  Electron's IPC error string (it names only the channel) and no longer points at `logs/app.log`.
 - **The Documents screen's per-row selection checkbox is 16px** (#151 KL-2: numbers
   refreshed — 16px in a 56px row). Under the 24px target minimum, but WCAG 2.5.8 is
   satisfied via the spacing exception: the tall row means no other target falls within the

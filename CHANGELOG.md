@@ -27,6 +27,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **When HilbertRaum can't start, it now says why and what to do.** If the app could not write to its drive (for
+  example a USB stick or SD card with its lock switch on), the drive was full, or something else stopped the start,
+  the window showed only "The app could not start" with a technical message, and told you to look in a log file that
+  isn't on the drive before you unlock. It now says what happened in your language, what helps (make the drive
+  writable or free some space, then start the app again), and the error code, and its **Copy details for support**
+  button copies the details for a support request. If the app's window itself could not open, the app kept running
+  invisibly and every new start did nothing; it now shows a message box and closes (#1024).
 - A plain question that only contains a word like "listed", "reviewer", "preview", "registration", "analyst" or
   «Briefkasten», "When is the rent review?" or "How many minutes notice must be given?" is answered from the few
   passages that match, as for any other lookup, instead of reading the whole document (#997).

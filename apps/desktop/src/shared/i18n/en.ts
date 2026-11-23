@@ -31,12 +31,8 @@ export const en = {
   'app.noticeDetails': 'Details',
   // #530: the engine notice leads to the AI Model screen, where the engine banner names the fix.
   'app.noticeGoToModels': 'Go to AI Model',
+  // The fatal screen and (#1024) the gate's start-failure card share this title; their text is `gate.startFailed.*`.
   'app.fatal.title': 'The app could not start',
-  // Split around the inline <code>logs/app.log</code> element (the path is literal).
-  'app.fatal.hintBefore':
-    'The local backend did not come up, so nothing can be loaded. Restart the app; if this ' +
-    'keeps happening, check ',
-  'app.fatal.hintAfter': ' on your drive and see docs/troubleshooting.md.',
   'app.loadingWorkspace': 'Loading workspace…',
   // Suspense fallback while a lazy screen chunk loads (route-level code split, PF-6).
   'app.loadingScreen': 'Loading…',
@@ -2551,6 +2547,21 @@ export const en = {
   'gate.create.submit': 'Create workspace',
   'gate.create.submitBusy': 'Creating…',
   'gate.error.generic': 'Something went wrong. Please try again.',
+  // #1024: the gate's card for a back-end start that threw, one text per cause main sends (START_FAILURE_KEYS); each
+  // says what helps. `other` is also the fatal screen's text. {code} is the error's code (EPERM, ENOSPC, SQLITE_26).
+  'gate.startFailed.notWritable':
+    'HilbertRaum can’t write to this drive, so it could not start. Check that the drive isn’t write-protected (some ' +
+    'USB sticks and SD cards have a small lock switch) and that you’re allowed to create folders on it, then start ' +
+    'the app again.',
+  'gate.startFailed.full':
+    'The drive is full, so HilbertRaum could not start. Free up some space on the drive, then start the app again.',
+  'gate.startFailed.other':
+    'Something stopped HilbertRaum while it was starting. Check that the drive is still connected and that it can be ' +
+    'written to, then start the app again.',
+  'gate.startFailed.help': 'If this keeps happening, see the troubleshooting guide in the drive’s docs folder.',
+  'gate.startFailed.code': 'Error code: {code}',
+  // Copies the session's log lines as Diagnostics' Copy does (redacted); the status line reuses diag.copied/copyFailed.
+  'gate.startFailed.copyDetails': 'Copy details for support',
 
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   //

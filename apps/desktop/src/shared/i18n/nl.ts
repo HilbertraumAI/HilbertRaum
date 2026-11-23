@@ -68,10 +68,6 @@ export const nl: UiCatalog<'nl'> = {
   'app.noticeDetails': 'Details',
   'app.noticeGoToModels': 'Naar AI-model',
   'app.fatal.title': 'De app kon niet starten',
-  'app.fatal.hintBefore':
-    'De lokale backend is niet gestart, dus er kan niets worden geladen. Start de app opnieuw; ' +
-    'blijft dit gebeuren, controleer dan ',
-  'app.fatal.hintAfter': ' op je schijf en lees docs/troubleshooting.md.',
   'app.loadingWorkspace': 'Werkruimte laden…',
   'app.loadingScreen': 'Laden…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2447,6 +2443,20 @@ export const nl: UiCatalog<'nl'> = {
   'gate.create.submit': 'Werkruimte aanmaken',
   'gate.create.submitBusy': 'Aanmaken…',
   'gate.error.generic': 'Er ging iets mis. Probeer het opnieuw.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum kan niet naar deze schijf schrijven en kon daarom niet starten. Controleer of de schijf niet tegen ' +
+    'schrijven is beveiligd (sommige USB-sticks en SD-kaarten hebben een klein schuifje voor schrijfbeveiliging) en ' +
+    'of je er mappen op mag maken. Start de app daarna opnieuw.',
+  'gate.startFailed.full':
+    'De schijf is vol, daarom kon HilbertRaum niet starten. Maak ruimte vrij op de schijf en start de app daarna ' +
+    'opnieuw.',
+  'gate.startFailed.other':
+    'Er ging iets mis bij het starten van HilbertRaum. Controleer of de schijf nog is aangesloten en of erop ' +
+    'geschreven kan worden, en start de app daarna opnieuw.',
+  'gate.startFailed.help':
+    'Blijft dit gebeuren, lees dan de handleiding voor probleemoplossing in de map docs op de schijf.',
+  'gate.startFailed.code': 'Foutcode: {code}',
+  'gate.startFailed.copyDetails': 'Details voor ondersteuning kopiëren',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected':
     'Dit PDF-bestand lijkt een scan te zijn: er staat nog geen leesbare tekst in.',

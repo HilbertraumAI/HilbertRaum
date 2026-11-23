@@ -71,10 +71,6 @@ export const tr: UiCatalog<'tr'> = {
   'app.noticeDetails': 'Ayrıntılar',
   'app.noticeGoToModels': 'Yapay zekâ modeli ekranına git',
   'app.fatal.title': 'Uygulama başlatılamadı',
-  'app.fatal.hintBefore':
-    'Yerel arka uç hizmeti başlamadı, bu yüzden hiçbir şey yüklenemiyor. Uygulamayı yeniden ' +
-    'başlatın; sorun sürerse sürücünüzdeki ',
-  'app.fatal.hintAfter': ' dosyasına ve docs/troubleshooting.md belgesine bakın.',
   'app.loadingWorkspace': 'Çalışma alanı yükleniyor…',
   'app.loadingScreen': 'Yükleniyor…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2362,6 +2358,18 @@ export const tr: UiCatalog<'tr'> = {
   'gate.create.submit': 'Çalışma alanı oluştur',
   'gate.create.submitBusy': 'Oluşturuluyor…',
   'gate.error.generic': 'Bir sorun oluştu. Yeniden deneyin.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum bu sürücüye yazamıyor, bu yüzden başlatılamadı. Sürücünün yazmaya karşı korumalı olmadığını (bazı ' +
+    'USB bellekler ve SD kartlarda küçük bir kilit düğmesi bulunur) ve üzerinde klasör oluşturabildiğinizi kontrol ' +
+    'edin, ardından uygulamayı yeniden başlatın.',
+  'gate.startFailed.full':
+    'Sürücü dolu, bu yüzden HilbertRaum başlatılamadı. Sürücüde yer açın, ardından uygulamayı yeniden başlatın.',
+  'gate.startFailed.other':
+    'HilbertRaum başlatılırken bir sorun oluştu. Sürücünün hâlâ bağlı olduğunu ve üzerine yazılabildiğini kontrol ' +
+    'edin, ardından uygulamayı yeniden başlatın.',
+  'gate.startFailed.help': 'Bu durum devam ederse sürücüdeki docs klasöründe bulunan sorun giderme kılavuzuna bakın.',
+  'gate.startFailed.code': 'Hata kodu: {code}',
+  'gate.startFailed.copyDetails': 'Destek için ayrıntıları kopyala',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected': 'Bu PDF bir tarama gibi görünüyor; henüz okunabilir metni yok.',
   'main.ingest.audioNeedsTranscriber':

@@ -1306,10 +1306,12 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       expect(at, `${name} after the second-instance return`).toBeGreaterThan(ready.indexOf('if (!isPrimaryInstance) return'))
       for (const later of [
         '\n  initMainI18n(app.getLocale())\n',
-        '\n    initBackend()\n',
+        // #1024: the back end starts through the runner that serves its failure state (backend-start-wiring.test.ts).
+        'runBackendStart(initBackend,',
         'installAppProtocol(',
         'Menu.setApplicationMenu(',
-        '\n  createWindow()'
+        // #1024 review M-2: the window now starts inside `runWindowStart`'s callback (indented one level deeper).
+        'createWindow()'
       ]) {
         expect(ready.indexOf(later), later).toBeGreaterThan(0)
         expect(at, `${name} before ${later.trim()}`).toBeLessThan(ready.indexOf(later))

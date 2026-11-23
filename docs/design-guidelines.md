@@ -367,7 +367,8 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
 
 Plain, calm, second person, present tense. Describe the problem and the next step; error
 codes only in Diagnostics. No exclamation marks or humor in failure states. No jargon in
-the everyday path.
+the everyday path. (One exception, #1024: the gate's "The app could not start" card shows the
+error's code on a quiet line under the text, because Diagnostics cannot be reached from it.)
 
 | Before | After |
 |---|---|

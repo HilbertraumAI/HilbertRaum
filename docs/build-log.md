@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-23 — the closed 2026-10-14 #698 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-23 (preamble budget, making room for the #1028 line). Its record is
+unchanged: see the architecture.md DEP-7 record it cites. Nothing in it is still open. Citations of this entry now
+resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#698 — the renderer bundles KaTeX once (`fix/698-katex-dedupe`).** Since `ce7e87b1` the lockfile held four nested katex 0.16.47 installs (each with commander 8.3.0) and the math chunk bundled two of
+them: the app's (the partial-TeX check) and rehype-katex's (the renderer). One top-level `node_modules/katex` now serves every dependent: a lockfile-only edit of those ten entries, accepted unchanged by the pinned npm
+11.6.2 (`npm dedupe` would also have moved semver, lru-cache, entities and ci-info). The renderer is not minified, so a copy was 490,779 bytes, not the issue's ~270 KB: the chunk 2,006,578 → 1,511,459 bytes, `app.asar`
+−493 KB, its 3,425 `node_modules` files and THIRD-PARTY-NOTICES unchanged. The "single, deduped version" test compared versions: it now checks one install, plus the build carrying KaTeX once (each red under its regression).
+Real app (packaged, 4B, GTX 1070 Ti): the probe's KaTeX fonts load, streamed TeX typesets. Record: architecture.md DEP-7 "#698". Open: a streamed `$$ …` partial shows a KaTeX error box until it parses (pre-existing, #701; fixed, above)._
+
 ## 2026-11-22 — the follow-ups wave 7 in-progress entry and the wave 6 close entry retired verbatim (wave 7 closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-22, when follow-ups wave 7 closed (PR #1010 merged as `aa7a7184`, the last of

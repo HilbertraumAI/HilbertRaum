@@ -290,6 +290,8 @@ button { min-width: 24px; min-height: 24px; }
 .gate-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
 .gate-actions .btn.primary { width: auto; margin-top: 0; }
 .gate-actions-main { display: flex; gap: 10px; align-items: center; }
+/* #1024: the start-failure card's one secondary action, centred under the text, with its status line below it. */
+.gate-start-failed-actions { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 12px; }
 /* The reveal toggle lives INSIDE the field (the expected pattern): the input reserves
    room on the right and the button is a real ~40px hit target pinned to that edge. */
 .gate-pw-field { position: relative; display: flex; }

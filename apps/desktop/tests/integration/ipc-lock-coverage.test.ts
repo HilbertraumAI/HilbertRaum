@@ -240,6 +240,8 @@ const COVERED_ELSEWHERE: Record<string, string> = {
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design). The password change answers a result, not a throw: its refusal during a lock teardown (the AUD-02 latch) is lock-admission-race.test.ts "refuses changeWorkspacePassword while the lock teardown is parked"',
+  registerStartFailureIpc:
+    'backend-start-failure.test.ts (#1024) — pre-unlock by design: the state of a run whose back-end start threw. It takes no AppContext (there is none), answers getWorkspaceState with a constant and the log tail + clipboard pair of Diagnostics’ Copy; the rows pin that exact channel set',
   registerDictationIpc:
     'dictation-ipc.test.ts (locked-vault and mid-lock (AUD-02 latch) rejection, #860 L6; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:

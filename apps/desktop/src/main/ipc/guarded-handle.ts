@@ -52,6 +52,9 @@ export interface GuardedHandleOptions {
   log?: { warn(msg: string, meta?: unknown): void }
 }
 
+/** #1024: every channel {@link guardedHandle} has registered, so a start that throws part-way can take them back. */
+const registeredChannels = new Set<string>()
+
 /**
  * `ipcMain.handle(channel, …)` with the sender check in front. A refused invoke rejects
  * the renderer's promise with a content-free error and never runs `handler`.
@@ -76,6 +79,31 @@ export function guardedHandle(
     }
     return handler(event, ...(args as never[]))
   })
+  registeredChannels.add(channel)
+}
+
+/** #1024 final round: the channels {@link guardedHandle} has registered so far, for {@link releaseGuardedHandlers}'s
+ *  `keep` (a copy: later registrations do not change it). */
+export function guardedChannels(): ReadonlySet<string> {
+  return new Set(registeredChannels)
+}
+
+/**
+ * #1024: remove the handlers {@link guardedHandle} registered, for a back-end start that threw after some registrars had
+ * run (`main/backend-start.ts`). None of them may answer over a back end that was only half built (a real
+ * `getWorkspaceState` would let the user unlock into it), and the failure state registers its own `getWorkspaceState`
+ * next, which Electron refuses while another handler holds the channel. Final round: the channels in `keep` (the ones
+ * registered before the start began, {@link guardedChannels}) stay, so a channel that serves the app whatever the
+ * start does (the update plan's hand-off channel may be one) survives a start that failed. `ipcMain.on` listeners are not
+ * touched. Returns how many handlers it removed.
+ */
+export function releaseGuardedHandlers(keep: ReadonlySet<string> = new Set()): number {
+  const channels = [...registeredChannels].filter((channel) => !keep.has(channel))
+  for (const channel of channels) {
+    registeredChannels.delete(channel)
+    ipcMain.removeHandler(channel)
+  }
+  return channels.length
 }
 
 /** The registrar-side binding: `const handle = guardedHandleFor(ctx)` then `handle(ch, fn)`. */
