@@ -344,17 +344,20 @@ function isHashAborted(err: unknown): boolean {
  * per `PROGRESS_CHUNK_BYTES` (so the 64 KB read chunks of a multi-GB weight don't flood
  * IPC) — plus a final exact-total call. Used to drive the first-run verification bar.
  *
- * It settles only once the stream has CLOSED the file (#1033): a resolved hash means the file is no longer held
- * open, so a caller may rename or delete it, or its folder, right away (Windows refuses a folder rename while a file
- * inside is open). A close that fails rejects.
+ * An unaborted hash settles only once the stream has CLOSED the file (#1033): when it resolves, the file is no longer
+ * held open, so a caller may rename or delete it, or its folder, right away (Windows refuses a folder rename while a
+ * file inside is open). A close that fails after the whole file was read still resolves the digest.
  *
  * `signal` (#420) stops the read. The promise then REJECTS with `HashAbortedError`; it must
  * never simply stop settling, because `computeInstallState`, `buildModelList`, the
  * `listModels` handler and the renderer's busy flag all park on it. That is why the abort
  * destroys the stream WITH an error: a bare `stream.destroy()` emits `close` and no
- * `error`, so a naive abort would leave every awaiting caller waiting forever. The `close`
- * handler is the belt to that braces — a close arriving without `end` or `error` still
- * settles. The parameter is OPTIONAL and trailing: every caller that does not pass one (the
+ * `error`, so a naive abort would leave every awaiting caller waiting forever. For an
+ * unaborted hash every outcome waits for the file's close: `close` hands over the digest
+ * after `end`, or rejects when it came without `end` or `error`, and a failed read reports
+ * its `error` once the stream has closed the file. An abort that lands after `end` stops
+ * nothing and settles at once with the digest, as before #1033; the close finishes in the
+ * background. The parameter is OPTIONAL and trailing: every caller that does not pass one (the
  * ship-time gates, the asset/binary/drive/ingestion verifiers) stays uncancellable by
  * construction. The model download passes its job's signal (#752).
  */
@@ -374,12 +377,15 @@ export function sha256File(
     let hashed = 0
     let lastReported = 0
     let settled = false
-    /** Taken at `end`, handed over on `close` (#1033). */
+    /** Taken at `end`; handed over on `close` (#1033), or at once to an abort that lands after `end`. */
     let digest: string | null = null
     const onAbort = (): void => {
-      // Once the whole file is read (an abort from the final progress call, or while the file closes) it is too
-      // late to stop anything: the finished hash stands, as when it resolved at `end`.
-      if (digest === null) stream.destroy(new HashAbortedError(filePath))
+      // An abort once the whole file is read (from the final progress call, or while the file closes) stops nothing,
+      // and must not wait for the close either: a saturated pool can hold it, and every caller parks on this promise
+      // (#420). The finished hash settles at once, as when it resolved at `end`; the close finishes in the background.
+      const finished = digest
+      if (finished !== null) settle(() => resolve(finished))
+      else stream.destroy(new HashAbortedError(filePath))
     }
     /** Settle exactly once and drop the signal listener — one pass hashes many files off
      *  ONE signal, so an un-removed listener per file would pile up on it. */
@@ -390,7 +396,8 @@ export function sha256File(
       finish()
     }
     signal?.addEventListener('abort', onAbort, { once: true })
-    stream.on('error', (err) => settle(() => reject(err)))
+    // A close that fails once the whole file was read does not undo the hash: it resolves, as before #1033.
+    stream.on('error', (err) => settle(() => (digest !== null ? resolve(digest) : reject(err))))
     stream.on('data', (chunk) => {
       hash.update(chunk)
       hashed += chunk.length
@@ -399,9 +406,9 @@ export function sha256File(
         onProgress(hashed)
       }
     })
-    // #1033: the digest is taken at `end`, but handed over only on `close`. The stream closes its file after
-    // `end`, on libuv's thread pool, so under load a caller that renamed the file's folder right after the hash
-    // still found the file open: Windows refuses that rename (EPERM). A close that fails reports `error` first.
+    // #1033: the digest is taken at `end`, but handed over on `close` (an abort after `end` takes it at once, above).
+    // The stream closes its file after `end`, on libuv's thread pool, so under load a caller that renamed the file's
+    // folder right after the hash still found the file open: Windows refuses that rename (EPERM).
     stream.on('end', () => {
       digest = hash.digest('hex')
       if (onProgress && hashed !== lastReported) onProgress(hashed)
