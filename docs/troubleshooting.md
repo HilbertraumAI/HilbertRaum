@@ -134,7 +134,9 @@ App & browser control → Smart App Control, or your antivirus program's setting
 the app cannot override them.
 
 **"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
-to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
+to its program could not be loaded, which usually means an interrupted copy. The same message comes when
+the engine's install record (`.hilbertraum-runtime.json` in the engine folder) is cut short or damaged:
+without it the app cannot check the engine's files, so it does not start them. Choose **Install the
 AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
 the speech model). It downloads a fresh copy, checks it against its pinned checksum, unpacks and
 checks it beside the engine folder, swaps it in and starts your model again. On a Kit it replaces
@@ -148,6 +150,9 @@ If the drive does not allow downloads (an offline Kit), or this computer has no 
 - Otherwise do it by hand: quit the app, delete the engine folder on the drive
   (`runtime/llama.cpp/win`, `…/mac` or `…/linux`; for the voice engine `runtime/whisper.cpp/…`),
   start the app again on a computer with internet, and install the engine from the AI Model screen.
+- Whoever prepares drives with the scripts can run `fetch-runtime` again: it fetches an engine whose
+  install record is damaged again. Should it report the engine already installed while the app still
+  refuses it, delete the engine folder first, then run it.
 
 **"It was just installed and still can't start".** The banner says this when a freshly installed,
 checksum-verified copy is refused as damaged too, so its files are probably not the cause, and it
@@ -1292,6 +1297,20 @@ directly; a bundle left one directory too deep is not picked up.
 
 The version is pinned; a different kiwix-tools release is not supported. Either way, the app
 picks the files up on **Refresh** under *Documents → Knowledge packs* — no restart needed.
+
+### Knowledge packs stop answering, or adding one says "The archive could not be read by kiwix-manage"
+
+Before it starts kiwix-serve or kiwix-manage, the app checks every file the tools were installed with,
+against the install record in `runtime/kiwix-tools/<os>/.hilbertraum-runtime.json`. If one of their
+program files or libraries is missing, or that record itself is cut short or damaged (an interrupted copy
+of the drive is the usual cause), the tools are not started: the app cannot tell that nothing they need is
+missing. Unlike the AI engine, the app cannot install the tools again on its own while they are on the
+drive:
+1. Quit the app and delete the folder `runtime/kiwix-tools/<os>/` on the drive (`win`, `mac` or `linux`).
+2. Start the app, press **Refresh** under *Documents → Knowledge packs*, and install the tools from the
+   panel's "kiwix-tools are missing" notice (see above), or run `fetch-runtime` with `-Family kiwix_tools`
+   (`--family kiwix_tools`). The script also fetches a copy with a damaged record again without step 1,
+   but with the folder deleted it cannot report the tools "already installed".
 
 ### "kiwix-manage cannot read this archive because its file name or folder contains …"
 

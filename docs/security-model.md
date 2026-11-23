@@ -3707,18 +3707,43 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     denied read), or the marker changed during the check. No verdict about the copy (review R-2).
     - A marker that is there but cannot be read is `unreadable` too (round 6), not a legacy drive. A
       `cpu/` net whose own marker cannot be read never falls back to the family marker.
-    - A marker that is read but cannot be parsed (truncated, garbled) is still taken as no marker, as
-      before #1012. The walk goes on to the folder above (from a `cpu/` net, to the family marker), and
-      with no recorded hash found the copy is `skip-legacy`, cached for the session.
+  - **`marker-damaged`** (#1028, 2026-11-23): the copy's install marker is there but is no marker the app can
+    read. Until #1028 such a marker was taken for no marker at all: the walk went on to the folder above (from
+    a `cpu/` net, to the family marker), and with no recorded hash found the copy was `skip-legacy`, cached for
+    the session, and its engine started unchecked. That is exactly when a marker is most likely to be cut
+    short: an interrupted copy of the drive.
+    - **What counts as damaged** (`readRuntimeMarkerState`, `assets.ts`, the one reading every reader shares):
+      something other than a regular file at its path (a folder, a pipe); more than 1 MiB; text that is not
+      JSON (cut short, garbled, UTF-16); JSON that is not an object; `version`, `backend`, `os` or `arch`
+      missing or not a string; or a `binaries` that is not a plain object whose every value is a SHA-256 (64
+      hex digits). Before #1028 a bad entry was dropped and the marker read on without it, so the file it named
+      went unchecked. One leading UTF-8 byte-order mark is read past (no writer writes one; an editor may).
+      Fields the app does not know are ignored, whatever they hold: a later writer may add one (G-28's engine
+      signature), and this reader must keep accepting it (data-contracts.md, the marker's frozen rules).
+    - **A map that does not record the program** asked about, but records other files of its copy (a garbled
+      key, a hand edit), is damaged too. Every writer records the program first. A map that records nothing of
+      the copy (a `cpu/` net without a marker of its own, against a family marker with no `cpu/` key) stays
+      the legacy case.
+    - **The walk stops at the first marker file it finds**, readable or not. A `cpu/` net's own damaged marker
+      never falls back to the family marker; a net with no marker of its own over a damaged family marker is
+      `marker-damaged` too.
+    - **Every seam refuses it.** The engines treat it as damaged files (`isDamagedFilesVerdict`), with the #532
+      "Install again" offer; the reinstall replaces the whole copy and its marker. The knowledge-pack tools
+      refuse it like a missing program or library, with their `files` kind (owner call 2026-11-23): with the
+      record gone nothing can say that no library is missing, which is what review R-1 refuses.
+    - **Postures:** a dev build reads no marker (`skip-dev`, as before). On a commercial drive it is
+      `marker-damaged` too, never the cached refusal of a hash-less marker (#234).
   - **Which verdicts are cached:** only `ok`, `mismatch` and `skip-*` are cached for the session.
-    `missing`, `missing-other` and `unreadable` are re-checked on every attempt, so a file put back or a
-    lock that cleared is found by the next spawn or "Check again".
+    `missing`, `missing-other`, `unreadable` and `marker-damaged` are re-checked on every attempt, so a file
+    or a marker put back, or a lock that cleared, is found by the next spawn or "Check again". For a damaged
+    marker that costs one `stat` and one small read per attempt, and nothing is hashed; and a marker read
+    while `fetch-runtime` rewrites it in place (it writes over the old one) does not strand the session.
     - The exception (round 7): the knowledge-pack tools' `missing-other`. It is reached only after every
       present file was hashed, and they start on it as on `ok`, so it is kept for the session like `ok`,
       under its own cache key. An engine's unhashed `missing-other` never answers them.
-  - **The engines** refuse `mismatch` and both missing verdicts as damaged files (below). The start is
-    refused, and the #532 "Install again" offer comes up. For a missing file, a start that went ahead and
-    ran would drop that verdict at once.
+  - **The engines** refuse `mismatch`, both missing verdicts and `marker-damaged` (#1028) as damaged files
+    (below). The start is refused, and the #532 "Install again" offer comes up. For a missing file, a start
+    that went ahead and ran would drop that verdict at once.
     - `mismatch` joined in code review round 6. With the whole copy hashed, a damaged library (a copy
       cut short, a disk error) gives `mismatch` just as a tamper does, and a reinstall replaces it.
     - The log line still records the mismatch as a possible tamper.
@@ -3727,6 +3752,11 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     including the knowledge-pack library folder these children start in, where a planted copy would be
     loaded. They start on `missing-other`, with a code-only log line (owner decision). A changed file is
     always refused.
+    - A damaged install marker (`marker-damaged`, #1028) is refused like a missing program or library, with
+      the same `files` kind (owner call 2026-11-23). The repair is outside the app, as for a missing file:
+      delete `runtime/kiwix-tools/<os>/` and install the tools again from the Knowledge-packs panel, or re-run
+      `fetch-runtime --family kiwix_tools` (both twins fetch a copy with a damaged marker again). Their `files`
+      error says both causes: "a file of its install is missing, or its install record is damaged".
     - A `missing` file latches the pack service's start failure until the pack set changes (round 5).
     - An `unreadable` one does not: kiwix-serve and kiwix-manage report it with their own
       `filesUnreadable` kind. The service never latches that kind, and the library build stops on it
@@ -3809,9 +3839,10 @@ engines in their own folder.
 1. **The install marker records each binary's own SHA-256.** `RuntimeInstallMarker` gained an optional
    `binaries: Record<relPath, sha256>` field (`assets.ts`), keyed by the binary's path **relative to the
    extract dir** with posix `/` separators (`markerBinaryKey`) so a marker written on Windows reads the
-   same on another OS. `readRuntimeMarker` parses it **tolerantly** — a malformed map is dropped, and a
-   marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
-   unchanged. The hash is recorded by **all three** marker writers: the in-app installer
+   same on another OS. `readRuntimeMarker` never throws; until #1028 it parsed the map tolerantly (a
+   malformed entry was dropped, so the file it named went unchecked). Since #1028 a malformed map or entry
+   makes the whole marker damaged (`marker-damaged` above); a map that records nothing still deep-equals the
+   historical `{version,backend,os,arch}`, so legacy reads are unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
    still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #998 all
    three record every file of the copy, the libraries included, and since #1012 the verifier re-hashes
@@ -3850,7 +3881,8 @@ engines in their own folder.
    change; a DIY drive keeps the `skip-legacy` tolerance either way (`known-limitations.md`).
 
 **Behaviour at each spawn seam (these verdicts only ever fire in a packaged build; "missing" below means
-`missing` or `missing-other`):**
+`missing` or `missing-other`, and for the engines also `marker-damaged`, #1028; the knowledge-pack tools
+refuse `marker-damaged` as they refuse `missing`):**
 - **`LlamaServer.start()` (`sidecar.ts`)** — throws before allocating a port/child, so the start **ladder
   falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one
   method funnels **every** llama-server spawn (chat runtime, embedder, reranker, vision), so all are
@@ -3903,7 +3935,17 @@ predates this field, or whose binary was modified after install, **fails the gat
 so a sold drive always ships re-verifiable executables. Since #998 it also checks every further file a
 marker records (present, inside its folder, the recorded bytes); a marker that records only the
 executable passes as before. That covers the libraries when the Kit is built; since #1012 the pre-spawn
-check covers them again before the first spawn of each session.
+check covers them again before the first spawn of each session. Since #1028 the gate reads the marker as
+the pre-spawn check does: a damaged one fails with its own line ("cut short or damaged"), one that cannot be
+read just now with another, and only a marker that is not there at all lets an optional family count as
+absent (a damaged marker left alone in an optional family's folder gets its own line: for a Kit without that
+family, delete the leftover marker). The two `fetch-runtime` twins fetch a copy with a damaged marker again (the `.sh` twin used to read
+the version out of a cut text and skip it), so the script repairs what the app refuses. Review round 2 found
+markers the twins still read on (a raw control byte, garbage between or after the fields, a trailing comma
+for the `.sh`; single quotes, a capitalised name, a hash ending in an escaped line break for the `.ps1`, whose
+`ConvertFrom-Json` is loose): each twin now reads the marker with a small JSON reader of its own, the app's
+rule step for step, and fetches again on any doubt. The gate's line for a damaged marker says what to do if
+the script still reports the engine installed: delete the engine folder first.
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there
