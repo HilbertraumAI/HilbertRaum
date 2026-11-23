@@ -1311,6 +1311,8 @@ drive:
    panel's "kiwix-tools are missing" notice (see above), or run `fetch-runtime` with `-Family kiwix_tools`
    (`--family kiwix_tools`). The script also fetches a copy with a damaged record again without step 1,
    but with the folder deleted it cannot report the tools "already installed".
+3. If you ran the script while the app was open, restart the app: once the tools were refused, the app does
+   not try them again until the list of packs changes or the app starts again.
 
 ### "kiwix-manage cannot read this archive because its file name or folder contains …"
 

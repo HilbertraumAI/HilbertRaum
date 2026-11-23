@@ -1173,7 +1173,10 @@ for (const leg of SCRIPT_LEGS) {
       // (review round 2, L-2) a field a later release adds after the map, an object holding a list.
       it.each<[string, (whole: string) => string]>([
         ['behind a UTF-8 byte-order mark', (whole) => String.fromCharCode(0xfeff) + whole],
-        ['with an unknown top-level object after its map', (whole) => `${whole.slice(0, -1)},"signature":{"alg":"x","of":["llama-server.exe"],"n":-1.5e3}}`]
+        ['with an unknown top-level object after its map', (whole) => `${whole.slice(0, -1)},"signature":{"alg":"x","of":["llama-server.exe"],"n":-1.5e3}}`],
+        // Code review (CR-4): a field a later release adds may hold its own `version` (a signature's format, G-28); the
+        // marker's own version is the top-level one, never the last `"version":"…"` on the line.
+        ['with a nested version and backend after its map', (whole) => `${whole.slice(0, -1)},"signature":{"version":"1","backend":"ed25519"}}`]
       ])('a whole marker %s is still skipped (#1028)', (_title, edit) => {
         const root = scratchTarget(REAL_SHA)
         installWinBuild(root, true)

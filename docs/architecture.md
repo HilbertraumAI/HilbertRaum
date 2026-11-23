@@ -5915,7 +5915,9 @@ started with nothing checked. A `cpu/` net's own damaged marker fell back to the
   `checkProgramLoads` and whisper-cli treat it exactly as §13's missing file: this record's `files-damaged`
   with `exit: 'not started'`, the ladder walks on, the probe answers `null`, "Check again" stays `refused`,
   and the #532 offer comes up. The knowledge-pack tools refuse it with their `files` kind (owner call
-  2026-11-23), latched until the pack set changes, like a missing program or library.
+  2026-11-23), latched until the pack set changes or the app restarts, like a missing program or library: a
+  marker repaired while the app runs is picked up only then (code review CR-7; the latch is kept). A key that
+  leaves the folder is checked before the program's own key, so it stays a tamper (`mismatch`, CR-2).
 - **Not cached,** like `missing`: one `stat` and one small read per attempt, nothing hashed. A marker read
   while `fetch-runtime` rewrites it in place is read whole by the next attempt, whose healthy start drops the
   verdict (§9); a marker put back by hand is found without a restart. A reinstall clears the cache anyway.

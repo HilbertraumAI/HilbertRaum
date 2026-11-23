@@ -444,7 +444,17 @@ password recovery — are documented in
     missing file. Before #1028 such a marker counted as none, and the engine started with nothing checked.
   - **The knowledge-pack tools** stop, like a missing program or library (owner call 2026-11-23), and their
     **repair is outside the app**: delete `runtime/kiwix-tools/<os>/` (the Knowledge-packs panel then offers
-    to install the tools), or re-run `fetch-runtime --family kiwix_tools`.
+    to install the tools), or re-run `fetch-runtime --family kiwix_tools`. Unlike the engines, the refusal is
+    **kept until the pack set changes or the app restarts** (code review CR-7): it has their `files` kind,
+    which the pack service latches, so a marker repaired while the app runs (by hand, or by a script run) is
+    not picked up by the next question. Restart the app after the repair.
+  - **An old drive set up with the bash script under Git Bash on Windows may be asked to install its engine
+    again** (code review CR-1). Between 2026-06-21 and a later fix, `fetch-runtime.sh` on Git Bash, for a
+    target path with a backslash and an archive whose pin had no real hash yet, wrote a marker whose hash
+    entry could not be parsed. Before #1028 the app took that marker for none and started the engine without
+    checking it; now it refuses the copy as damaged engine files. This is the intended outcome, and very few
+    drives carry such a marker. "Install again" on the AI Model screen, or a re-run of `fetch-runtime`, writes a
+    good one.
   - **A marker edited by hand** is held to the same rule. Only the byte-order mark an editor may add is read
     past; a UTF-16 save, a missing field or an entry that is not a hash makes it damaged.
   - **`fetch-runtime` reads the marker as the app does** (review round 2: both twins carry a small JSON reader of

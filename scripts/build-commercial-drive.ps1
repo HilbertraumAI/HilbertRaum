@@ -418,12 +418,15 @@ foreach ($lic in $LicenseArtifacts) {
     $problems += "license/attribution artifact missing or empty at the drive root: $lic (re-run prepare-drive)"
   }
 }
-# Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
+# Runtime-marker pre-flight (Phase 14): every pinned sidecar
 # build must be PRESENT (binary) and carry a .hilbertraum-runtime.json whose version AND
 # backend match runtime-sources.yaml -- a missing binary or a missing/stale marker
 # means the drive ships the wrong build (e.g. a CPU-era binary after the default moved
 # to vulkan, or a half-deleted install). The dir/backend list mirrors the committed
-# yaml pin; keep them in sync.
+# yaml pin; keep them in sync. NOT assertCommercialDrive's reading of the marker (#1028):
+# ConvertFrom-Json takes single quotes and names in any case, so this can pass a marker
+# that is damaged. The canonical gate run in step 7 reads it as the app does and is the
+# authority; this check only fails early.
 if (-not $DryRun) {
   $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
   if (Test-Path -LiteralPath $rtSources) {

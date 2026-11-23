@@ -264,6 +264,28 @@ describe('assertCommercialDrive', () => {
       )
     })
 
+    // Code review (CR-3): a marker that cannot be read just now, alone in the folder, is no absent family either, and no
+    // missing binary: the builder is told the read failed.
+    it('a kiwix_tools folder holding only a marker that cannot be read fails the gate with that line (#1028)', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-kiwix-deny-')
+      writeDriveFile(root, 'runtime/kiwix-tools/win/.hilbertraum-runtime.json', '{"version":"3.8.1","backend":"cpu","os":"win","arch":"x64"}')
+      const marker = join(root, 'runtime', 'kiwix-tools', 'win', '.hilbertraum-runtime.json')
+      denyReading(marker)
+      try {
+        const res = await gate(root, chat)
+        expect(res.ok).toBe(false)
+        expect(res.checks.optionalRuntimesConsistent).toBe(false)
+        expect(
+          res.problems.some((p) =>
+            /^kiwix_tools build win\/x64 cpu: the \.hilbertraum-runtime\.json install marker under runtime\/kiwix-tools\/win could not be read \(E[A-Z]+\) — check the drive, then run the gate again$/.test(p)
+          ),
+          res.problems.join('\n')
+        ).toBe(true)
+      } finally {
+        allowReading(marker)
+      }
+    })
+
     it.each([
       ['missing kiwix-manage', { omit: 'kiwix-manage.exe' }, /missing under runtime\/kiwix-tools\/win: kiwix-manage\.exe/],
       ['missing an ICU DLL', { omit: 'icuuc74.dll' }, /missing under runtime\/kiwix-tools\/win: icuuc74\.dll/],

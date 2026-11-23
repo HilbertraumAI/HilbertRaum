@@ -2662,13 +2662,16 @@ whole renderer-visible surface.
     inside `binaries`, and never a new meaning for `version`, `backend`, `os` or `arch`, which stay strings
     (`version` keeps the upstream tag shapes, F-24);
   - the file stays one line of UTF-8 JSON without a byte-order mark and without blanks between its tokens,
-    under 1 MiB, with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `binaries`
-    anywhere but the top level** (review round 2, L-2). Both twins read the whole object with a JSON reader of
-    their own and judge only the top-level fields, so a nested `binaries` or a field before the map is no
-    problem for that check; but the `.sh` twin still finds the recorded names and hashes with `sed`, which
-    takes the last `"binaries":{` on the line and splits the map at its commas. A later writer that breaks
-    one of these rules is not refused by the app, but release 1's `fetch-runtime` then fetches that engine
-    again on every run (the safe side).
+    under 1 MiB, with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `version`,
+    `backend`, `os`, `arch` or `binaries` anywhere but the top level** (review round 2, L-2; code review CR-4).
+    Both twins read the whole object with a JSON reader of their own and judge only the top-level fields, and
+    the `.sh` skip decision takes the version and backend from that reader (CR-4), so a nested one is no
+    problem for them; but the `.sh` twin still finds the recorded names and hashes with `sed`, which takes the
+    last `"binaries":{` on the line and splits the map at its commas, and the builders' native pre-flight
+    (`build-commercial-drive.{sh,ps1}`, left to the update plan's P3) still takes the last `"version"` and
+    `"backend"` on the line. A later writer that breaks one of these rules is not refused by the app, but
+    release 1's `fetch-runtime` then fetches that engine again on every run (the safe side), and the builder's
+    pre-flight may report a mismatch the canonical gate does not.
 
   `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two

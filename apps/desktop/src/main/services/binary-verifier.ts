@@ -270,6 +270,15 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
     log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
     return 'skip-legacy'
   }
+  // The marker is a file on the drive: a key that leaves the copy's folder is no file of this copy, and
+  // no writer records one — refused, before anything is read. EVERY key, before a nested net's keys are
+  // set aside (code review round 3): `cpu/../../x` names no file of the net. #1028 code review (CR-2): and
+  // before the program's own key is looked up, so such a marker stays a tamper even when it does not record
+  // the program (the log line below, the knowledge-pack tools' `integrity` kind), never `marker-damaged`.
+  if (Object.keys(binaries).some((key) => recordedFilePath(markerDir, key) === null)) {
+    log.warn('An engine install marker records a file outside its folder — refusing to spawn', { code: 'marker-key-outside' })
+    return 'mismatch'
+  }
   if (!binaries[markerBinaryKey(markerDir, binPath)]) {
     // #1028: every writer records the program it installs, first. A map that records files of this copy but
     // not the program (a garbled key, a hand edit) is damaged: refused, not taken for a legacy drive. A map
@@ -278,14 +287,6 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
     if (keysToVerify(binaries, markerDir, binPath).length > 1) return markerDamaged('program-unrecorded')
     log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
     return 'skip-legacy'
-  }
-
-  // The marker is a file on the drive: a key that leaves the copy's folder is no file of this copy, and
-  // no writer records one — refused, before anything is read. EVERY key, before a nested net's keys are
-  // set aside (code review round 3): `cpu/../../x` names no file of the net.
-  if (Object.keys(binaries).some((key) => recordedFilePath(markerDir, key) === null)) {
-    log.warn('An engine install marker records a file outside its folder — refusing to spawn', { code: 'marker-key-outside' })
-    return 'mismatch'
   }
   const program = markerBinaryKey(markerDir, binPath)
   const files = keysToVerify(binaries, markerDir, binPath).map((key) => ({

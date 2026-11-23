@@ -574,9 +574,14 @@ marker_recorded_names() {
 # Parameter expansion, `[[ == ]]` patterns and `case` only: no `=~`, so a caller's BASH_REMATCH survives (#765), no
 # sed (BSD sed on macOS differs), no character ranges (bash 3.2 matches them by the locale's collation), so macOS's
 # bash 3.2 runs it as bash 5 does. Mirrored by fetch-runtime.ps1 ($ReadInstallMarker).
+# It also leaves the object's own version and backend in MARKER_VERSION and MARKER_BACKEND (escapes as written), for
+# the skip decision (code review CR-4: never the last `"version":"…"` on the line, which a field nested in a later one
+# can be).
 marker_readable() {
   local bytes kept text bom len pos=0 c state=value stack='' top where='' key='' str='' in_map=0 map=absent object=0
   local f_version=0 f_backend=0 f_os=0 f_arch=0 is_string
+  MARKER_VERSION=''
+  MARKER_BACKEND=''
   bytes="$(wc -c < "$1")" || return 1
   kept="$(tr -d '\000' < "$1" | wc -c)" || return 1
   [[ $((bytes)) -le 1048576 && $((bytes)) -eq $((kept)) ]] || return 1
@@ -643,8 +648,14 @@ marker_readable() {
         esac
         if [[ "$where" == top ]]; then
           case "$key" in
-            version) f_version=$is_string ;;
-            backend) f_backend=$is_string ;;
+            version)
+              f_version=$is_string
+              MARKER_VERSION="$str"
+              ;;
+            backend)
+              f_backend=$is_string
+              MARKER_BACKEND="$str"
+              ;;
             os) f_os=$is_string ;;
             arch) f_arch=$is_string ;;
             binaries)
@@ -803,8 +814,9 @@ if [[ -f "$BIN_PATH" ]]; then
   # #1028: a marker that is there but is no marker the app can read is as good as none (the default WHY): the app
   # refuses that copy, so it is fetched again — never skipped, never kept as newer — before any field is read.
   elif [[ -f "$MARKER_PATH" ]] && marker_readable "$MARKER_PATH"; then
-    m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
-    m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
+    # The object's own version and backend, as marker_readable read them (code review CR-4).
+    m_version="$MARKER_VERSION"
+    m_backend="$MARKER_BACKEND"
     if [[ "$(compare_runtime_versions "$m_version" "$VERSION")" == "1" ]]; then
       # Whatever its backend: the app's relation ignores the backend too (runtimeInstallRelation).
       if [[ $COMMERCIAL -eq 1 ]]; then NEWER_REPLACED="$m_version"

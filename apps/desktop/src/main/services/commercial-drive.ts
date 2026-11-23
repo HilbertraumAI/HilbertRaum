@@ -410,6 +410,14 @@ function engineSwapLeftovers(rootPath: string, extractTo: string): string[] {
   return [dirs.staging, dirs.previous].filter(there).map((p) => relative(resolve(rootPath), p).split(sep).join('/'))
 }
 
+/** #1028: the gate's line for an install marker that is there but could not be read just now (`code`: its errno code). */
+function unreadableMarkerLine(label: string, extractTo: string, code: string | null): string {
+  return (
+    `${label}: the .hilbertraum-runtime.json install marker under ${extractTo} could not be read ` +
+    `(${code ?? 'read failed'}) — check the drive, then run the gate again`
+  )
+}
+
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
@@ -645,6 +653,12 @@ export async function assertCommercialDrive(
         )
         continue
       }
+      if (optional && markerState.kind === 'unreadable' && present.length === 0) {
+        // #1028 code review (CR-3): a marker that cannot be read just now, and none of the family's files: the read
+        // failed, which no missing binary explains.
+        fail('current', unreadableMarkerLine(label, build.extractTo, markerState.code))
+        continue
+      }
       const missing = required.filter((p) => !present.includes(p))
       // A marker alone is not an install: every declared file must exist too (mirrors
       // runtimeInstallCurrent — a half-deleted or half-installed family must fail the gate).
@@ -666,8 +680,7 @@ export async function assertCommercialDrive(
                 'damaged — re-run fetch-runtime for this build; if it reports the engine already installed, delete ' +
                 'the engine folder first'
             : markerState.kind === 'unreadable'
-              ? `${label}: the .hilbertraum-runtime.json install marker under ${build.extractTo} could not be read ` +
-                `(${markerState.code ?? 'read failed'}) — check the drive, then run the gate again`
+              ? unreadableMarkerLine(label, build.extractTo, markerState.code)
               : `${label}: no .hilbertraum-runtime.json ` +
                 `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )

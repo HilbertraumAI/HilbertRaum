@@ -3723,7 +3723,9 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     - **A map that does not record the program** asked about, but records other files of its copy (a garbled
       key, a hand edit), is damaged too. Every writer records the program first. A map that records nothing of
       the copy (a `cpu/` net without a marker of its own, against a family marker with no `cpu/` key) stays
-      the legacy case.
+      the legacy case. Code review CR-2: every key is checked for containment first, so a map holding a key that
+      leaves the folder is a tamper (`mismatch`, its log line, the knowledge-pack tools' `integrity` kind)
+      whether or not it records the program.
     - **The walk stops at the first marker file it finds**, readable or not. A `cpu/` net's own damaged marker
       never falls back to the family marker; a net with no marker of its own over a damaged family marker is
       `marker-damaged` too.
@@ -3757,6 +3759,10 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
       delete `runtime/kiwix-tools/<os>/` and install the tools again from the Knowledge-packs panel, or re-run
       `fetch-runtime --family kiwix_tools` (both twins fetch a copy with a damaged marker again). Their `files`
       error says both causes: "a file of its install is missing, or its install record is damaged".
+      Code review CR-7: because the kind is `files`, `ZimService.beginStart` latches the refusal like a missing
+      file's, until the pack set changes or the app restarts. Unlike the engines (never cached), a marker
+      repaired while the app runs is therefore not picked up by the tools' next start; the latch is kept on
+      purpose (a missing file does not heal by waiting either), and the repair steps end with a restart.
     - A `missing` file latches the pack service's start failure until the pack set changes (round 5).
     - An `unreadable` one does not: kiwix-serve and kiwix-manage report it with their own
       `filesUnreadable` kind. The service never latches that kind, and the library build stops on it
@@ -3945,7 +3951,15 @@ markers the twins still read on (a raw control byte, garbage between or after th
 for the `.sh`; single quotes, a capitalised name, a hash ending in an escaped line break for the `.ps1`, whose
 `ConvertFrom-Json` is loose): each twin now reads the marker with a small JSON reader of its own, the app's
 rule step for step, and fetches again on any doubt. The gate's line for a damaged marker says what to do if
-the script still reports the engine installed: delete the engine folder first.
+the script still reports the engine installed: delete the engine folder first. Code review (CR-3): a marker
+that cannot be read just now, alone in an optional family's folder, gets the "could not be read (CODE)" line,
+not "binary missing". (CR-4): the `.sh` skip decision compares the object's own version and backend, as its
+reader read them, no longer the last `"version":"…"` on the line, so a later top-level field holding its own
+`version` does not make release 1's script fetch the engine again on every run. (CR-5/CR-6): the two builder
+scripts' native marker pre-flight (`build-commercial-drive.{sh,ps1}`, version and backend by `sed` /
+`ConvertFrom-Json`) still reads loosely and can pass a damaged marker; the canonical gate they run afterwards
+(`assertCommercialDrive`, step 7) refuses it and is the authority. The builders are left as they are (the
+in-field update plan's P3 owns them).
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there

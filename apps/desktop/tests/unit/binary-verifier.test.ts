@@ -544,6 +544,17 @@ describe('an install marker that is there but cannot be read as one (#1028)', ()
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('marker-damaged')
   })
 
+  // Code review (CR-2): every key is checked for containment before the program's own is looked up, so a marker that
+  // records a file outside its folder stays a tamper (`mismatch`: the log line, the knowledge-pack tools' `integrity`
+  // kind) even when it does not record the program — never the softer `marker-damaged`.
+  it('a marker that records a file outside its folder but not the program is refused as a tamper (mismatch)', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const { bin } = copyIn(dir)
+    writeFileSync(runtimeMarkerPath(dir), withMap({ '../outside.dll': sha('the library'), 'ggml.dll': sha('the library') }))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+  })
+
   it('a folder at the marker path is marker-damaged: it never heals by waiting, so it is no read that failed just now', async () => {
     initBinaryVerification(false)
     const dir = tmp()
