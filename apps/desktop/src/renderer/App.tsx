@@ -177,7 +177,8 @@ function AppShell(): JSX.Element {
   // instead of implying the model is reachable by nothing but this app (D1).
   const [localApiOn, setLocalApiOn] = useState(false)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
-  // here would render the full shell with every screen surfacing raw IPC errors.
+  // here would render the full shell with every screen surfacing raw IPC errors. #1024: a start that threw answers
+  // `start_failed` instead, which the gate shows; this stays for a failure state that could not be registered.
   const [fatalError, setFatalError] = useState<string | null>(null)
   // One-line, dismissible runtime notice: currently the GPU crash auto-fallback's
   // friendly "switched to compatibility mode" message (spec §11.4 tone).
@@ -227,7 +228,8 @@ function AppShell(): JSX.Element {
   // Timing mark for opt-in measurement runs (main enforces the allowlist and no-ops
   // unless HILBERTRAUM_PERF_LOG=1): the workspace gate — the password prompt — became
   // visible. This is the end of the user-felt "launch to password prompt" span.
-  const gateVisible = workspace !== null && !unlocked
+  // #1024: a start that failed shows the gate's failure card, which has no password prompt.
+  const gateVisible = workspace !== null && !unlocked && workspace.state !== 'start_failed'
   useEffect(() => {
     if (gateVisible) window.api?.perfMark('gate_visible')
   }, [gateVisible])
@@ -418,15 +420,15 @@ function AppShell(): JSX.Element {
   }
 
   if (fatalError) {
+    // The last resort: main's state could not be read at all. Since #1024 a back-end start that throws answers with the
+    // gate's failure card instead (`start_failed`), so this shows only when that failure state could not be registered
+    // either. It no longer points at `logs/app.log`: an encrypted workspace writes no log to the drive before an unlock.
     return (
       <div className="gate-shell">
         <div className="card">
           <h2>{t('app.fatal.title')}</h2>
-          <p className="hint">
-            {t('app.fatal.hintBefore')}
-            <code>logs/app.log</code>
-            {t('app.fatal.hintAfter')}
-          </p>
+          <p className="hint">{t('gate.startFailed.other')}</p>
+          <p className="hint">{t('gate.startFailed.help')}</p>
           <p className="hint">
             <code>{fatalError}</code>
           </p>

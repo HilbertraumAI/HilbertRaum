@@ -55,10 +55,6 @@ export const es: UiCatalog<'es'> = {
   'app.noticeDetails': 'Detalles',
   'app.noticeGoToModels': 'Ir a Modelo de IA',
   'app.fatal.title': 'No se pudo iniciar la aplicación',
-  'app.fatal.hintBefore':
-    'El servicio local de la aplicación no se inició, así que no se puede cargar nada. Reinicia ' +
-    'la aplicación; si el problema se repite, abre ',
-  'app.fatal.hintAfter': ' en tu unidad y lee «docs/troubleshooting.md».',
   'app.loadingWorkspace': 'Cargando el espacio de trabajo…',
   'app.loadingScreen': 'Cargando…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2497,6 +2493,20 @@ export const es: UiCatalog<'es'> = {
   'gate.create.submit': 'Crear espacio de trabajo',
   'gate.create.submitBusy': 'Creando…',
   'gate.error.generic': 'Algo salió mal. Vuelve a intentarlo.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum no puede escribir en esta unidad, así que no pudo iniciarse. Comprueba que la unidad no esté ' +
+    'protegida contra escritura (algunas memorias USB y tarjetas SD tienen un pequeño interruptor de bloqueo) y que ' +
+    'puedes crear carpetas en ella. Después, vuelve a iniciar la aplicación.',
+  'gate.startFailed.full':
+    'La unidad está llena, así que HilbertRaum no pudo iniciarse. Libera espacio en la unidad y vuelve a iniciar la ' +
+    'aplicación.',
+  'gate.startFailed.other':
+    'Algo detuvo a HilbertRaum mientras se iniciaba. Comprueba que la unidad sigue conectada y que se puede escribir ' +
+    'en ella, y vuelve a iniciar la aplicación.',
+  'gate.startFailed.help':
+    'Si vuelve a ocurrir, lee la guía de solución de problemas que está en la carpeta docs de la unidad.',
+  'gate.startFailed.code': 'Código de error: {code}',
+  'gate.startFailed.copyDetails': 'Copiar los detalles para el soporte',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected': 'Este PDF parece un escaneo: todavía no tiene texto legible.',
   'main.ingest.audioNeedsTranscriber':

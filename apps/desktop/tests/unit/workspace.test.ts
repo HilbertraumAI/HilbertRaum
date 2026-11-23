@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -167,5 +167,23 @@ describe('workspace initialization', () => {
     writeFileSync(join(paths.workspacePath, 'images', 'a.png.enc'), Buffer.alloc(300))
     writeFileSync(join(paths.workspacePath, 'images', 'b.jpg.enc'), Buffer.alloc(45))
     expect((await buildDriveStatus(paths)).imagesBytes).toBe(345)
+  })
+
+  // #1024 review M-1: Node's recursive mkdir reports only EACCES, ENOSPC, ENOTDIR and EPERM as they are. Any other
+  // refusal of a missing folder (EROFS from a write-protected card or a read-only mount, EIO, EINVAL) it replaces with
+  // the ENOENT of the stat it makes next, so the start-failure card showed the general text and "ENOENT" for a
+  // lock-switched card. A dangling link at the folder's name masks the same way on every OS (mkdir says EEXIST, the stat
+  // ENOENT), so it stands in for the card: the folder's own error must come through.
+  it('reports a folder’s own error, never the ENOENT Node’s recursive mkdir masks it with (#1024)', () => {
+    const root = tempRoot('init-masked')
+    const paths = resolvePaths({ envRoot: root, fallbackRoot: root })
+    symlinkSync(join(root, 'nowhere'), paths.workspacePath, process.platform === 'win32' ? 'junction' : 'dir')
+    let thrown: unknown
+    try {
+      ensureWorkspaceDirs(paths)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toMatchObject({ code: 'EEXIST', syscall: 'mkdir' })
   })
 })

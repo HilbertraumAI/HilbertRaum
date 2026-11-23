@@ -52,6 +52,9 @@ export interface GuardedHandleOptions {
   log?: { warn(msg: string, meta?: unknown): void }
 }
 
+/** #1024: every channel {@link guardedHandle} has registered, so a start that throws part-way can take them back. */
+const registeredChannels = new Set<string>()
+
 /**
  * `ipcMain.handle(channel, …)` with the sender check in front. A refused invoke rejects
  * the renderer's promise with a content-free error and never runs `handler`.
@@ -76,6 +79,21 @@ export function guardedHandle(
     }
     return handler(event, ...(args as never[]))
   })
+  registeredChannels.add(channel)
+}
+
+/**
+ * #1024: remove every handler {@link guardedHandle} registered, for a back-end start that threw after some registrars
+ * had run (`main/backend-start.ts`). None of them may answer over a back end that was only half built (a real
+ * `getWorkspaceState` would let the user unlock into it), and the failure state registers its own `getWorkspaceState`
+ * next, which Electron refuses while another handler holds the channel. `ipcMain.on` listeners are not touched. Returns
+ * how many handlers it removed.
+ */
+export function releaseGuardedHandlers(): number {
+  const channels = [...registeredChannels]
+  registeredChannels.clear()
+  for (const channel of channels) ipcMain.removeHandler(channel)
+  return channels.length
 }
 
 /** The registrar-side binding: `const handle = guardedHandleFor(ctx)` then `handle(ch, fn)`. */

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { cpSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { causeFailure, failureForLog } from '../../src/main/services/failure-for-log'
+import { causeFailure, failureForLog, safeFailureForLog } from '../../src/main/services/failure-for-log'
 import { tempRoot } from '../helpers/db-fixtures'
 
 // #956: the one rule every workspace and quit failure line follows (registerWorkspaceIpc's arms, shutdown.ts's, the
@@ -95,5 +95,30 @@ describe('failureForLog (#956)', () => {
     const fields = failureForLog(lockError)
     expect(fields).toMatchObject({ error: 'VaultLockError', code: 'ENOSPC', syscall: 'write' })
     expect(logged(fields)).not.toContain('hr-956')
+  })
+})
+
+// #1024 review L-1, L-3: the lines that log whatever was thrown (the back end's start, the uncaught exception, the
+// unhandled rejection) cannot let the logging itself throw: `failureForLog` falls back to `String(err)`, which throws
+// for an object with no prototype, and a getter on `code` may throw too. A throw there skipped the start's failure
+// state, and in the crash handler the emergency lock that follows the line.
+describe('safeFailureForLog (#1024)', () => {
+  it('logs what failureForLog logs when it can', () => {
+    const err = nodeFileError('EPERM', 'mkdir', `${ROOT}\\logs`)
+    expect(safeFailureForLog(err)).toEqual(failureForLog(err))
+  })
+
+  it.each<[string, unknown]>([
+    ['an object with no prototype', Object.create(null) as unknown],
+    [
+      'a getter on code that throws',
+      Object.defineProperty(new Error('x'), 'code', {
+        get() {
+          throw new Error('no code for you')
+        }
+      })
+    ]
+  ])('%s logs a fixed line instead of throwing', (_label, thrown) => {
+    expect(safeFailureForLog(thrown)).toEqual({ error: 'unreadable' })
   })
 })

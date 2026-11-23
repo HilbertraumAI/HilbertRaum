@@ -72,10 +72,6 @@ export const pl: UiCatalog<'pl'> = {
   'app.noticeDetails': 'Szczegóły',
   'app.noticeGoToModels': 'Otwórz Model AI',
   'app.fatal.title': 'Nie udało się uruchomić aplikacji',
-  'app.fatal.hintBefore':
-    'Lokalna usługa aplikacji nie uruchomiła się, więc nie można niczego wczytać. Uruchom ' +
-    'aplikację ponownie; jeśli problem się powtarza, sprawdź plik ',
-  'app.fatal.hintAfter': ' na dysku i zajrzyj do pliku „docs/troubleshooting.md”.',
   'app.loadingWorkspace': 'Wczytywanie obszaru roboczego…',
   'app.loadingScreen': 'Wczytywanie…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2540,6 +2536,20 @@ export const pl: UiCatalog<'pl'> = {
   'gate.create.submit': 'Utwórz obszar roboczy',
   'gate.create.submitBusy': 'Tworzenie…',
   'gate.error.generic': 'Coś poszło nie tak. Spróbuj ponownie.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum nie może zapisywać na tym dysku, więc nie udało się go uruchomić. Sprawdź, czy dysk nie jest ' +
+    'zabezpieczony przed zapisem (niektóre pamięci USB i karty SD mają mały przełącznik blokady) i czy możesz tworzyć ' +
+    'na nim foldery, a potem uruchom aplikację ponownie.',
+  'gate.startFailed.full':
+    'Dysk jest pełny, więc nie udało się uruchomić HilbertRaum. Zwolnij miejsce na dysku, a potem uruchom aplikację ' +
+    'ponownie.',
+  'gate.startFailed.other':
+    'Coś przerwało uruchamianie HilbertRaum. Sprawdź, czy dysk jest nadal podłączony i czy można na nim zapisywać, a ' +
+    'potem uruchom aplikację ponownie.',
+  'gate.startFailed.help':
+    'Jeśli problem się powtarza, zajrzyj do instrukcji rozwiązywania problemów w folderze docs na dysku.',
+  'gate.startFailed.code': 'Kod błędu: {code}',
+  'gate.startFailed.copyDetails': 'Kopiuj szczegóły dla pomocy technicznej',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected': 'Ten plik PDF wygląda na skan – nie ma jeszcze czytelnego tekstu.',
   'main.ingest.audioNeedsTranscriber':

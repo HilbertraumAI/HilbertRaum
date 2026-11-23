@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
@@ -119,7 +119,35 @@ export function resolvePaths(opts: ResolveOptions): ResolvedPaths {
 /** Create the required directory layout. Idempotent. */
 export function ensureWorkspaceDirs(paths: ResolvedPaths): void {
   for (const dir of [paths.workspacePath, paths.modelsPath, paths.logsPath, paths.configPath]) {
+    createFolder(dir)
+  }
+}
+
+/**
+ * `mkdir -p` that reports the folder's own error (#1024 review M-1). Node's recursive mkdir passes on only EACCES,
+ * ENOSPC, ENOTDIR and EPERM as they are; any other refusal of a missing folder (EROFS from a write-protected card or a
+ * read-only mount, EIO, EINVAL) it replaces with the ENOENT of the `stat` it makes next. The start-failure card words
+ * that as "something else" with "ENOENT", so a lock-switched card did not read as one. When the parent is there, one
+ * plain mkdir of the same folder reads the real error; a folder made meanwhile (a second start) is fine.
+ */
+function createFolder(dir: string): void {
+  try {
     mkdirSync(dir, { recursive: true })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT' || !existsSync(dirname(dir))) throw err
+    try {
+      mkdirSync(dir)
+    } catch (real) {
+      if (!isFolder(dir)) throw real
+    }
+  }
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
   }
 }
 

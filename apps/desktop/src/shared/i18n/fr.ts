@@ -63,10 +63,6 @@ export const fr: UiCatalog<'fr'> = {
   'app.noticeDetails': 'Détails',
   'app.noticeGoToModels': 'Ouvrir l’écran Modèle d’IA',
   'app.fatal.title': 'L’application n’a pas pu démarrer',
-  'app.fatal.hintBefore':
-    'Le service local de l’application n’a pas démarré\u00A0: rien ne peut être chargé. ' +
-    'Redémarrez l’application\u00A0; si le problème persiste, consultez le fichier ',
-  'app.fatal.hintAfter': ' sur votre disque et le guide «\u00A0docs/troubleshooting.md\u00A0».',
   'app.loadingWorkspace': 'Chargement de l’espace de travail…',
   'app.loadingScreen': 'Chargement…',
   // ---- Error boundary (ErrorBoundary.tsx — audit FE-1) ----
@@ -2642,6 +2638,19 @@ export const fr: UiCatalog<'fr'> = {
   'gate.create.submit': 'Créer l’espace de travail',
   'gate.create.submitBusy': 'Création…',
   'gate.error.generic': 'Un problème est survenu. Réessayez.',
+  'gate.startFailed.notWritable':
+    'HilbertRaum ne peut pas écrire sur ce disque, il n’a donc pas pu démarrer. Vérifiez que le disque n’est pas ' +
+    'protégé en écriture (certaines clés USB et cartes SD ont un petit bouton de verrouillage) et que vous pouvez y ' +
+    'créer des dossiers, puis redémarrez l’application.',
+  'gate.startFailed.full':
+    'Le disque est plein, HilbertRaum n’a donc pas pu démarrer. Libérez de l’espace sur le disque, puis redémarrez ' +
+    'l’application.',
+  'gate.startFailed.other':
+    'Un problème a interrompu le démarrage de HilbertRaum. Vérifiez que le disque est toujours connecté et qu’il est ' +
+    'possible d’y écrire, puis redémarrez l’application.',
+  'gate.startFailed.help': 'Si le problème persiste, consultez le guide de dépannage dans le dossier docs du disque.',
+  'gate.startFailed.code': 'Code d’erreur\u00A0: {code}',
+  'gate.startFailed.copyDetails': 'Copier les détails pour l’assistance',
   // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   'main.ingest.pdfScanDetected':
     'Ce PDF semble être un document numérisé\u00A0: il ne contient pas encore de texte lisible.',
