@@ -1043,7 +1043,18 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     handler, the renderer's busy flag — would park forever. The abort therefore destroys the stream
     **with an error** (`HashAbortedError`), an already-aborted signal rejects without opening the
     file, and a `close` handler settles anything that still reaches it. Pinned by tests that assert
-    the promise **rejects**, not merely that hashing stopped.
+    the promise **rejects**, not merely that hashing stopped. Since **#1033** that `close` handler
+    settles every unaborted hash: the digest is taken at `end` but handed over only once the stream
+    has closed the file (it closes it after `end`, on libuv's thread pool), and a close that fails
+    after a complete read still resolves the digest, as before. An unaborted hash that resolves
+    therefore means the file is released, so a caller may rename the file's folder right away;
+    Windows refuses that rename while a file inside is open (`EPERM`). Measured with a busy thread
+    pool: 1,000 of 1,000 such renames refused before, none after (`sha256-file-close.test.ts`). An
+    abort once the whole file is read (from the final progress call, which fires inside `end`, as a
+    cancel between two weights does) stops nothing and does **not** wait for the close: it resolves
+    the digest at once, as before #1033, so a saturated pool never holds a cancel, and the shared
+    read (`sha256FileCached`) caches that digest before its last waiter's cancel returns. A caller
+    that comes next finds it cached instead of starting a second full read.
   - **Trap 2 — single-flight sharing (the sharp one).** `inFlightHashes` (#106) makes concurrent
     callers of the same path share ONE physical read; it exists precisely because the unlock
     auto-start races a Models-screen pass over the same weight. A signal wired naively into the
