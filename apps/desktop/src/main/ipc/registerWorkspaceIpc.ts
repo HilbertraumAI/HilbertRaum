@@ -206,7 +206,8 @@ function logProbeFallbacks(ctx: AppContext): void {
 /**
  * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
  * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
- * it, or it came from another workspace), or left it, because it could be neither read nor removed. Logged on the
+ * it, or it came from another workspace), or (#1027) because the workspace file opens under that key too and so holds
+ * the newer data, or left it as it is, because it could not be read, or not removed yet. Logged on the
  * unlock's success and failure paths alike (review round 2 F4). Fixed words only: no path, no file name.
  * #1001: then, in one more line, what it did with the staged document and image copies no journal listed: how many it
  * removed (no newer copy of their stored document: another key or file, or the stored copy is already current) and left
@@ -230,8 +231,12 @@ function logStageOutcome(ctx: AppContext): void {
   const outcome = ctx.workspace.takeStageOutcome?.()
   if (outcome === 'removed') {
     log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
+  } else if (outcome === 'superseded') {
+    log.info('Workspace unlock: removed a staged copy of the database that is older than the workspace file (#1027)')
   } else if (outcome === 'left') {
-    log.warn('Workspace unlock: left a staged copy of the database that could be neither read nor removed (#973)')
+    // Code review CR1-5: true of both kinds: one the unlock could not read (#973), and one it read and judged older than
+    // the workspace file but could not delete yet (#1027).
+    log.warn('Workspace unlock: left a staged copy of the database as it is: it could not be read, or not removed yet (#973, #1027)')
   }
   const sidecars = ctx.workspace.takeSidecarStageOutcome?.()
   if (!sidecars) return
@@ -663,6 +668,20 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         const key = ctx.workspace.encryptionKey()
         if (key) rekeyVaultLog(key)
         log.info('Workspace password changed') // never the passwords, in any branch
+        // #1027: the change committed, but another program held its staged database, so it could not be moved into
+        // place: the open workspace was saved as the workspace file instead (`saved`), or the next lock saves it (review
+        // F5: the words follow `saved`). The code is the last error the swap pass met, which need not be the database's
+        // own (code review CR1-4: another file's step may have failed after it), so it is logged as that. The code only,
+        // never the message (which names the drive's paths).
+        const swap = ctx.workspace.takeDatabaseSwapFailure?.()
+        if (swap) {
+          log.warn(
+            swap.saved
+              ? 'Workspace password changed: the staged database could not be moved into place, so the open workspace was saved as the workspace file instead (#1027)'
+              : 'Workspace password changed: the staged database could not be moved into place, and the open workspace could not be saved yet; the next lock saves it (#1027)',
+            { swapLastErrorCode: swap.code, saved: swap.saved }
+          )
+        }
         logProbeFallbacks(ctx)
         // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')

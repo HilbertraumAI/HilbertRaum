@@ -60,6 +60,13 @@ from its first public `1.0.0` release onward.
   is no longer overwritten either: only the app's own name for it is removed, and the other name
   keeps its contents. A rare case where a folder in the wrong place made the next
   start replace your encrypted workspace with that folder is fixed too (#1014).
+- **A password change no longer undoes your later work when another program holds a file.** A
+  workspace made by a very early test version changes its format the first time you change its
+  password. If another program (an antivirus scan, for example) held the new copy of the workspace
+  file at that moment, the change still worked, but the next start (or the next unlock) went back to
+  the copy made at the change, and everything you did after it was gone, with no warning. The app
+  now saves your open workspace itself right after the change, and removes the leftover copy the
+  next time you lock or unlock the workspace after the other program lets go of it (#1027).
 - **An engine update no longer stops your model while it unpacks, and never puts an incomplete
   engine in place.** The update now downloads, checks and unpacks the new AI engine beside the old
   one while your model keeps answering, and pauses the models only for the few seconds it takes to

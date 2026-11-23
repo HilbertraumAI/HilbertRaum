@@ -258,6 +258,23 @@ password recovery — are documented in
   and so is an entry the app could not check because a stat failed, a hold or a permission: that
   file waits until a start or an unlock can check it). With `documents/` or `images/` kept behind
   a link (a junction), the stages there wait for the unlock with the right password, not the start.
+- **A password change that another program gets in the way of can still lose work in three rare
+  cases (#1027; owner decision 2026-11-22: documented, no notice in the app).** Only a workspace made
+  by one of the unpublished builds 0.1.0 to 0.1.3 has this one-time change. It happens mostly on
+  Windows, when a program such as an antivirus keeps the new copy of the workspace file locked; on
+  macOS and Linux a disk or permission error on that file has the same effect. The app then saves the
+  open workspace itself and removes the leftover copy at the next lock or unlock that can. The
+  workspace's work since the change is still lost in these cases, as it was before the fix:
+  - The program held the leftover copy through the whole session and its lock, so it is still on
+    the drive, and an older HilbertRaum opens the Kit before this version unlocks it again: once the
+    file is free, the older version puts the leftover back over the newer workspace file.
+  - The program also held the password-change record beside it, so that the app could neither
+    rewrite it nor even read it, both at the change and at every lock of that session: then this
+    version, too, puts the leftover back at its next start.
+  - The drive was too full to save the workspace right after the change, and the app was then quit
+    and could not lock the workspace either (the drive still full).
+  A line in the log says when the change could not move its copy into place. Unlocking once with
+  this version, after the other program lets go of the file, removes the leftover.
 - **Shredding never follows a link, so it cannot reach a file another name shares (#1014).** A
   symbolic link, a junction or a file with more than one hard link at a name the app shreds is
   only unlinked: a plaintext file someone hard-linked keeps its bytes under the other name. Mounts

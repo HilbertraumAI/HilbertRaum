@@ -26,10 +26,13 @@ import { SCHEMA_VERSION } from '../../src/main/services/db'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { updateSettings } from '../../src/main/services/settings'
 import {
+  REKEY_SUFFIX,
   WorkspaceController,
+  cleanSidecars,
   createEncryptedVaultOnDisk,
   encryptFile,
   lockEncryptedVault,
+  shredFile,
   unlockEncryptedVault,
   vaultPathsFrom,
   type VaultPaths
@@ -158,6 +161,41 @@ export function endedUnlocked(vp: VaultPaths, marker: number, password = 'pw'): 
   updateSettings(db, { contextTokens: marker })
   key.fill(0)
   leaveAsKilled(vp, db)
+}
+
+/**
+ * #1027's on-disk state on the existing v2 vault at `vp` (created under `password`): a staged database `<enc>.new` under
+ * the vault's own data key holding `contextTokens: markers.staged`, and an `.enc` a lock wrote after it, under the same
+ * key, holding `markers.current`; no rekey journal. What a password change that could not move its staged database into
+ * place leaves once the stage's journal entry is gone and a lock of that session has run. Unlocks through
+ * `unlockEncryptedVault`, so in the fs-mocked suites build it before arming a failure. Returns the stage's path. (Markers
+ * of at least 2048: `contextTokens` has that floor.)
+ */
+export function staleDatabaseStage(vp: VaultPaths, password: string, markers: { staged: number; current: number }): string {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  let locked = false
+  try {
+    updateSettings(db, { contextTokens: markers.staged })
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    const staged = `${vp.encPath}${REKEY_SUFFIX}`
+    encryptFile(vp.dbPath, staged, key)
+    updateSettings(db, { contextTokens: markers.current })
+    lockEncryptedVault(vp, db, key)
+    locked = true
+    return staged
+  } finally {
+    // A step that failed before the lock finished leaves neither an open handle (#460) nor the plaintext working file.
+    if (!locked) {
+      try {
+        db.close()
+      } catch {
+        /* the lock closed it before it failed */
+      }
+      shredFile(vp.dbPath)
+      cleanSidecars(vp.dbPath)
+    }
+    key.fill(0)
+  }
 }
 
 /**
