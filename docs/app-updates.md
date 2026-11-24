@@ -50,7 +50,8 @@ file (§3).
 
 ### 1.2 Release 1 is the oldest sold version
 
-There is a deploy stop: no release of any kind, and no sale, until the updater is ready. So the next
+There is a deploy stop: no app release and no sale until the updater is ready (one exception: a
+files-only release whose tag does not start with `v`, §9.1, §9.7). So the next
 release is release 1, tagged on `master` after the integration branch merged (§9), and it carries
 everything this wave builds: what the oldest Kit needs to take an update (the plan's tier M1), the
 drive content and engine handling (M2) and the migration framework (M3). The online check is not part
@@ -328,7 +329,8 @@ version, never down.
 - The production keys enter the repository only from the owner's ceremony, through a pull request on
   `master` after the integration branch merged (one of release 1's release pull requests, §9.2). Until
   then the production key set is empty. A build with an empty set says that updates are not available
-  in this build; only walk and dispatch builds before the ceremony can have one, and no Kit is ever
+  in this build; of the project's own builds only walk and dispatch builds before the ceremony can
+  have one (a fork may ship one to turn updates off, §2.9), and no Kit is ever
   built with it (the sell gate and the pre-publish check refuse an empty set).
 - **The release guard**, on every build leg of `release.yml` (Windows, macOS, Linux) and on its
   dispatch pre-flight: the public keys embedded in the packed `app.asar` (their SPKI bytes, not only
@@ -824,7 +826,7 @@ at every start (accepted, W-51).
 |---|---|---|---|
 | Who hands off | the app, on the `will-quit` leg only: P7 gives `performShutdown` a typed result (`clean`, `working_copy_lost`, `failed`; today it returns nothing), and the hand-off runs only after `clean` (`working_copy_lost` and `failed` end with nothing written, the update still staged); an app that survived a session-end lock and shows its unlock screen runs the hand-off directly from there, with no second lock (W-6 (i)–(v)) | W-6 | R1 |
 | Order | "Restart and update" → pre-check (below) → policy re-read (§8.1) → re-hash every staged file against `staged.json` (table A; a mismatch removes that version's staging folder, code `UPD-FILE-DAMAGED-ON-DRIVE`) → the question about running text recognition or translation (`UPD-RESTART-TASK-RUNNING`, #935) and the save of unsaved changes (`UPD-RESTART-UNSAVED`, #888), each only when it applies → the restart dialog last → lock → teardown → write `applying/` (below) → spawn → wait for `started` → `app.exit(0)`. Every abort choice before the lock writes nothing | W-6, F-6 | R1 |
-| Precondition: the running app is the drive's app | the apply finds the root from its own place and swaps the root's artifacts (`%~dp0..\..\`), so the hand-off assumes the running app is a root artifact of the root R1 resolved (`locateDriveRoot`, `services/workspace.ts:42-53`): Windows, `dirname(PORTABLE_EXECUTABLE_FILE)` is that root; macOS, `HILBERTRAUM_DRIVE_ROOT` names that root (a start through the root's start file) or the running bundle is a root `*.app`; Linux, `dirname(APPIMAGE)` is that root or `HILBERTRAUM_DRIVE_ROOT` names it. Two paths are the same after `path.resolve` (no `realpath`), compared without case on `win32` and byte for byte elsewhere (the start file's `%~dp0` has a trailing `\`, `dirname` none; L1-18). On macOS and Linux a root given by `HILBERTRAUM_DRIVE_ROOT` always passes: release 1 cannot tell an override from a start through the start file, so only Windows can refuse an override root. When it fails (a bare exe one folder below the root, an override root on Windows), "Restart and update" and "Continue the update" are refused before the lock with `UPD-NOT-DRIVE-APP` (copy key prefix `updates.restart.notDriveApp`), nothing is written and the update stays staged; the import and the staging stay allowed (owner 2026-11-24, Δ-31, §5.12) | T1.11 S10-1; owner | R1 |
+| Precondition: the running app is the drive's app | the apply finds the root from its own place and swaps the root's artifacts (`%~dp0..\..\`), so the hand-off assumes the running app is a root artifact of the root R1 resolved (`locateDriveRoot`, `services/workspace.ts:42-53`): Windows, `dirname(PORTABLE_EXECUTABLE_FILE)` is that root; macOS, `HILBERTRAUM_DRIVE_ROOT` names that root (a start through the root's start file) or the running bundle is a root `*.app`; Linux, `dirname(APPIMAGE)` is that root or `HILBERTRAUM_DRIVE_ROOT` names it. Two paths are the same after `path.resolve` (no `realpath`), compared without case on `win32` and byte for byte elsewhere (the start file's `%~dp0` has a trailing `\`, `dirname` none; L1-18). On macOS and Linux a root given by `HILBERTRAUM_DRIVE_ROOT` always passes: release 1 cannot tell an override from a start through the start file, so only Windows can refuse an override root. When it fails (a bare exe one folder below the root, or on Windows an override that names a folder other than the exe's; every start through the start file sets the override to the exe's own folder and passes), "Restart and update" and "Continue the update" are refused before the lock with `UPD-NOT-DRIVE-APP` (copy key prefix `updates.restart.notDriveApp`), nothing is written and the update stays staged; the import and the staging stay allowed (owner 2026-11-24, Δ-31, §5.12) | T1.11 S10-1; owner | R1 |
 | Pre-check | before the lock, and at the start of every import (table A, §4.5): `updates/` is created when it is missing; the probe opens `updates/.write-probe` with flag `w` (a file left over by a kill is overwritten), writes one byte, closes it and deletes it; only a failing open or write means "read-only" (a failing delete is retried as §4.5's moves are, then ignored; L1-23, L2-15); free space = `bavail × bsize` ≥ 64 MiB (67,108,864 bytes, the third term of table A's formula; when `statfs` fails this part passes); failing either → no shutdown, code `UPD-DRIVE-READ-ONLY` or `UPD-DRIVE-FULL` | W-6 (GAP-23, A-6); spike 9 DD5 | R1 |
 | `applying/` write order | `mkdir updates/applying` → `handoff.txt` (temp, fsync, rename; §5.3) → `apply.cmd` then `apply.sh` from `updates/staging/<v>/files/`, each copied to `<name>.tmp`, fsynced and renamed with §4.5's retry (rule 1 only ever sees a whole script; L1-15, L2-2) → `finish-<n>` (below) → on macOS and Linux fsync `updates/applying/` and `updates/` (W-6, lens A-9). Any write failure after the teardown is handled as a failed spawn (below) | W-6; L1-15, L2-2 | R1 |
 | `finish-<n>` cap (per computer and boot) | **before the lock**, with the pre-check (L1-1, L2-1): (a) when `updates/applying/handoff.txt` is missing or damaged, or its `os` is not this system, or its `boot` is more than 300 s from this computer's (another computer, or a restart since), R1 deletes every `finish-<n>` and `launch-<n>`: a new computer, or a restarted one, gets three new tries, and rule 1 resumes there again; (b) then, if `finish-1`, `finish-2` and `finish-3` all exist (no free marker), the hand-off is refused like a failed spawn of class `finish-cap`, with no spawn: R1 shows `UPD-HELPER-BLOCKED` without the "Try again on this computer" button, logs `handoff-failed class=finish-cap`, appends no new line when the last valid one already is this version's `helper-blocked`, and does **not** shut down; (c) otherwise the hand-off goes on and, after the scripts, creates the lowest free of `finish-1`, `finish-2`, `finish-3`. So one computer spawns at most three times per boot without the apply making progress (the apply deletes the markers when it takes its lock; Δ-41, aligned to the owner's "three tries per computer": _Was:_ `finish-3` was created by the refusal of a third hand-off, so only two spawned); (d) a failed spawn that removed `applying/` took its markers with it, so R1 also keeps **the failed-hand-off count**: going back from the last valid line of `last-result.txt` (within the 65,536 bytes G0 reads), the number of consecutive valid lines that are `helper-blocked`, name this version and carry this computer's `os` and a `boot` within 300 s of this computer's; the count stops at the first valid line that is anything else (another code, another version, another computer or boot, a `cleared`). Every failed spawn and every missing acknowledgement appends one such line; refusals by (b) or (d) append none. At a drive-aware start a count of 1 or 2 offers "Try again on this computer" (§5.7); a count of 3 (the third failed hand-off: the first "Restart and update" plus two "Try again on this computer") ends the retries on this computer and boot: nothing is offered, the notice shows without the button, and a hand-off reached anyway is refused as at (b), except that no file is created (there may be no `applying/`), no line is appended and nothing shuts down. A restart, another computer or a re-import (its `cleared` line) starts a new count. **One limit**: at most three hand-offs per computer and boot, whichever record counts them, the `finish-<n>` markers while `applying/` stays or the failed-hand-off count after a removal; the first of the two to reach three ends the tries (T1.12 review V-2, owner 2026-11-24, Δ-41) | W-6 (GAP-24); L1-1, L2-1; V-2 | R1 |
@@ -1401,6 +1403,9 @@ follow-on; release 1 answers such a file with "for a newer HilbertRaum" (§2.4).
 
 ### 6.6 Side by side, and the oldest pin (G-32 (a), G-35 (a))
 
+In §6.6 and §6.7, `<os>` in a folder name is the engine's runtime folder name (`win`, `mac`, `linux`;
+`drive-layout.md`, `sidecar.ts`), not §5's system token (`win32`, `darwin`, `linux`).
+
 - The new version installs its engine into a folder of its own, `runtime/<family>/<os>@<pin>/`, with
   its `cpu/` safety net inside (P8 fixes the spelling). It extracts into `<os>@<pin>.new/`, checks it,
   writes the install marker **inside** it, flushes every file, then renames it in one move. The next
@@ -1560,7 +1565,7 @@ know._
 - **The vault-format guard** (F-9, W-8, #845, PR #880) and **a newer working copy is kept** (W-66, #985,
   PRs #989 and #1007, with #973, #974 and #1001): §7.2.
 - **An honest open failure** (#844, PR #871): a workspace that could not be opened answers
-  `vault_open_failed` ("Nothing was lost"); "damaged" only for SQLite codes 11 and 26; a failed open
+  `vault_open_failed` ("… The encrypted workspace on the drive was left as it was …"); "damaged" only for SQLite codes 11 and 26; a failed open
   never rewrites the `.enc`.
 - **Why a skill is off** (#846) and **a model for a newer version** (#847): §6.11.
 
@@ -1580,8 +1585,9 @@ change, the working files) and [`data-contracts.md`](data-contracts.md) (the sch
 ### 7.3 The vault start path (G-43)
 
 - **(a) A start whose journaled swap fails still serves the update path** (W-82, #1015 and #1024, as
-  built on master: PRs #1030 and #1034). The start runs through a guarded runner; on any throw it logs
-  the error code and system call only, removes the channels the partial start registered, and answers
+  built on master: PRs #1030 and #1034). The start runs through a guarded runner; on a throw it logs a file
+  error as its code and system call only, never its message (#956), and any other error with its message,
+  removes the channels the partial start registered, and answers
   `start_failed` with a cause (`drive_not_writable`, `drive_full`, `other`). The update channels join
   that state (§3.5), and `update.log` records the failure's class (§8.2).
 - **(b) The rekey journal is acted on only inside the workspace** (W-83, #1014, as built on master: PR
@@ -2169,7 +2175,7 @@ None of §11.1's calls is decided yet. Decided in P1 by the owner (and, where ma
 - The method review's majors: a Defender-only PC in the pre-release timing leg (§10.5); batch-file
   locking measured on the spike box (spike 10b, §10.6); a Japanese-system-locale VM leg (§10.5);
   Windows 11 on ARM in the walk (§10.4).
-- #1043 (two starts of one build shared the stub's unpack folder): fixed on `master` before release 1;
+- #1043 (two starts of one build shared the stub's unpack folder): to be fixed on `master` before release 1 (open);
   spike 1 measured both stub builds (§5.11, §10.6).
 - Copy deck part 1 and its glossary, with the action labels "Install update from a file…", "Restart and
   update" (a staged update), "Continue the update" (`updates/applying/` exists) and "Go back to version
@@ -2234,7 +2240,7 @@ online check after release 1).
 
 - A background or startup update check (U2); any update identifier, telemetry or analytics.
 - TUF, electron-updater, Squirrel, the NSIS installer target, an unpacked app folder (U4).
-- Delta updates or patching `app.asar`: the fuses forbid it; updates replace whole apps.
+- Delta updates or patching `app.asar`: the asar-integrity fuse forbids it on Windows and macOS; updates replace whole apps on every system.
 - The derived-data rebuild queue and new derived stamps; the embedder swap.
 - Changing `userData`, `productName` or `appId`: they are only pinned (§8.7).
 - Turning on `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`.
@@ -2344,7 +2350,7 @@ branch are resolved by §12.3, and the model, surprise and method-review ids of 
 
 ### 12.3 App-update ids already cited on the branch
 
-Found at the record's first version (the brief's search over `apps`, `docs`, `scripts` and
+Found at the record's first version (a search over `apps`, `docs`, `scripts` and
 `launchers`, plus one search for gate ids). Each is listed with the section of this record that carries
 it and the files that cite it.
 
@@ -2372,7 +2378,7 @@ No U-, K- or M-D- id of this family is cited on the branch yet.
 ### 12.4 Same spellings, other families
 
 These are **not** app-update ids:
-- `F-01`–`F-41`: the full audit of 2026-07-16 (its table in [`architecture.md`](architecture.md));
+- `F-01`–`F-41`: the full audit of 2026-07-16 (its table in [`architecture.md`](architecture.md)); that audit writes `F-01`–`F-09` padded and `F-10` up unpadded, the same spellings as this record's F-10–F-27, so read an `F-n` by its document;
 - `F-1`–`F-8` beside `FA-1`–`FA-4`: the translation audit; "review V F-n" and "review R F-n": security
   review findings in the vault and shutdown code;
 - `U1`–`U7`: the skills audit of 2026-07-03 and its phases;

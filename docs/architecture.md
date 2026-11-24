@@ -14,7 +14,7 @@ remediation waves; the full original working papers live in git history._
    **§ numbers restart inside every record** (standing decision — `§N` collisions across
    records are deliberate; resolve a citation via the record named alongside it), and
    several records end with their own "§-anchor legend" for retired-plan citations.
-   One record is its own file: [`app-updates.md`](app-updates.md) — in-field app updates
+   The in-field app-update record is a file of its own: [`app-updates.md`](app-updates.md) — in-field app updates
    (planned): a signed update file imported offline; its own §1–§12.
 3. **Audit remediation ledgers §24–§52** — one continuous series interleaved among the
    records (find one with `### §N <audit name>`); each holds a round's finding dispositions.

@@ -738,6 +738,6 @@ HilbertRaum is licensed **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)). Public 
 distributed under GPL-3.0-or-later; in addition, the [CLA](#license-and-cla) grants the Project
 the right to also offer the software under commercial licenses (dual licensing).
 Once in-app updates ship, builds from this repository carry the project's update-signing public keys
-and so accept the project's signed update files; a fork that publishes its own builds replaces those
-keys with its own or leaves the key set empty, which turns in-app updates off (see
-[`docs/app-updates.md`](docs/app-updates.md) §2).
+and so accept the project's signed update files. A fork that publishes its own builds should replace
+those keys with its own, or leave the key set empty, which turns in-app updates off; this is technical
+advice, not a licence term (see [`docs/app-updates.md`](docs/app-updates.md) §2.9).

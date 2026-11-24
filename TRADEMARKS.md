@@ -32,7 +32,8 @@ curation, signed builds, and support — or from someone else.
   public keys with its own, or leave the key set empty to turn in-app updates
   off: a build that keeps the project's keys accepts the project's signed update
   files, and installing one replaces the fork's app with the official HilbertRaum
-  build (see [`docs/app-updates.md`](docs/app-updates.md) §2).
+  build (see [`docs/app-updates.md`](docs/app-updates.md) §2.9). This is technical
+  advice, not a condition of the GPL or of this policy.
 - Selling or distributing **hardware products** (USB drives, SSDs, kits,
   preloaded devices) under the "HilbertRaum" name or logo, or in packaging
   that suggests they are official HilbertRaum products. Only official
