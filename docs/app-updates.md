@@ -207,10 +207,12 @@ The update file carries one signed envelope (K5), verified with `node:crypto` (E
 Ed25519 and no BLAKE2b, so minisign's default format is out):
 - the DSSE pre-authentication encoding (PAE), with standard **and** URL-safe base64, as the DSSE
   specification requires;
-- caps checked before the envelope is parsed: the envelope at most 4 MiB, at most 64 signatures. A
-  file over a cap gets the typed answer "too new for this version" (`UpdateTooNew`) with the update
-  address, never "not genuine". The caps are generous on purpose: a ten-year-old reader meets
-  envelopes with more languages and keys;
+- caps checked before the envelope is parsed: the envelope at most 4 MiB (4,194,304 bytes), at most 64
+  signatures. A file over a cap gets the typed answer "too new for this version" (`UpdateTooNew`) with
+  the update address, never "not genuine". The caps are generous on purpose: a ten-year-old reader meets
+  envelopes with more languages and keys. The envelope is the update file's member 0,
+  `hilbertraum-release.dsse.json`; the file's other caps (at most 4,096 members, each under 8 GiB, the
+  member names) are table A's (§4.3, §4.4);
 - the signature is verified before the payload is parsed; a signature's `keyid` is only a hint, the
   embedded key bytes decide;
 - signed only by keys release 1 does not know → the typed answer `UnknownSigner`: "signed with a newer
@@ -443,7 +445,139 @@ _Scope: what release 1 does between the file pick and "Restart and update": the 
 container (the ustar subset, F-16), the member-name rule (F-18), the `updates/` layout and staging
 (F-5). The frozen values come from the protocol table A._
 
-<!-- T1.8 fills this section -->
+_Status: planned (P6 builds the reader and staging, P5 the writer, P6 commits the golden update file).
+Table A below is the decided contract. Its evidence is spike 9 (`impl/p1/spike-9.md`: the prototype
+reader in Electron 43.8.10's main process, a 450.6 MB file on NTFS, exFAT USB 3 and exFAT USB 2, Norton
+on, 80 runs and 51 hand-built refusal files), its method review (T1.11, finding ids `S9-n`, `C-n`) and
+G-5 (c)._
+
+### 4.1 How to read table A
+
+Table A uses §5.1's columns ("frozen since": _R1_ or _Scripts_), its spellings of systems, versions and
+tokens, and its common text rules G0 for `staged.txt`. A cap is frozen for ever: an update file over
+one of release 1's caps is "too new" for release 1 (`UPD-TOO-NEW`), so every update that release 1
+must install directly has to fit inside them. The caps are therefore set for what a 2035 file may need,
+not for today's file (each one's reason is in its row).
+
+### 4.2 Names (table A.1)
+
+| Name | What it is | Written by | Read by | Frozen since |
+|---|---|---|---|---|
+| `updates/staging/` | the staging folder | R1 app (the import) | R1 app, the apply | R1 |
+| `updates/staging/.incoming-<v>/` | the members of version `<v>` while they are written and hashed, each under its member name; a dot name, so no version folder and no member can collide with it | R1 app | R1 app (the start-up sweep) | R1 |
+| `updates/staging/<v>/` | the staged update of version `<v>`: the folder `files/`, then `hilbertraum-release.dsse.json`, `staged.txt` and `staged.json`. Only these four names are ever in it | R1 app | R1 app (the offer, the re-hash, the copy of the scripts), the apply | R1 |
+| `updates/staging/<v>/files/` | the staged members, each under its member name, one level below the markers, so no member name can ever meet a marker (T1.11 S9-2) | R1 app | R1 app, the apply (the members) | R1 |
+| `updates/staging/<v>/hilbertraum-release.dsse.json` | the verified envelope, byte for byte as member 0 carried it; the apply keeps it as `updates/applied/<v>.dsse.json` (§6.9) | R1 app | the apply | R1 |
+| `updates/staging/<v>/staged.txt` | the member list for the scripts (§4.6) | R1 app | the apply (sizes and names) | R1 |
+| `updates/staging/<v>/staged.json` | the one commit marker, written last (§4.6) | R1 app | R1 app; a later app | R1 |
+| `updates/.write-probe` | the writability probe (§5.4): created and deleted at once | R1 app | — | R1 |
+| the update file's own name | not frozen: the user may rename it. The release tooling names it outside the `HilbertRaum-*` prefix that the start files and the sell gate glob (§9.3); its extension is `.hrupdate` | P5's writer | nobody reads the name | — |
+
+### 4.3 The update file container (table A.2; F-16, G-5 (c))
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Format | a strict subset of POSIX ustar, read and written in process over `node:fs` and `node:crypto` (no OS `tar`, no dependency): a sequence of members, each a 512-byte header then the member's bytes zero-padded to a multiple of 512, then the end | G-5 (c), C9 | R1 |
+| The reserved prefix | a file whose first 8 bytes are the ASCII `HRUPDATE` is a future container: `UPD-TOO-NEW` with the in-between hint (§2.4), tested on those 8 bytes before any header | F-16 | R1 |
+| Header check order | magic, checksum, type, name, size (spike 9 DD2) | spike 9 DD2 | R1 |
+| Magic and version | bytes 257–262 `ustar` + NUL, bytes 263–264 `00`; anything else (GNU's `ustar  ` included) fails | spike 9 DD2 | R1 |
+| Checksum | bytes 148–155: octal digits, then NUL or space; equal to the unsigned sum of the header's 512 bytes with these 8 bytes counted as spaces | spike 9 DD2 | R1 |
+| Type | byte 156 must be `0`; `x`, `g`, `L`, `K` (pax and GNU extension headers) and every other value, NUL included, fail | spike 9 DD2, G-5 (c) | R1 |
+| Name | bytes 0–99: the member name (§4.4), then at least one NUL, only NULs after it | spike 9 DD2 | R1 |
+| Link name, prefix | bytes 157–256 and 345–499 all zero | spike 9 DD2 | R1 |
+| Size | bytes 124–135: octal digits, then NUL or space; no leading space, no base-256 form; so every member is smaller than 8 GiB (8,589,934,592 bytes) | spike 9 DD2, G-5 (c) | R1 |
+| Ignored fields | mode, uid, gid, mtime, uname, gname, devmajor, devminor and bytes 500–511; the writer writes `0000644`, `0000000`, `0000000`, `00000000000`, empty, empty, `0000000`, `0000000` and zeros | spike 9 DD2 | R1 (the reader ignores them) |
+| Member 0 | the signed envelope, member name **`hilbertraum-release.dsse.json`** (the release asset's name, §9.3), at most **4 MiB** (4,194,304 bytes; a larger header size is `UPD-TOO-NEW` before a byte of it is read); read whole into memory and verified as §2.3 says before anything else is read. Any other first member is `UPD-NOT-AN-UPDATE`. The cap is F-1's and §2.3's (T1.11 S9-1), the one thing it protects being the bytes parsed before the signature is checked: it holds a 4,096-entry payload as base64 (1.1 MB, light run below) plus 64 signatures of up to ~45 KB each (room for a later hash-based signature scheme) | F-1, F-16, §2.3; T1.11 S9-1 | R1 |
+| Where the payload lives | **inside the envelope**, as DSSE's base64 `payload` field; the update file has no separate payload member (spike 9's prototype used one only as a stand-in for P4). `files[]` lists every member after member 0 (§2.4) | F-2, F-16; T1.11 S9-1 | R1 |
+| DSSE `payloadType` | `application/vnd.hilbertraum.release+json`; any other `application/vnd.hilbertraum.*` type from a known key → `UPD-FOR-NEWER-HILBERTRAUM` (G-30); any other type → `UPD-NOT-AN-UPDATE` | F-2, G-30 | R1 |
+| The payload's `kind` | `"release"`; any other value from a known key → `UPD-FOR-NEWER-HILBERTRAUM` (§2.4) | F-2 | R1 |
+| Signatures | at most 64 per envelope, counted before the envelope is parsed (§2.3) | F-1 | R1 |
+| Members after member 0 | every one listed in the payload's `files[]`, in any order, each at most once (case-folded, §4.4), its header size equal to the listed `size`; every listed member without a `group` present; each `group` present whole or absent whole (§2.4) | F-2, W-5 | R1 |
+| Member count | `files[]` holds at most **4,096** entries, checked before staging; more → `UPD-TOO-NEW`. The reason is what a later file may carry (T1.11 S9-1, C-12): the apps of more systems and architectures, the scripts and start files, the engine archives of §6.5's escape hatch (families × systems), and, if M2's content ever travels one file at a time, the drive content: 37 model manifests today, the skills, the drive docs and notices in ten languages; a few hundred members in all, so 4,096 leaves more than ten times that. The cost is time only: a light run of spike 9's prototype (plain Node 24.13, NTFS, 4,096 members of 1 KiB and an 830 KB payload with ten 400-character `summary` texts; 3 runs, `impl/p1/T1.8/lightrun/count-run.log`) staged them in 8.3–9.3 s, 1.6 ms per member (median; max 32 ms), memory +11.3 MB; on a stick spike 9 measured 9–10 ms per member (median, ≤ 81 ms), so ~41 s at the median. P8's sheet confirms the M2 file stays under the cap (C-12). Spike 9 proposed 256 (judgement value) | spike 9 DD3; T1.11 S9-1, C-12 | R1 |
+| Total size | no cap of its own beyond the member bound (< 8 GiB each) and the free-space check (§4.5). Spike 9: 450 MB stage in 15–16 s on USB 2, linear (not measured beyond) | spike 9 DD3 | R1 |
+| The end | exactly two 512-byte zero blocks, then the end of the file; any byte after them, a tar record's zero padding included, fails (so P5 never writes an update file with the OS `tar`, whose 10,240-byte records this rule refuses) | spike 9 DD2 | R1 |
+| The header walk | right after member 0 verified and the payload passed §2.4–§2.6 and the version rule, the reader reads every following header by seeking (512 bytes per member, no member data) up to the two zero blocks: each header is checked as above, the set of members against `files[]`, and the end against the file's length. An end of file before a header, inside a member or before the zero blocks → `UPD-DOWNLOAD-INCOMPLETE`, before any member is written; bytes after the end → `UPD-FILE-DAMAGED`. With every member present this equals spike 9's early length check (payload end + Σ (512 + size + pad₅₁₂(size)) + 1024; measured 31–75 ms instead of 6.3–10.7 s), and it also holds when whole groups are absent (one payload serves the full and the per-system files, §2.4) | spike 9 DD2 (judgement: the walk generalises the measured check to absent groups) | R1 |
+| Then the data pass | one sequential pass over the members (§4.5); each header is read again and must equal the walk's | spike 9 DD1 | R1 |
+
+### 4.4 The member-name rule (table A.3; F-18)
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Characters | ASCII `[A-Za-z0-9._-]` only (no space, no `+`: GitHub renames asset names with other characters, and every member must be fetchable under its own name; the root name of a member whose root name differs travels in `install_as`, §2.4) | F-18 | R1 |
+| Length | 1 to 99 bytes (the ustar name field with its NUL) | F-18 | R1 |
+| First and last character | the first is `[A-Za-z0-9]` (a leading `-` reads as an option to the scripts' commands, a leading `.` is a hidden file on macOS and Linux and the staging folder's own dot names start so; spike 9 DD8, decided here); the last is not `.` | F-18; spike 9 DD8 | R1 |
+| Reserved names | refused, compared case-folded: the Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, alone or before a `.` (`nul.txt`); `hilbertraum-release.dsse.json` anywhere but member 0. The staging folder's own files can never meet a member, because members live one level down in `files/` (§4.2; T1.11 S9-2, decided here instead of reserving `staged.*`): a member named `staged.json` is legal and is staged as `files/staged.json`. A later version that adds a marker puts it beside `files/`, never inside it | F-18; T1.11 S9-2 | R1 |
+| Uniqueness | no two names equal after folding `A`–`Z` to `a`–`z` (ASCII only, never a locale), so NTFS, exFAT and APFS hold them all | F-18 | R1 |
+| Names release 1 looks for | `apply.cmd` and `apply.sh`, byte-exact (§5.2): a payload without the one for this computer's system is `UPD-NO-HELPER` (W-5) | W-5 | R1 |
+| A name that breaks the rule | in the signed payload → `UPD-TOO-NEW` (a later writer's file release 1 cannot take); in a header but not in the payload → `UPD-FILE-DAMAGED` | F-18 | R1 |
+| One rule, no list | no enumeration of systems or artifact patterns: a later file that adds a system or renames an artifact stages whole (W-2) | F-18 | R1 |
+| The root globs release 1 reads | its own system's start-file globs (`HilbertRaum-*-portable.exe`; `*.app` and `HilbertRaum-*-mac-arm64.app.zip`; `HilbertRaum-*.AppImage`), for the older-than-drive notice and the confirmation (§5.7) | F-18 | R1 |
+
+### 4.5 Staging (table A.4; F-5, W-5)
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Order of an import | the refusals before the file is read (§3.6: not a prepared drive, the policy, `updates/applying/` present → `UPD-IN-PROGRESS`, the writability probe and the 64 MiB margin of §5.4) → the `HRUPDATE` prefix → member 0 and its verification (§2.3) → the payload (§2.4–§2.6, the version rule, the policy's `max_version`, the OS floor, the `issued` checks) → the header walk (§4.3) → the free-space formula (below) → the data pass → the commit | W-5, §3.6 | R1 |
+| Free space | before the data pass, with `c` = the drive's cluster size from `fs.statfs` `bsize` (1 MiB when `statfs` fails or reports 0) and `w` = the write size: free bytes ≥ Σ over the members present of ⌈size ÷ `c`⌉ × `c` + `c` (the staging folders' own entries) + max(64 MiB, 64 × `w`); else `UPD-DRIVE-FULL`. The last term covers exFAT's allocation ahead of the data in an open file, about 32 × the write size (≤ 33.7 MB measured at 1 MiB writes), with 2× room; at P6's 1 MiB writes it is 64 MiB (67,108,864 bytes). Spike 9's flat 1 MiB per file is replaced by the real cluster size (T1.11 S9-3); P11a's legs add a peak-free-bytes row on macOS and Linux exFAT and on the Kit SSD. The update file itself is already on its volume when the check runs | spike 9 DD5; T1.11 S9-3 | R1 |
+| Reads (P6's constant) | an implementation constant, not a format value: any read size reads any update file (T1.11 S9-4). Release 1 reads 1 MiB (1,048,576 bytes) at a time into one reused buffer (`FileHandle.read` into a single `Buffer.allocUnsafe(1048576)`), hashing (SHA-256) and writing each slice before the next read; the re-hash before the hand-off (W-6) reads the same way. Spike 9, in the packaged app's main process: a read stream stalls the event loop by 66–155 ms and adds 73–89 MB; one reused buffer stays ≤ 43 ms and +6.4–9.8 MB at the same speed; 64 KiB reads are 1.5–2.4× slower on sticks; 4 MiB gain nothing and quadruple exFAT's run-ahead. Plain Node shows no stall, so P6's performance row runs in the packaged app | spike 9 DD1; T1.11 S9-4 | P6 (constant) |
+| Where a member is written | `updates/staging/.incoming-<v>/<member name>` (opened `wx`), every byte hashed as it is written, fsynced and closed; on a hash match it is moved (same name) into `updates/staging/<v>/files/`; on a mismatch it is deleted and the import refused (`UPD-FILE-DAMAGED`). Nothing is ever renamed to an `.exe` name (S-P1-14: such a rename costs 240–391 ms on a stick with Norton on; the move costs 4.4–39.4 ms), and no temporary name can collide with a member name (a `.part` suffix did: `apply.cmd.part` is a legal name) | spike 9 DD4 (decided here) | R1 |
+| Staged names | every member keeps its member name in staging; the release tooling gives each root artifact a member name equal to its root name (`HilbertRaum-<v>-portable.exe`), so the apply's move from staging to the root renames no `.exe` (spike 1 DD6); a member whose root name differs (a start file) carries it in `install_as`, which the apply applies (§5.5) | spike 1 DD6, spike 9 DD4 | R1 (the staged name); Scripts (the move) |
+| Moves | every move in staging uses the rename retry of `services/fs-retry.ts` (`renameWithRetry`: `EBUSY`, `EPERM`, `EACCES`, its 12 s budget); spike 9: 0 retries in 802 renames, Norton's inspection runs inside `close()` | W-5, spike 9 DD7 | R1 |
+| A write that runs out of room | `ENOSPC` during the data pass → `UPD-DRIVE-FULL`; `EFBIG` (a FAT32 drive and a member of 4 GiB or more) → `UPD-FILE-TOO-BIG-FOR-DRIVE`; never a raw error | spike 9 DD3 | R1 |
+| The commit | after every present member is in `updates/staging/<v>/files/`: write `hilbertraum-release.dsse.json`, then `staged.txt`, then `staged.json` into `updates/staging/<v>/` (each to a `.tmp` name, fsynced, renamed; on macOS and Linux the folder fsynced after), then remove `updates/staging/.incoming-<v>/` | F-5 | R1 |
+| At most one staged update | the commit then removes every other `updates/staging/<w>/` and `.incoming-<w>/` (they are re-importable) | F-5 (GAP-8) | R1 |
+| A re-import of a staged or failed version | removes `updates/staging/<v>/` and `.incoming-<v>/` first; after the commit, the `cleared` line of §5.7 when `last-result.txt` marks `<v>` | W-5 | R1 |
+| Any refusal | removes `updates/staging/.incoming-<v>/` and `updates/staging/<v>/`, renamed members included (spike 9: 4–49 ms, 0 files left in 414 refusals) | W-5 | R1 |
+| The start-up sweep | at every drive-aware start, before the offers: remove every `updates/staging/.incoming-*` folder and every `updates/staging/<w>/` without `staged.json` (an import cut by a kill or an unplug) | F-5 | R1 |
+| "Don't install this update" | removes that version's `updates/staging/<v>/`; never offered, and the channel `updates:discardStaged` refused, while `updates/applying/` exists | F-5, F-14 | R1 |
+| The re-hash refusal | the hand-off's re-hash (W-6) removes that version's `updates/staging/<v>/` on a mismatch (`UPD-FILE-DAMAGED-ON-DRIVE`) | F-5, F-6 | R1 |
+| Progress | bytes staged / Σ sizes of the members present, shown at most every 250 ms; the re-hash has its own label (UX-10). Spike 9: the longest flat stretch is 0.11–0.66 s (the exe's close, a content scan of ~245 ms on a stick) | spike 9 DD6 | R1 |
+| A staged member's use | only the members of `staged.txt` are moved by the apply; the members of systems the drive does not carry stay in staging until the new version's clean-up (W-26, G-36) | W-21 | Scripts |
+
+### 4.6 `staged.txt` and `staged.json` (table A.5; F-5)
+
+**`staged.txt`** (R1 writes, the apply reads). G0 (§5.1). One line per staged member, in `files[]` order:
+`<size> <name>`. `<size>` is the member's byte count in decimal (1 to 10 digits, no sign); `<name>` is the
+rest of the line after one space (a member name, §4.4, so it holds no space; the file is
+`updates/staging/<v>/files/<name>`). The app writes LF; cmd
+reads it with `for /f "usebackq tokens=1,*"` and bash with `read -r size name`, both accepting CR LF. A
+line whose first field is not decimal is ignored. The apply checks each member's size against it
+before it moves the member; it never hashes (C12).
+
+**`staged.json`** (R1 writes and reads; a later app may read it). UTF-8 JSON without a byte-order mark,
+one object: `{"format":1,"version":"<v>","files":[{"name":"<member name>","size":<bytes>,"sha256":"<64
+lower-case hex>"},…]}`, the `files` entries in `files[]` order and only for the members present; a
+`group` key per entry that had one in the payload. Readers ignore unknown keys. A `staged.json` that does
+not parse, or whose `version` differs from its folder's name, means "not staged": the folder is swept.
+
+### 4.7 Verdicts of the container and of staging (table A.6)
+
+| Case | Code (§5.8) |
+|---|---|
+| no `HRUPDATE`, no ustar header at offset 0, or member 0 is not `hilbertraum-release.dsse.json` | `UPD-NOT-AN-UPDATE` |
+| the first 8 bytes are `HRUPDATE`; member 0 over 4 MiB; over 64 signatures; `files[]` over 4,096 entries; a listed name that breaks §4.4; a listed size of 8 GiB or more | `UPD-TOO-NEW` |
+| a header that fails §4.3's checks after member 0; an unlisted, repeated or case-colliding member; a header size ≠ the listed size; a missing member without a group, or a partial group, after a complete end; bytes after the end (`TrailingData`); non-zero padding; a member's hash ≠ its listed `sha256` | `UPD-FILE-DAMAGED` (its copy says the file is damaged or not completely downloaded, and to download it again: the action is the same) |
+| the end of the file before a header, inside a member or before the two zero blocks | `UPD-DOWNLOAD-INCOMPLETE` |
+| a zero block where a header should be while a listed member without a group, or part of a group, is still missing: a preallocated, zero-filled partial download (a browser's) of the full length (T1.11 S9-6) | `UPD-DOWNLOAD-INCOMPLETE`, found by the header walk (a tail that starts inside any member but the last puts zeros where the next header belongs); a zero-filled tail inside the last member's data passes the walk and ends as a hash mismatch, `UPD-FILE-DAMAGED` |
+| no `apply.cmd` (Windows) or `apply.sh` (macOS, Linux) listed | `UPD-NO-HELPER` |
+| free space under the formula; `ENOSPC` while staging | `UPD-DRIVE-FULL` |
+| `EFBIG` while staging | `UPD-FILE-TOO-BIG-FOR-DRIVE` |
+| the probe fails | `UPD-DRIVE-READ-ONLY` |
+
+### 4.8 Cases table A was checked against
+
+- **The staged name** (S-P1-14): every member is written under its own name in `.incoming-<v>/` and moved
+  under the same name, and artifact members carry their root names, so no step of the import or of the
+  apply renames anything to an `.exe` name.
+- **A version from 2035** writing an update file for release 1: it fits as long as it keeps ustar's
+  subset, one envelope of at most 4 MiB with at most 64 signatures as member 0, at most 4,096 members,
+  §4.4's names and members under 8 GiB; any other container starts with `HRUPDATE` and is told "too new",
+  never "not an update". Unknown payload fields are ignored (§2.4), unknown `staged.json` keys too.
+- **Absent groups**: the header walk accepts a file that carries whole groups only, which spike 9's
+  length equation alone would not.
+- **Spike 9's limits** (its Not covered): cold reads of a file already on a stick and a cold re-hash
+  (spike 6, P11b; the restart time, O22), Defender active (P11a; Δ-30 adds a Defender PC to O22), FAT32 and
+  files near 2 GiB (not measured; `EFBIG` is typed), macOS and Linux (P11a).
 
 ---
 
@@ -454,7 +588,490 @@ version's notice: the hand-off (F-6), the apply script and its journal, the star
 "Continue the update" (F-19), the outcome codes and notices (F-20, G-37, G-39) and
 `updates/unconfirmed.txt` (F-22). The frozen values come from the protocol table B._
 
-<!-- T1.8 fills this section -->
+_Status: planned (P7; the confirmation also ships in release 1, T7.5a). Table B below is the decided
+contract. Its evidence: spike 1 (`budget 30`), spike 8 (the profile and lock facts), spike 10 (the
+spawn, rule 1, the lock, the cmd rules) and the method review of those spikes (T1.11, its finding ids
+`S1-n`, `S8-n`, `S10-n`, `C-n`). A row marked **OPEN (T1.11 …)** states its value, but the value is not
+frozen until that finding is closed._
+
+### 5.1 How to read table B
+
+- **Frozen since.** _R1_: release 1 writes or reads the value, so it holds for ever (§1.5). _Scripts_:
+  a convention of the two apply scripts of one version (`apply.cmd`, `apply.sh`) and of the start
+  files a version ships. Release 1's scripts follow it; a later version may change it for its own
+  scripts, but must still converge on every state an R1 writer can leave (§5.5).
+- **Systems** are written as `win32`, `darwin` and `linux` (Node's `process.platform`, the same spelling
+  as the payload's `requires`, §2.4) wherever a file holds one.
+- **A version** is the SemVer 2.0.0 string of the app's `package.json` `version`, as the artifact names
+  carry it (`HilbertRaum-<version>-portable.exe`): ASCII, no space, at most 64 bytes. Two versions are
+  the same when their bytes are equal; order is F-4's (§2.5). A version field that is not SemVer names
+  an unknown version, never an error.
+- **A token** is 1 to 32 characters of `[0-9A-Za-z]`. Release 1's app writes 16 lower-case hex
+  characters from `crypto.randomBytes(8)`; the scripts build theirs from `%RANDOM%` (cmd) or
+  `$RANDOM` (bash). A writer never appends a `last-result.txt` line whose token equals the token of the
+  file's last valid line or of `last-result.seen`; it draws again. Readers accept 1 to 64 non-space
+  ASCII bytes.
+- **Common text rules (G0)**, for every text file of this section:
+  - bytes 0x20–0x7E and TAB only; a line holding any other byte is damaged and is ignored;
+  - lines end in LF or CR LF; a reader removes one CR before the LF, trims spaces and TABs at both ends,
+    skips empty lines and splits fields at runs of spaces and TABs; a last line without a line end
+    counts;
+  - **writers:** cmd writes CR LF (its `echo`); bash and the app write LF;
+  - keys and codes are lower-case ASCII compared byte for byte, never case-folded (so a `tr-TR` locale
+    cannot change them);
+  - a writer's line is at most 256 bytes; a reader ignores a line over 1,024 bytes and reads at most
+    65,536 bytes of a file (append-only files: the last 65,536 bytes, the first partial line
+    dropped);
+  - an unknown key, an unknown extra field or an unknown extra line is ignored, never an error; a
+    missing, unreadable or damaged file means "absent" unless its row says otherwise.
+
+### 5.2 Names (table B.1)
+
+All paths are relative to the drive root; names are exact, case included. `<os>` is a system token,
+`<v>` a version, `<n>` the digit 1, 2 or 3.
+
+| Name | What it is | Written by | Read by | Frozen since |
+|---|---|---|---|---|
+| `updates/` | the update folder (table A, §4, owns staging) | R1 app | everyone below | R1 |
+| `updates/applying/` | the pending-apply folder: while it exists an update is in progress (F-6, F-7) | R1 hand-off; "Go back" and every later fallback write it before moving an app (F-7's later-writer duty) | R1 start files (rule 1, the counter), R1 app (F-19), every apply | R1 |
+| `updates/applying/handoff.txt` | the hand-off record (§5.3) | R1 hand-off and "Continue the update"; later writers | the apply | R1 |
+| `updates/applying/apply.cmd`, `updates/applying/apply.sh` | byte copies of the staged members `apply.cmd` and `apply.sh` (member names exact, lower case; R1 finds them by name, whatever their `role`); R1 copies each one the staging holds, for every system, so the other system's twin can resume | R1 hand-off; R1 "Continue the update" re-copies a missing one from `updates/staging/<v>/files/` (`<v>` = `handoff.txt`'s `version`) | R1 start files (rule 1), the apply | R1 |
+| `updates/applying/started` | empty file: the apply's first action creates it (the start acknowledgement) | the apply | R1 app (≤ 10 s after the spawn, §5.4) | R1 |
+| `updates/applying/launch-1`, `launch-2`, `launch-3` | empty files: one per resume a start file began (N = 3) | R1 start files (rule 1); later start files keep rule 1 | R1 start files; the apply deletes them | R1 |
+| `updates/applying/finish-1`, `finish-2`, `finish-3` | empty files: one per hand-off of one version by an app (N = 3) | R1 app (every hand-off, "Restart and update" and "Continue the update") | R1 app; the apply deletes them | R1 |
+| `updates/applying/apply.lock` | the cmd twin's lock: a file held open by redirection handle 9 for the whole run; its presence means nothing | `apply.cmd` | `apply.cmd` | Scripts |
+| `updates/applying/apply.lock.d/` and its `owner` | the bash twin's lock: a directory made with `mkdir`; `owner` holds `pid`, `os`, `boot` and `lstart` lines (§5.3's `key value` form) | `apply.sh` | `apply.sh` | Scripts |
+| `updates/applying/journal.txt` (and `journal.tmp` while it is written) | the apply journal's header (§5.3, §5.5) | the apply | both twins of the version whose scripts lie there | Scripts |
+| `updates/applying/step-launchers`, `step-result` | empty files: journal steps done (§5.5) | the apply | both twins | Scripts |
+| `updates/previous/` | the previous set: at most one artifact per system, the replaced start files, and the previous content set (P8 names its folder, §6.10) | every apply | R1 start files (rule 2, the counter), "Go back" | R1 (rule 2 reads it) |
+| `updates/applied/<v>.json`, `updates/applied/<v>.dsse.json` | the apply's record and the kept signed envelope (§6.9) | the apply | the new version | Scripts |
+| `updates/unconfirmed.txt` | F-22's trigger (§5.3, §5.7) | a forward apply, before its first move | R1 app, R1 start files' counter, later start files | R1 |
+| `updates/confirmed/<v>-<os>` | empty file: version `<v>` had a confirmed start on system `<os>` | every confirming app, R1 included | every app; R1's counter tests `updates/confirmed/<v>-*` | R1 |
+| `updates/launch-count.txt` | R1's launch counter, one per drive (§5.3) | R1 start files (the counter); removed by a confirming app (F-22) and by a counter fallback | R1 start files | R1 |
+| `updates/launch-count-<anything>.txt` | reserved for later start files' per-computer counts (W-21); R1 never reads them and its confirmation removes them | later start files | later start files | R1 (the name is reserved) |
+| `updates/starting-<os>` | later start files' in-flight record (W-7 (d)) | later start files | later start files | Scripts |
+| `updates/last-result.txt` | the outcome lines (F-20, §5.3, §5.8) | the apply, start files, R1 app | R1 app, every later app | R1 |
+| `updates/last-result.seen` | the line R1 showed last (§5.3) | R1 app on dismissal; later apps in the same form | R1 app | R1 |
+| `updates/update.log` | the support log (§8.2); table B's writers' lines in §5.3 | R1 app, R1 start files, later start files, the apply | support, `/check`, "Copy details for support" | R1 |
+
+### 5.3 Grammars (table B.2)
+
+Every file below follows G0 (§5.1).
+
+**`handoff.txt`** (R1; F-6). `key value` lines: the key is the first field, the value the rest of the
+line after one run of spaces or TABs. The first line with a key wins; a key R1 does not know is kept
+and ignored.
+
+| Key | Value | Written by |
+|---|---|---|
+| `pid` | decimal, 1 to 10 digits: `process.pid` of the app that hands off (on Windows the main process inside `%TEMP%`, whose parent is the stub) | R1, every later writer |
+| `version` | the version whose scripts were copied into `applying/` (the staged version) | R1, every later writer |
+| `budget` | decimal seconds, 1 to 86400: the wait floor; R1 writes `30` (spike 1). The apply waits at least this long, and may wait longer, never shorter | R1, every later writer |
+| `os` | the system token of the computer that handed off | R1, every later writer |
+| `boot` | decimal: that computer's boot time in epoch seconds, `Math.round(Date.now() / 1000 - os.uptime())` | R1, every later writer |
+| `mode` | `forward`, `back` or `fallback`; absent means `forward` | later writers only ("Go back", a fallback) |
+| `to` | the version the apply moves to the root (for `back` and `fallback`) | later writers only |
+
+- R1 writes the five lines in the order above, LF line ends, to `handoff.txt.tmp`, fsyncs it, renames it
+  to `handoff.txt`. No host name, user name or path is written.
+- **"Continue the update"** (R1, §5.4) rewrites the file: new `pid`, `os`, `boot` and `budget 30`,
+  and **every other line kept in its order** (`version`, `mode`, `to`, unknown keys), so a fallback or
+  a "Go back" that release 1 continues keeps its direction. A missing or damaged `handoff.txt` is
+  rewritten with R1's four keys only.
+- The apply reads `pid`, `os`, `boot` and `budget` only to wait (§5.5); it never takes its direction
+  or its versions from `handoff.txt` once `journal.txt` exists.
+
+**`journal.txt`** (Scripts; W-21). `key value` lines as `handoff.txt`, written once per apply run by
+the first instance that holds the lock, to `journal.tmp`, then renamed (bash: `sync` after), and never
+rewritten; a resume reads it.
+
+| Key | Value |
+|---|---|
+| `journal` | `1` (the journal format) |
+| `mode` | `forward`, `back` or `fallback` (from `handoff.txt`; absent there means `forward`) |
+| `to` | the target version: the staged version for `forward`, `handoff.txt`'s `to` otherwise |
+| `from-win32`, `from-darwin`, `from-linux` | one line per system: the version of that system's root artifact when the journal opened, `none` when the root had none, `unknown` for a root `*.app` |
+
+**`unconfirmed.txt`** (R1; F-22). The first valid line: `<version> <token> [<field>…]`, the rest of the
+line ignored. Written by a forward apply before its first move (temp + rename, CR LF from cmd, LF from
+bash). A file without a valid first line is damaged: R1's app removes it as stale (§5.7).
+
+**`launch-count.txt`** (R1; F-7). The first valid line: `<count> <version> [<field>…]`. `<count>` is
+decimal; a count above 3 reads as 3, a count that is not decimal reads as 0, and a `<version>` other than
+`unconfirmed.txt`'s reads as 0. R1's start files rewrite the whole file (`>"…" echo <count> <version>`;
+bash `printf '%s %s\n'`). A confirming app removes it (F-22).
+
+**`last-result.txt`** (R1; F-20, W-51). Append-only; nothing ever deletes or shortens it.
+- A valid line: `<code> <version> <token> [<field>…]` with `<code>` matching `[a-z][a-z0-9-]{0,31}`.
+  A line with fewer than three fields, a malformed code or a non-SemVer version is ignored (a torn or
+  hand-edited line never counts).
+- **The last valid line wins.** Its code decides (§5.8): every code outside the success set `applied`,
+  `cleared` means "don't offer this version again"; an unknown code gets the generic copy.
+- Writers append one line per event (`>>"…" echo …` with the redirection first in cmd).
+
+**`last-result.seen`** (R1). One line: the last valid `last-result.txt` line that R1 showed, as R1
+read it after G0's trimming, then LF. A `last-result.txt` line is new when its trimmed text differs
+from this line. R1 writes it when the notice is dismissed (W-51), never on render; an absent or
+unreadable file means nothing was shown. On a drive that cannot be written the notice therefore shows
+at every start (accepted, W-51).
+
+**`update.log` lines of table B's writers** (R1; F-11, §8.2). One line per event:
+`<writer> <os> <event> [<field>…] <time>`.
+- `<writer>`: `r1-launcher` (release 1's start files), `r1-app` (release 1's app), `lb` (a later
+  version's start files), `apply-<version>` (an apply script).
+- `<field>`: `key=value`, value ASCII without spaces (versions, codes, counts, the class names below).
+  No path, no host or user name, no free text.
+- `<time>` is the last field: `t=<YYYY-MM-DDTHH:MM:SSZ>` (the app and bash, UTC), or
+  `d="<%date% %time%>"` from cmd, whose content between the quotes is opaque bytes in the console's code
+  page and is never parsed.
+- A write failure is ignored (`2>nul`; bash `2>/dev/null || true`); it never stops a start file or an
+  apply.
+
+### 5.4 The hand-off (table B.3; F-6, F-14's hand-off channel)
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Who hands off | the app, on the `will-quit` leg only, after `performShutdown` returns `clean` (`working_copy_lost` and `failed` end with nothing written, the update still staged); an app that survived a session-end lock hands off from its own branch (W-6 (i)–(v)) | W-6 | R1 |
+| Order | "Restart and update" → pre-check (below) → policy re-read (§8.1) → re-hash every staged file against `staged.json` (table A; a mismatch removes that version's staging folder, code `UPD-FILE-DAMAGED-ON-DRIVE`) → the #935 question and the #888 save, each only when it applies → the restart dialog last → lock → teardown → write `applying/` (below) → spawn → wait for `started` → `app.exit(0)`. Every abort choice before the lock writes nothing | W-6, F-6 | R1 |
+| Precondition: the running app is the drive's app | the apply finds the root from its own place and swaps the root's artifacts (`%~dp0..\..\`), so the hand-off assumes the running app is a root artifact of the root R1 resolved (`locateDriveRoot`, `services/workspace.ts:42-53`): Windows, `dirname(PORTABLE_EXECUTABLE_FILE)` is that root; macOS, `HILBERTRAUM_DRIVE_ROOT` names that root (a start through the root's start file) or the running bundle is a root `*.app`; Linux, `dirname(APPIMAGE)` is that root or `HILBERTRAUM_DRIVE_ROOT` names it. When it fails (a bare exe one folder below the root, an override root), "Restart and update" and "Continue the update" are refused before the lock with `UPD-NOT-DRIVE-APP` (copy key prefix `updates.restart.notDriveApp`), nothing is written and the update stays staged; the import and the staging stay allowed (owner 2026-11-24, Δ-31, §5.12) | T1.11 S10-1; owner | R1 |
+| Pre-check | before the lock, and at the start of every import (table A, §4.5): create and delete `updates/.write-probe` (a dot name, so no glob of table A or B matches it), and free space ≥ 64 MiB (67,108,864 bytes, the third term of table A's formula); failing either → no shutdown, code `UPD-DRIVE-READ-ONLY` or `UPD-DRIVE-FULL` | W-6 (GAP-23, A-6); spike 9 DD5 | R1 |
+| `applying/` write order | `mkdir updates/applying` → `handoff.txt` (temp, fsync, rename; §5.3) → copy `apply.cmd` then `apply.sh` from `updates/staging/<v>/files/`, each fsynced → `finish-<n>` (the lowest free `<n>`) → on macOS and Linux fsync `updates/applying/` and `updates/` (W-6, lens A-9). Any write failure after the teardown is handled as a failed spawn (below) | W-6 | R1 |
+| `finish-<n>` cap | if the marker just created is `finish-3`, R1 does not spawn: it treats this hand-off as a failed spawn of class `finish-cap` (W-6, GAP-24) | W-6 | R1 |
+| Windows spawn | `spawn(<SystemRoot>\System32\cmd.exe, ['/d', '/c', '.\\apply.cmd', String(process.pid)], { cwd, detached: true, stdio: 'ignore', windowsHide: true, env })`; no `shell`, no `windowsVerbatimArguments`. `<SystemRoot>` = `process.env.SystemRoot`. Node builds the command line `C:\WINDOWS\System32\cmd.exe /d /c .\apply.cmd <pid>` (spike 10: `spawnargs`). No path on the command line: the script finds the root from its own place (`%~dp0..\..\`). Measured on 12 roots × NTFS and exFAT, 72 of 72 runs (spike 10, Norton on, Windows 11 x64 build 26300). Its open legs, placed by the owner 2026-11-24 (Δ-30): a Defender-only PC in O22's pre-release timing leg (T1.11 S1-1) and GitHub's `windows-11-arm` runner in the walk (T1.11 C-3) | spike 10 DD1; W-6 | R1 |
+| `cwd` (both systems) | `path.join(<the drive root R1 resolved with locateDriveRoot and wrote applying/ under>, 'updates', 'applying')`; **never** `dirname(PORTABLE_EXECUTABLE_FILE)` (spike 10's probe shortcut; T1.11 S10-1). Two T7.1 rows: the exe one folder below the root; an override root | T1.11 S10-1 | R1 |
+| Environment | `env` = `process.env` minus every name below, then `NoDefaultCurrentDirectoryInExePath=1` and `ComSpec=<SystemRoot>\System32\cmd.exe` added (Windows only). Iterate `Object.entries(process.env)` (it keeps the stored spelling). **Dropped** on Windows matched case-insensitively, on macOS and Linux case-sensitively: names starting `HILBERTRAUM_`, `PORTABLE_EXECUTABLE_`, `ELECTRON_`, `NODE_`, `BASH_FUNC_`, `LD_`, `DYLD_`; the names `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `IFS`, `CDPATH`, `GLOBIGNORE`, `TAR_OPTIONS`, `POSIXLY_CORRECT`, `PS4`, `COPYCMD`, `DIRCMD`; on Windows also every spelling of `NoDefaultCurrentDirectoryInExePath` and `ComSpec` before they are set. Measured: the stub adds `PORTABLE_EXECUTABLE_APP_FILENAME`, `_DIR`, `_FILE`, Electron adds `ELECTRON_NO_ATTACH_CONSOLE`; all four are dropped (spike 10: 116 names → 92). A later apply may drop more; it can never restore a name | spike 10 DD1; W-6 | R1 |
+| macOS and Linux spawn | `spawn(<sh>, ['./apply.sh', String(process.pid)], { cwd, detached: true, stdio: 'ignore', env })`; `<sh>` = the first of `/bin/bash`, `/usr/bin/bash`, `/bin/sh` that is a regular file with execute permission; none → a failed spawn of class `no-shell`. `detached` makes the child a session leader (`setsid`). `apply.sh` re-execs itself under bash when bash exists (W-21). **Pending spike 4a** (T1.6, the detached hand-off from the packaged AppImage on WSL2) and P11a's spike 3 (macOS); the row rests on W-6 until then | W-6, B-13 | R1 |
+| Failed spawn, classes | R1 classifies before and at the spawn (spike 10 DD4): `cwd.length > 258` → `cwd-too-long` (no spawn tried); `child.pid === undefined` right after `spawn()`, or an `error` event, with code `ENOENT` while the shell exists → `cwd-missing-or-too-long`; `EPERM` or `EACCES` → `blocked`; the shell missing → `no-shell`; any other code → `spawn-failed`; plus `finish-cap` and `write-failed` (a write after the teardown failed). Measured: a cwd of 259 characters or more gives `ENOENT` naming `cmd.exe` 2 ms after `spawn()` (`LongPathsEnabled` doesn't help); with the real exe name a too-deep root never reaches the hand-off (the stub fails first at a 256-character exe path) | spike 10 DD4, item 5 | R1 |
+| After a failed spawn | append `helper-blocked <v> <token>` to `last-result.txt`; log `r1-app <os> handoff-failed version=<v> class=<class> code=UPD-HELPER-BLOCKED`; remove `updates/applying/` **only** when this hand-off created it and `started` is absent (a "Continue the update" never removes it); show the `helper-blocked` notice; quit (the teardown already ran). The update stays staged. R1 removes `applying/` in no other case: every other removal is the apply's own (§5.5). **OPEN (T1.11 S10-2, spike 10b)** as far as that reliance needs cmd to delete the folder of a running script (`LockBatchFilesWhenInUse` = 1, measured by spike 10b) | W-6 (CC-21, CE-D7); T1.11 S10-2 | R1 |
+| Start acknowledgement | after a successful spawn R1 polls `updates/applying/started` every 100 ms for at most **10 s**. Present → log `handoff-started`, `app.exit(0)`. Absent after 10 s → append `helper-blocked <v> <token>`, log `handoff-no-ack … code=UPD-HELPER-BLOCKED`, show the notice, remove nothing (a slow first scan may still let the apply run; its later lines win), `app.exit(0)`. Measured spawn → `started`: **16–41 ms over 82 runs** (spike 1 item 4: 16 runs, 25–41 ms; spike 10: 66 runs, 16–39 ms; Norton on, the script's hash known; T1.11 C-6), so 10 s is more than 200× the worst case seen. A Defender-only PC joins O22's pre-release timing leg (owner 2026-11-24, Δ-30; T1.11 S1-1) | W-6; T1.11 C-6, S1-1 | R1 |
+| `budget` | `30` seconds, a floor, in `handoff.txt`. Its clock starts at the spawn, after the lock, so the lock's own time is outside it. After the old app's process is gone the stub releases the exe in 0.22–0.27 s and exits in 0.42–0.62 s (spike 1: 45 runs, both stub builds, NTFS, exFAT USB 3, exFAT USB 2); the 10 s acknowledgement wait ends as soon as `started` appears. Times are spike 1's; spike 8 gives the mechanism only (the stub exits last; T1.11 S8-6) | spike 1 DD1 | R1 |
+| End of the app | `app.exit(0)`, never a graceful quit (a hung quit would keep the single-instance lock and swallow the apply's start, CE-D6) | W-6 | R1 |
+| "Continue the update" | offered while `updates/applying/` exists at a drive-aware start (F-19, §5.7), also when the last valid `last-result.txt` line is `helper-blocked` for that version (then labelled "Try again on this computer"); it runs the whole path above with these differences: no re-hash of a staged update and no policy gate (W-13: once `applying/` exists the policy no longer stops it), the pre-check still runs, `handoff.txt` is rewritten (§5.3), a missing `apply.cmd` or `apply.sh` is re-copied from `updates/staging/<version>/files/` when that folder holds it, a `finish-<n>` is added, and it never removes `applying/`. A missing script it cannot re-copy is still spawned: the missing acknowledgement then shows the notice | W-6, F-19 | R1 |
+| Kill-on-close job (accepted residual) | a detached spawn from Node never requests breakaway: inside a `KILL_ON_JOB_CLOSE` job the apply dies within ~25 ms of the job's close, even with `BREAKAWAY_OK` (spike 10 item 6, 4/4). Kit starts are in no such job (the start-file path is in no job; a double-click on the exe runs in a job with `BREAKAWAY_OK` only, without kill-on-close). It is the class "apply killed after `started`": `applying/` stays and rule 1 or "Continue the update" resumes (owner 2026-11-24, S-P1-11) | spike 10 DD5 | R1 |
+| `update.log` events of the hand-off | `r1-app <os> <event> version=<v> [<field>…] t=<…>` with `<event>` one of `handoff-refused` (`reason=` `read-only`, `full`, `policy-managed`, `policy-invalid`, `damaged`, `lock-failed`, `working-copy-lost`), `handoff-spawned`, `handoff-started` (`ms=<n>`), `handoff-no-ack`, `handoff-failed` (`class=`), each with `code=` when a message is shown | F-11, W-6 | R1 |
+
+### 5.5 The apply script and its journal (table B.4; W-21)
+
+The apply scripts ship in every update file and are replaceable, but frozen code starts them (F-6,
+F-7) and they must converge on every state an R1 writer leaves. One on-disk state machine serves both
+twins: an apply interrupted on Windows may be resumed by `apply.sh` on a Mac after the drive moved,
+and the reverse (T7.10's shared fixtures).
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Arguments | `apply.cmd <pid>` / `apply.sh <pid>` from the app; `apply.cmd resume` / `apply.sh resume` from a start file. The script never takes a path argument: root = its own folder's grandparent (`%~dp0..\..\`; bash `$(cd "$(dirname "$0")/../.." && pwd)`) | F-6, F-7 | R1 (R1 starts it so) |
+| First action | create `updates/applying/started` (before the lock) | W-6 | R1 (R1 waits for it) |
+| Lock, cmd | the whole run inside `9>"%~dp0apply.lock" (call :main %*)` (or a multi-line block with `)` on its own line; on one line `( … do rem )` swallows the `)` and cmd exits 255 without the lock, spike 10 item 4). A second instance tests `2>nul (9>>"%~dp0apply.lock" (call ))`: failure = a live holder. The handle dies with the process (kill, `taskkill /T /F`, unplug: no stale state). A console child of the holder would inherit handle 9 and keep the lock, so the apply starts no console program and starts the new app with `start` (a `start`ed child does not inherit it) | W-21; spike 10 DD6 (a) | Scripts |
+| Lock, bash | `mkdir updates/applying/apply.lock.d` succeeds = taken; then `owner` is written (`pid <$$>`, `os <os>`, `boot <boot>`, `lstart <ps -p $$ -o lstart=>`). A failing `mkdir` with a readable `owner`: live only when `os` and `boot` (±300 s) match this computer, the PID is alive and `ps -p <pid> -o lstart=` equals `lstart`; otherwise stale: remove the directory and take it. `LC_ALL=C` and `TZ=UTC` are exported before any `ps` (one live PID reads 01:11, 09:11 or 00:11 under three `TZ` values). cmd ignores `apply.lock.d`; bash ignores the `apply.lock` file | W-21 (GAP-5) | Scripts |
+| Markers on the lock | a resume that finds a live holder deletes the highest-numbered `launch-<n>` (the one its start caused) and exits; the instance that takes the lock deletes every `launch-<n>` and `finish-<n>` (progress, W-7) | W-7, W-6 | Scripts (R1 counts on it) |
+| Wait, Windows | the rename retry alone: the first move out of the root (the system's root artifact whose version ≠ `to`) is retried until it succeeds, `budget × 250` attempts of a `for /l` delay (release 1's twins; T7.2 records the measured rate of the loop it ships). A successful rename implies the old app's process is gone and the stub's unpack folder deleted, for both stub builds (spike 1: 56 of 57 runs in the same 25 ms poll, the order resting on electron-builder's `portable.nsi`). Exhausted → `timeout` | spike 1 DD3; W-21 | Scripts |
+| Wait, macOS and Linux | only when `handoff.txt`'s `os` is this system, its `boot` is within ±300 s of this computer's (`sysctl -n kern.boottime` / `/proc/stat` `btime`), and the last `/`-separated part of `ps -p <pid> -o comm=` is `HilbertRaum` (`executableName`, pinned by W-15 (v)); then while all three hold, at most `budget` seconds (or longer, never shorter). Exhausted → `timeout`. Pending spike 4a (T1.6) and spike 3 (P11a) for `comm` | W-21 | Scripts |
+| Systems an apply moves | forward: each system whose `from-<os>` is not `none` (the apply installs only systems already on the drive, G-36); `back` and `fallback`: each system whose `from-<os>` is not `none` | W-21 | Scripts |
+| Move order, per system | systems in the order `win32`, `darwin`, `linux`; for each: (a) forward only: delete from `previous/` every artifact of that system whose version is neither `from-<os>` nor `to` (only the immediately previous set stays); (b) **out**: move every root artifact of the system whose version is not `to` into `previous/` (a root `*.app` has no version and always moves); (c) **in**: if the root lacks `to` for the system, move it from its source: forward `updates/staging/<to>/files/` (the member `staged.txt` lists for that system, to its `install_as` name where the payload gives one), `back` and `fallback` `updates/previous/`. Out first: a stop between (b) and (c) leaves an empty root, which rule 2 repairs, never two artifacts (CE-D9). `previous/` never receives an artifact of version `to`. Every move is `move /y` (cmd) / `mv -f` (bash), judged by the existence of source and target, never by an exit code | W-21 duty 3 | Scripts |
+| Start files | a drive with no start file at the root (every `prepare-drive` drive) gets the new ones before any artifact moves; otherwise after the swap: each replaced start file moves to `previous/`, each new one is copied to `<name>.new` and renamed over the root name (never written in place, never through a `.cmd` that is running). Then `step-launchers` | W-21 | Scripts |
+| Artifact versions from names | Windows `HilbertRaum-<v>-portable.exe`; macOS `HilbertRaum-<v>-mac-arm64.app.zip` (a root `*.app` is `unknown`); Linux `HilbertRaum-<v>.AppImage`. Root globs as R1's start files use them (F-18) | F-18 | R1 (the globs) |
+| The new app's start | cmd starts the **artifact** (never a start file, never a `.cmd`) with `HILBERTRAUM_DRIVE_ROOT=<root>` (with its trailing `\`) and `HILBERTRAUM_MANIFESTS_DIR=<root>model-manifests` set, in the same parenthesised block as the self-delete `(goto) 2>nul & rmdir /s /q "<root>updates\applying"`; bash first removes `updates/applying/` (a running bash survives its file and cwd going), then macOS `open "<root>/Start HilbertRaum.command"`, Linux `exec` of the AppImage with the same two variables and with `APPIMAGE`, `APPDIR`, `OWD`, `ARGV0` and the old image's `$APPDIR` entries in `PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR` removed. **OPEN (T1.11 S10-2, spike 10b)**: the cmd self-delete form is measured only with `LockBatchFilesWhenInUse` = 0; spike 10b (`impl/p1/T1.4b/`) measures it at 1 | W-21 (CE-1, GAP-1); T1.11 S10-2 | Scripts; the rule below is R1's |
+| **CE-1 rule** | no journal state starts a start file, an app or a resume while `updates/applying/` exists; every terminal state removes `applying/` first (bash) or in the same parsed block (cmd) and starts an app; `timeout` is not terminal and starts nothing | W-21 (CE-1, duty 1) | R1 (R1's rule 1 and R1's removal rule depend on it) |
+| cmd rules | ASCII only, CR LF (`.gitattributes` lists `launchers/apply/*.cmd`); `set "COPYCMD="` first; only built-ins (`ren`, `move /y`, `if exist`, `set`, `>`/`>>`, `rmdir`, `for`, `call`, `start` of the GUI artifact): no console program at all (no `ping`, `timeout`, `tasklist`, `find`, `chcp`, `wmic`, PowerShell), since each opens a visible window from the detached cmd (spike 10 item 7: 4 windows for 3 `ping`s and a `chcp`); the delay is a `for /l` loop; every output line puts its redirection first (`>>"file" echo …`); no pipeline; never `start` a `.cmd` (it runs `%ComSpec% /K`: a window that never closes, and with a missing `ComSpec` the script ends there); a resume started by a start file inherits that start file's environment unfiltered, so the `COPYCMD` rule is required; files cmd writes are in the ANSI code page (start files: OEM), so no line another script or the app parses carries a path; `for /f` only over a file of this section, never over a program's output; never `pause`, never parse JSON, never hash (C12) | W-21; spike 10 DD6 | Scripts |
+| bash rules | a POSIX-sh preamble re-execs the script under bash when bash exists (the lookup may start it with `/bin/sh`); bash 3.2 syntax; closes every descriptor above 2 first; `LC_ALL=C` and `TZ=UTC` before any `ps`; `sync` after each journal step | W-21 | Scripts |
+| `update.log` events | `apply-<version> <os> <event> [<field>…] <time>` with `<event>` one of `started`, `lock-busy`, `waited` (`attempts=` or `s=`), `journal`, `moved` (`os=`, `dir=out` or `in`), `launchers`, `result` (`code=`), `timeout`, `io-error`, `aborted`, `start` (`os=`) | F-11 | Scripts |
+
+**The journal states (table B.5).** `<v>` is `handoff.txt`'s `version` (the apply's own), `to` and
+`from-<os>` come from `journal.txt`.
+
+| State | What is on disk | Who may resume it | Next |
+|---|---|---|---|
+| **J0 handed off** | `applying/` with `handoff.txt` and the copied scripts; no `started` | R1 rule 1; "Continue the update" (R1 or later); the version's own start (W-21 duty 6) | J1 |
+| **J1 acknowledged** | J0 + `started`; no `journal.txt` | any instance that takes the lock | the wait, then: `fallback` with any `confirmed/<v>-*` present → **T-aborted**; forward with a carried system that staging lacks → **T-refused**; else write `journal.txt` → J2. Wait exhausted → `timeout` (stays J1) |
+| **J2 journal open** | J1 + `journal.txt` | the lock holder | forward: write `unconfirmed.txt` (`<to> <token>`) unless any `confirmed/<to>-*` exists (CE-D5), read it back; failure → **T-io-error** with nothing moved. A drive without start files: install them, `step-launchers`. Then J3 |
+| **J3 swapping** | J2 + some systems moved (root and `previous/` mixed, per the move order) | the lock holder, after a resume, on either system | each move done or skipped by version; a move that fails for good → **T-io-error**; all systems at `to` → J4 |
+| **J4 swapped** | every moved system's root holds exactly `to`; no `step-launchers` | the lock holder | start files replaced, `step-launchers` → J5 |
+| **J5 start files done** | J4 + `step-launchers` | the lock holder | forward: `applied/<to>.json`, `applied/<to>.dsse.json` (a copy of `updates/staging/<to>/hilbertraum-release.dsse.json`); append the result line (`applied` forward, `went-back` back, `fallback` fallback; version `<v>`); `back` and `fallback`: remove `confirmed/<v>-*`, `unconfirmed.txt` when it names `<v>`, and `launch-count.txt`; then `step-result` → J6 |
+| **J6 recorded** | J5 + `step-result` | the lock holder | forward: remove `updates/staging/<to>/`; the start → **T-done** |
+| **timeout** (not terminal) | J1 + a `timeout <v> <token>` line | the next start (rule 1, "Continue the update") | J1 |
+| **T-done** | `applying/` gone; root at `to`; the line written | — | the new version starts (forward) or the target starts (`back`, `fallback`) |
+| **T-refused** | `applying/` gone; nothing moved; `incomplete <v> <token>` | — | the root's version starts and shows the notice |
+| **T-io-error** | `applying/` gone; moves made so far reversed by version (`to` out, each `from-<os>` back in), `unconfirmed.txt` removed when it names `to`; `io-error <v> <token>` | — | the root's version starts and shows the notice |
+| **T-aborted** | `applying/` gone; nothing moved, no line | — | the root's version starts (W-21 duty 5, CE-D1) |
+
+A version that starts with its own `applying/` present (killed after the swap, then a bare start)
+continues it through its own resume (the F-6 path), and removes `applying/` itself only in J6, when
+every system the journal names is at `to` (W-21 duty 6, CE-D10). A reverse apply that finds its swap
+already done (J4 or later) never moves anything back in (CE-D4).
+
+### 5.6 The start files (table B.6; F-7)
+
+**The order** in release 1's three start files, after the root and the two variables are set:
+(0) `/check` (`--check` in bash) → report and exit 0, before any rule: it starts, moves and writes
+nothing; (1) rule 1; (2) the counter; (3) rule 2; (4) rule 3, the #235 refusal; (5) start the root's
+app as today. The `.cmd`'s head is `setlocal enableextensions disabledelayedexpansion`, then
+`set "COPYCMD="` (W-7 (c)).
+
+**Rule 1, `Start HilbertRaum.cmd`** (frozen text, spike 10 DD2: 11 roots × NTFS and exFAT, ShellExecute
+and `explorer.exe`; the read-on probe showed no line read after the `start`). The Japanese-locale VM
+leg (P11a, owner 2026-11-24, Δ-30; T1.11 S10-3) re-runs it:
+
+```
+set "N="
+if exist "%~dp0updates\applying\apply.cmd" (
+  if not exist "%~dp0updates\applying\launch-1" (set "N=1") else if not exist "%~dp0updates\applying\launch-2" (set "N=2") else if not exist "%~dp0updates\applying\launch-3" set "N=3"
+)
+if defined N (
+  >"%~dp0updates\applying\launch-%N%" type nul
+  if exist "%~dp0updates\applying\launch-%N%" (
+    start "" /min /d "%~dp0updates\applying" "%SystemRoot%\System32\cmd.exe" /d /c .\apply.cmd resume
+    exit /b 0
+  )
+)
+```
+
+**The fall-through**, right after that block, when `"%~dp0updates\applying\"` exists: one `update.log`
+line `r1-launcher win32 launcher-fallthrough reason=<r> code=UPD-LAUNCH-FALLTHROUGH d="%date% %time%"`
+with `<r>` = `no-script` (no `apply.cmd`), `marker-not-created` (`N` defined: a read-only or full
+drive) or `markers-used` (three markers), then the message `UPD-LAUNCH-FALLTHROUGH` (below), no pause,
+and on to the counter. Known limit (W-7 (e), spike 10): under a drive path holding `%<a defined
+variable>%`, or `!` with `^` on a host with `DelayedExpansion=1`, no line of any `.cmd` start file runs;
+the app, started as the bare exe, finishes the update through "Continue the update".
+
+**Rule 1, `Start HilbertRaum.command` and `start-hilbertraum.sh`** (from W-7; pending spike 4a, T1.6,
+and P11a's spike 3; `$DIR` is the root as both files set it today):
+
+```
+N=""
+if [ -f "$DIR/updates/applying/apply.sh" ]; then
+  for n in 1 2 3; do
+    if [ ! -e "$DIR/updates/applying/launch-$n" ]; then N="$n"; break; fi
+  done
+fi
+if [ -n "$N" ] && : > "$DIR/updates/applying/launch-$N" 2>/dev/null && [ -e "$DIR/updates/applying/launch-$N" ]; then
+  SH=/bin/sh
+  for c in /bin/bash /usr/bin/bash; do if [ -f "$c" ] && [ -x "$c" ]; then SH="$c"; break; fi; done
+  (cd "$DIR/updates/applying" && nohup "$SH" ./apply.sh resume </dev/null >/dev/null 2>&1 &)
+  exit 0
+fi
+```
+
+followed by the same fall-through (`r1-launcher <os> launcher-fallthrough reason=<r> code=… t=<UTC>`, the
+message, on to the counter). bash reads the whole `if … fi` compound before it runs it, so, as in the
+`.cmd`, no line after the block is read once the resume is started.
+
+**The counter** (frozen in release 1; F-7, W-7 (d), (d0), T7.11):
+
+| Value | Exact value |
+|---|---|
+| When it acts | all of: `updates/applying/` absent; `updates/unconfirmed.txt` has a valid first line whose version (`UV`) consists only of `[0-9A-Za-z.+-]` (any other version: the counter does nothing; the app removes the file, §5.7); the root holds exactly one artifact of this system |
+| In flight, Windows | the root artifact is held by a stub: the write-open `2>nul (>>"<root exe>" (call ))` fails → an instance of this drive's app is running or starting: no count (`counter-skip reason=in-flight`), go on. **OPEN (T1.11 S1-2, spike 1b)**: spike 1b (`impl/p1/T1.1b/`) measures whether the exe stays held for the whole start, the extraction and the AV sandboxing of a never-seen build included, and whether this probe or another one is the one to freeze |
+| In flight, macOS and Linux | no probe in release 1 (CC-20); later start files keep `updates/starting-<os>` |
+| The apply's own start | never counted: the apply starts the artifact, never a start file (§5.5) |
+| Count | `n` = `launch-count.txt`'s count for `UV` (§5.3) + 1, at most 3, rewritten as `<n> <UV>`; a failed write means no count; log `counter n=<n> version=<UV>` |
+| At `n` = 3 (i) | any `updates/confirmed/<UV>-*` exists → message `UPD-LAUNCH-CANT-START`, log `counter-stop reason=confirmed version=<UV> code=UPD-LAUNCH-CANT-START`, on to rule 2 (T7.11, CE-F5) |
+| At `n` = 3 (ii) | else, when the root artifact's name carries `UV` and `updates/previous/` holds exactly one artifact of this system whose name does not carry `UV` → **the counter fallback**: (1) append `fallback <UV> <token>` to `last-result.txt` (a failure ends here, nothing moved); (2) move the root artifact into `previous/`; (3) move the other one from `previous/` to the root (rule 2 finishes a torn (3) at the next start); (4) delete `unconfirmed.txt` and `launch-count.txt`; log `counter-fallback version=<UV>`; prints nothing; on to rule 2. This is how "never a version newer than the root's" is kept without comparing versions in cmd: the counter restores only away from the version `unconfirmed.txt` names, and only a forward apply writes that file, naming a version it installed over the one it moved into `previous/` |
+| At `n` = 3 (iii) | else → message `UPD-LAUNCH-NOTHING-TO-RESTORE`, log `counter-stop reason=nothing-to-restore version=<UV> code=UPD-LAUNCH-NOTHING-TO-RESTORE`, on to rule 2 |
+| Pause | cmd: `pause` after `UPD-LAUNCH-NOTHING-TO-RESTORE` and after `UPD-LAUNCH-CANT-START`, then on to rule 2 and the start; none after the fall-through (the app that starts next offers "Continue the update"); the bash files never wait (Terminal keeps its window) (owner 2026-11-24, Δ-31) |
+
+**Rule 2** (frozen): the root has no artifact of this system and `updates/previous/` holds one or more:
+the one to restore is the only one, or, with two or more, the only one whose name does not carry
+`unconfirmed.txt`'s version; none chosen → no restore. It is moved to the root (`move /y`, judged by
+`if exist` on source and target); if the move fails (a read-only drive mid-swap), the start file starts
+it where it lies in `updates/previous/`, with `HILBERTRAUM_DRIVE_ROOT` and `HILBERTRAUM_MANIFESTS_DIR`
+set as for a root start (W-7 (d0)). Log `launcher-restore` or `launcher-restore-in-place`. It prints
+nothing and writes no `last-result.txt` line (later start files write `restored`, W-7).
+
+**Rule 3** (frozen): two or more root artifacts of this system → today's #235 refusal, unchanged, then
+two added lines (UX-20, below), `pause` (as today), exit 1; log `launcher-two-apps`.
+
+**The lines release 1's start files print** (table B.7). ASCII English, two spaces of indent, at most
+76 characters per line, no `(`, `)`, `&`, `|`, `<`, `>`, `^`, `%`, `!` or `"` (so a line is safe inside a
+cmd block), an empty line before and after each message, each message ending with
+`See READ ME FIRST.txt on the drive.`; the same text in all three files; English only, with the
+German steps in `READ ME FIRST.txt`'s UPDATES block (T7.D) (owner 2026-11-24, Δ-31; C10).
+
+| Code (logged) | When | Exact lines |
+|---|---|---|
+| `UPD-LAUNCH-FALLTHROUGH` | rule 1 fell through | `  The update in progress could not continue from here.`<br>`  Your workspace is unchanged. See READ ME FIRST.txt on the drive.` |
+| `UPD-LAUNCH-NOTHING-TO-RESTORE` | counter (iii) | `  HilbertRaum did not open properly after three tries, and no earlier`<br>`  version on this drive can be started instead.`<br>`  Your workspace is unchanged. See READ ME FIRST.txt on the drive.` |
+| `UPD-LAUNCH-CANT-START` | counter (i) | `  This version of HilbertRaum did not open properly after three tries,`<br>`  but it has opened before. Use the computer where it opened.`<br>`  Your workspace is unchanged. See READ ME FIRST.txt on the drive.` |
+| (no code) | rule 3, after today's refusal text | `  If this appeared after an update, do not delete anything yet.`<br>`  See READ ME FIRST.txt on the drive.` |
+| (no code) | `/check`, after today's `  App        : …` line | `  Update log :` followed by `updates/update.log` verbatim (cmd `type`, bash `cat`), or `  Update log : none on this drive` |
+
+Every other line the three files print is today's text at `95e05214`, unchanged (`Start HilbertRaum.cmd`
+`:35-39`, `:47-54`, `:62-68`; the `.command` `:53-57`, `:66-76`, `:81-91`, `:100-103`, `:129`,
+`:140-150`, `:156-160`, `:179-188`, `:207-211`, `:222-226`, `:240-244`; `start-hilbertraum.sh` `:36-39`,
+`:46-55`, `:60-66`).
+
+### 5.7 Confirmation and the offers at a start (table B.8; F-22, F-19)
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| When an app confirms | when its first window shows ("window up", not the process start), per system, before anything else changes (W-26) | F-22 | R1 (T7.5a) |
+| `applying/` exists | nothing recorded: no `confirmed/` file, no count reset, no `drive-release.json` write; "Continue the update" is offered | F-22 (PA-241) | R1 |
+| `unconfirmed.txt` names this app's version `V` | create `updates/confirmed/V-<os>` (empty); delete `updates/launch-count.txt` and every `updates/launch-count-*.txt`; when every system with a root artifact has its `confirmed/V-<that os>`, delete `unconfirmed.txt`; when this start created `confirmed/V-<os>` newly, show `UPD-UPDATED` once | F-22, W-26 (C-6) | R1 |
+| `unconfirmed.txt` names a version at no root | delete it and `launch-count.txt` (stale; a root `*.app` carries no version here). A damaged `unconfirmed.txt` (no valid first line) is deleted the same way | F-22 | R1 |
+| Which systems "have a root artifact" | by R1's root globs: `win32` `HilbertRaum-*-portable.exe`; `darwin` a `*.app` folder or `HilbertRaum-*-mac-arm64.app.zip`; `linux` `HilbertRaum-*.AppImage` | F-18 | R1 |
+| A write that fails | nothing changes; the next start tries again | F-22 | R1 |
+| R1 and `drive-release.json` | R1 never writes it, so R1's confirmation writes no `app_version` (F-13); a later version writes it after its own confirmation (§6.9) | F-13 | R1 |
+| "Restart and update" offered | a staged update (table A: `staged.json` and every listed file present) whose version passes F-4 for the running version, is not named by the last valid `last-result.txt` line with a code outside `applied`, `cleared`, while `updates/applying/` is absent | F-19, W-51 | R1 |
+| A re-import clears the mark | when a commit stages version `v` (table A) and the last valid `last-result.txt` line names `v` with a code outside `applied`, `cleared`, R1 appends `cleared <v> <token>` (the plan's "clears that version's mark" in a file nothing deletes; the model writes the same line) | W-5, F-20 | R1 |
+| An import while `applying/` exists | refused before the file is read: `UPD-IN-PROGRESS`, with "Continue the update" offered | F-5, F-19 | R1 |
+| Older than the drive | a root artifact of this system whose name carries a version newer than the running one (F-4 order; a root `*.app` never counts) → `UPD-OLDER-THAN-DRIVE` with Quit as the action, writing nothing; checked at a drive-aware start before `ensureWorkspaceDirs` and `workspace.init()`, on `second-instance`, on `activate` and before unlock | F-19, W-51 | R1 |
+| One notice at a time | priority: a hand-off or apply failure (`helper-blocked`, `io-error`, `timeout`) > an outcome (`fallback`, `blocked`, `restored`, `incomplete`, `went-back`, an unknown code) > an offer ("Continue the update", "Restart and update", older than the drive) > a reminder (G-37 (a)) | W-51 (a) | R1 |
+
+### 5.8 Outcome codes and reference codes (table B.9; F-20, G-37)
+
+**`last-result.txt` codes.** The version field is always the apply's own version (`handoff.txt`'s
+`version`), also for `fallback` and `went-back`, so "don't offer again" names the version that failed or
+was left.
+
+| Code | Writer | Release 1 shows | Offer again? |
+|---|---|---|---|
+| `applied` | a forward apply, in J5 | nothing (the new version shows `UPD-UPDATED` at its confirmation) | yes (success) |
+| `cleared` | R1's app, at a re-import of a marked version (§5.7) | nothing | yes (success) |
+| `fallback` | a later version's fallback apply (J5); R1's counter fallback (§5.6) | `UPD-FALLBACK`; `UPD-FALLBACK-AGAIN` when the `fallback` and `blocked` lines naming that version number two or more in the 65,536 bytes R1 reads (F-20) | no |
+| `went-back` | a reverse ("Go back") apply, in J5 | `UPD-WENT-BACK` | no |
+| `incomplete` | a forward apply (T-refused) | `UPD-INCOMPLETE` | no |
+| `timeout` | an apply whose wait ran out (not terminal) | `UPD-TIMEOUT` | no |
+| `io-error` | an apply after its rollback (T-io-error) | `UPD-IO-ERROR` | no |
+| `helper-blocked` | R1's app (a failed spawn, no acknowledgement, the `finish-3` cap) | `UPD-HELPER-BLOCKED`, with "Continue the update" labelled "Try again on this computer" while `applying/` exists | no |
+| `blocked` | a later start file, when starting the app returns access-denied or a code-integrity error | `UPD-BLOCKED` | no |
+| `restored` | a later start file's rule 2 after a confirmed update | `UPD-RESTORED` | no |
+| any other code | a later writer | `UPD-UNKNOWN-RESULT` (the generic copy with `{code}`) | no |
+
+**Reference codes** (G-37 (a), W-51 (b)). Each frozen update message has one code, never reused for
+another message: `UPD-` followed by upper-case words of `[A-Z0-9]` joined by `-`, at most 32 characters.
+The app shows it as the muted last line "Reference: UPD-…" inside "Details for support"; `update.log`
+records it as `code=UPD-…`; the project page has one anchor per code. Each message has two copy keys,
+`<prefix>.text` (the message) and `<prefix>.help` (its in-app "What you can do" paragraph, G-37 (c));
+their texts are copy deck part 2's (T1.10; the English sources of the outcome codes are in the plan's
+working papers). The start files' three codes have no copy key: their text is §5.6's.
+
+| Code | Message | Copy key prefix |
+|---|---|---|
+| `UPD-UPDATED` | "Updated to version {n}", once, at the confirmation | `updates.outcome.updated` |
+| `UPD-FALLBACK` | the new version didn't start; the previous one is back; "Try again" | `updates.outcome.fallback` |
+| `UPD-FALLBACK-AGAIN` | the second `fallback` of one version: security settings may be the cause | `updates.outcome.fallbackAgain` |
+| `UPD-WENT-BACK` | back on the version the user chose | `updates.outcome.wentBack` |
+| `UPD-INCOMPLETE` | the update file lacks a system this drive carries | `updates.outcome.incomplete` |
+| `UPD-TIMEOUT` | the previous version didn't close in time | `updates.outcome.timeout` |
+| `UPD-IO-ERROR` | the drive couldn't be written during the update | `updates.outcome.ioError` |
+| `UPD-HELPER-BLOCKED` | the update couldn't start on this computer | `updates.outcome.helperBlocked` |
+| `UPD-BLOCKED` | this computer's security settings stopped the new version | `updates.outcome.blocked` |
+| `UPD-RESTORED` | the newer version's files were missing; the previous version started | `updates.outcome.restored` |
+| `UPD-UNKNOWN-RESULT` | the last update attempt didn't finish (code `{code}`) | `updates.outcome.unknownResult` |
+| `UPD-RESTART` | the restart dialog (what happens, how long, don't unplug) | `updates.restart.dialog` |
+| `UPD-RESTART-TASK-RUNNING` | text recognition or a translation is running or waiting | `updates.restart.taskRunning` |
+| `UPD-RESTART-UNSAVED` | changes that couldn't be saved | `updates.restart.unsaved` |
+| `UPD-FILE-DAMAGED-ON-DRIVE` | the re-hash before the restart refused the staged update | `updates.restart.damagedOnDrive` |
+| `UPD-NOT-DRIVE-APP` | this copy isn't the drive's app: start HilbertRaum on the drive to install this update (§5.4) | `updates.restart.notDriveApp` |
+| `UPD-DRIVE-READ-ONLY` | the drive can't be written (pre-check at the import and the restart) | `updates.drive.readOnly` |
+| `UPD-DRIVE-FULL` | the drive is full (pre-check at the import and the restart) | `updates.drive.full` |
+| `UPD-READY` | a staged update: "Restart and update" and "Don't install this update" | `updates.offer.ready` |
+| `UPD-CONTINUE` | an update in progress: "Continue the update" | `updates.offer.continue` |
+| `UPD-IN-PROGRESS` | an import while an update is in progress | `updates.import.inProgress` |
+| `UPD-OLDER-THAN-DRIVE` | this drive was updated to version {n}; start it on the drive | `updates.offer.olderThanDrive` |
+| `UPD-POLICY-MANAGED` | updates are managed by your organization | `updates.policy.managed` |
+| `UPD-POLICY-INVALID` | the update policy on this drive has an invalid value | `updates.policy.invalid` |
+| `UPD-POLICY-UNREADABLE` | the policy file is unreadable (the import stays allowed) | `updates.policy.unreadable` |
+| `UPD-NOT-AN-UPDATE` | not an update file | `updates.import.notAnUpdate` |
+| `UPD-NOT-GENUINE` | the signature doesn't verify | `updates.import.notGenuine` |
+| `UPD-TOO-NEW` | `UpdateTooNew`: a newer format or container, over a cap, the `HRUPDATE` prefix (§2.3, §4) | `updates.import.tooNew` |
+| `UPD-UNKNOWN-SIGNER` | signed with a newer key: install the in-between update first | `updates.import.unknownSigner` |
+| `UPD-NEEDS-IN-BETWEEN` | `min_upgrade_from` above the running version | `updates.import.needsInBetween` |
+| `UPD-SAME-OR-OLDER` | the same or an older version than this one, or below the drive's version (F-4) | `updates.import.sameOrOlder` |
+| `UPD-ABOVE-MAX-VERSION` | above `updates.max_version` | `updates.import.aboveMaxVersion` |
+| `UPD-OS-TOO-OLD` | this computer is below the update's OS floor (G-24) | `updates.import.osTooOld` |
+| `UPD-WRONG-CHANNEL` | not a release for this drive (G-22) | `updates.import.wrongChannel` |
+| `UPD-FOR-NEWER-HILBERTRAUM` | a signed HilbertRaum file of another kind (G-30) | `updates.import.forNewerHilbertRaum` |
+| `UPD-DOWNLOAD-INCOMPLETE` | the file ends before a listed member (F-16) | `updates.import.downloadIncomplete` |
+| `UPD-FILE-DAMAGED` | the file's container or a member's hash doesn't match its signed list (§4.7) | `updates.import.damaged` |
+| `UPD-FILE-TOO-BIG-FOR-DRIVE` | the drive can't hold a file this large (`EFBIG`: FAT32 and a member of 4 GiB or more) | `updates.import.fileTooBigForDrive` |
+| `UPD-NO-HELPER` | no apply script for this system in the file | `updates.import.noHelper` |
+| `UPD-NOT-AVAILABLE` | updates are not available in this build (an empty key set) | `updates.import.notAvailable` |
+| `UPD-NOT-A-DRIVE` | this copy isn't running from a prepared drive (F-21) | `updates.import.notADrive` |
+| `UPD-MAC-CACHE-COPY` | the macOS copy started from its cache: start HilbertRaum on the drive (F-21) | `updates.import.macCacheCopy` |
+| `UPD-OLD-FILE` | the 12-month confirmation (`issued`) | `updates.import.oldFile` |
+| `UPD-ISSUED-IN-FUTURE` | the warning for an `issued` date in the future | `updates.import.issuedInFuture` |
+| `UPD-OTHER-SYSTEM-FLOOR` | the warning about the drive's other systems' OS floors | `updates.import.otherSystemFloor` |
+| `UPD-AGE-REMINDER` | the age reminder (G-29) | `updates.reminder.age` |
+| `UPD-SUPPORT-ENDED` | the end-of-support notice | `updates.reminder.supportEnded` |
+| `UPD-SUPPORT-ENDED-LONG-AGO` | the reworded notice past `max(build date, support end)` + 3 years | `updates.reminder.supportEndedLongAgo` |
+| `UPD-LAUNCH-FALLTHROUGH` | start file: rule 1 fell through (§5.6) | — |
+| `UPD-LAUNCH-NOTHING-TO-RESTORE` | start file: the counter may not restore (§5.6) | — |
+| `UPD-LAUNCH-CANT-START` | start file: the counter found a confirmation (§5.6) | — |
+
+The import verdicts come from table A (§4.7). A later revision of the record may add codes, never
+rename or reuse one.
+
+### 5.9 "Copy details for support" (table B.10; F-14, W-16)
+
+The copied text, frozen in release 1: ASCII English, LF, the first line `HilbertRaum support details`,
+then one `<label>: <value>` line per field in this order; no path, no host or user name. It is run
+through the log redaction, and a row asserts it comes back unchanged (W-16).
+
+| Label | Value |
+|---|---|
+| `Reference` | the `UPD-*` code of the notice the button sits on, else `none` |
+| `App version` | the running version |
+| `System` | `<os> <process.getSystemVersion()> <process.arch>` |
+| `Apps on the drive` | `<os>=<version>` for each root artifact (R1's globs, §5.7), joined by `, `; a root `*.app` is `darwin=unknown`; none: `none` |
+| `Start files` | `Start HilbertRaum.cmd=<s>, Start HilbertRaum.command=<s>, start-hilbertraum.sh=<s>, READ ME FIRST.txt=<s>`, `<s>` = `same`, `different` or `missing` against the payload of `updates/applied/<running version>.dsse.json`, or `not checked` when that file is absent |
+| `Drive release record` | `drive-release.json`'s `app_version`, `absent` or `unreadable` |
+| `Support end` | `config/kit-support.txt`'s `YYYY-MM`, `absent` or `unreadable` |
+| `Update policy` | `allowed`, `managed`, `max <version>`, `invalid value` or `unreadable` |
+| `Staged update` | the staged version or `none` |
+| `Update in progress` | `no`, or `yes version=<v> launches=<0-3> hand-offs=<0-3> started=<yes or no>` (from `handoff.txt`, `launch-<n>`, `finish-<n>`, `started`) |
+| `Unconfirmed` | `unconfirmed.txt`'s version, `damaged` or `none` |
+| `Last update results` | `none`, or the last 3 valid `last-result.txt` lines, each on its own line indented by two spaces |
+| `Update log (last 40 lines)` | `none`, or the last 40 lines of `update.log`, each indented by two spaces |
+| `Free space` | decimal bytes, then ` bytes` |
+| `Drive writable` | `yes` or `no` (§5.4's probe) |
+
+### 5.10 Other values the protocol tables name (table B.11)
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| The build-date file | `apps/desktop/src/main/services/updates/build-date.json`, beside `keys.json`; generated by the build, never committed (git-ignored); one JSON object `{"commit_date":"<YYYY-MM-DDTHH:MM:SSZ>"}`, the release commit's committer date in UTC; embedded into the main bundle at build time, and the release guard checks the packed value against the tag (§2.7). Read only by the build that carries it; a later version may change its own. Missing or malformed: the age reminder and the support notices stay silent | W-17, W-3 | R1 (its own reading) |
+| `drive-release.json`, the reader's types | UTF-8 JSON, one leading byte-order mark removed, one object, at most 65,536 bytes (larger = malformed = absent); `app_version` a SemVer string, else absent; `format` an integer ≥ 1, logged only, else ignored; `highest_version_seen` a SemVer string, reserved (§8.5); every other field, `systems` and `files[]` included, never read by R1 | F-13 | R1 |
+| `drive-release.json`, every writer | UTF-8 without a byte-order mark, LF; unknown fields kept; `app_version` as §8.5 says | F-13 | R1 (later writers keep it) |
+
+### 5.11 Cases the tables were checked against
+
+- **A first start that shows nothing for ~46 s** (S-P1-13; 39 to 70 s measured, T1.11 C-7) during which
+  the buyer double-clicks one to three times. During vB's first start R1's start files are in
+  `previous/` (the apply replaced them before it started vB, CE-1), and the apply's own start is not a
+  start-file start, so R1's counter never sees it. Later start files skip a start while one is in
+  flight (W-7 (d)); a fallback armed anyway re-reads the confirmation after its wait and aborts
+  (T-aborted, W-21 duty 5, CE-D1); the confirmation comes at window up. R1's own counter meets such a
+  start only when R1's start files sit at the root while `unconfirmed.txt` names the version at the root,
+  that is after a forward apply that could not replace them; there its Windows in-flight probe decides
+  (**OPEN (T1.11 S1-2, spike 1b)**), and on macOS and Linux release 1 has no probe (CC-20), a recorded
+  residual of that rare state.
+- **Both stub builds** (today's per-build `%TEMP%` folder and #1043's per-start one): no table value
+  depends on which one ships. The Windows wait is the rename (spike 1: both builds); `budget 30` covers
+  both; spike 1b measures the in-flight probe on both.
+- **The other twin and the other system:** `journal.txt` holds no system-specific value; every move is
+  by version; `os` and `boot` (±300 s) only gate the wait; `LC_ALL=C` and `TZ=UTC` before `ps`; cmd
+  ignores the bash lock and bash the cmd one; both read CR LF and LF.
+- **A version from 2035** meeting release 1's files: every file R1 writes (`handoff.txt`, `finish-<n>`,
+  `launch-<n>`, `launch-count.txt`, its `last-result.txt` lines, `last-result.seen`,
+  `confirmed/<v>-<os>`) has a grammar here; every R1 reader ignores unknown keys, fields and lines and
+  maps an unknown code to the generic notice (G0, §5.8); R1's rewrite of `handoff.txt` keeps the keys it
+  does not know.
+- **The staged name** (S-P1-14): table A (§4).
+
+### 5.12 Owner decisions and open values of table B
+
+Decided by the owner on 2026-11-24 (ledger Δ-31), each as recommended:
+1. **The running app is not a root artifact** (T1.11 S10-1): "Restart and update" and "Continue the
+   update" are refused before the lock with `UPD-NOT-DRIVE-APP`; the import and the staging stay allowed
+   (§5.4). The alternative, handing off anyway, would end in a state nobody tested, on a frozen path.
+2. **The counter messages wait for a key** on Windows (`pause`); the fall-through does not; bash never
+   waits (§5.6). On Windows these lines are the whole UI of that state (UX-18).
+3. **English only** in the start files; `READ ME FIRST.txt`'s UPDATES block (T7.D) carries the steps in
+   English and German (§5.6, C10).
+
+Open (T1.11): F-7 (d)'s Windows probe, `OPEN (T1.11 S1-2, spike 1b)`; the cmd self-delete form and R1's
+reliance on it, `OPEN (T1.11 S10-2, spike 10b)`. The bash hand-off and the bash rule 1 are pending spike
+4a (T1.6) and P11a's spike 3.
 
 ---
 
@@ -874,7 +1491,8 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
 - append-only ASCII lines; every line starts with a writer token (`r1-app`, `r1-launcher`, `lb`,
   `apply-<version>`) and an OS token; a line written by `cmd` carries the raw `%date% %time%` as an opaque
   field and may carry no ISO time (both are formatted by the locale, and `wmic` is gone from current
-  Windows 11);
+  Windows 11). The OS tokens, the line frame and the time field: §5.3 (table B.2); the events of the
+  hand-off, the apply and the start files: §5.4–§5.6;
 - **content-free by grammar**: tokens, versions, codes and counts; no free text, no placeholders, no
   paths. The app's writer reports an error as its errno code and bare system call, never a message. The
   redaction of `app.log` (#975) covers `app.log` only on its way out of the app, never this file, which
@@ -901,7 +1519,8 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
   ("unreadable" included); the staged version; `updates/applying/` with its launch and hand-off counts
   and its start acknowledgment; `unconfirmed.txt`; the last 3 lines of `last-result.txt`; the last 40
   lines of `update.log`; the free space; whether the drive is writable. No paths. A row still runs the
-  copied text through the log redaction and asserts it comes back unchanged.
+  copied text through the log redaction and asserts it comes back unchanged. The exact labels, values
+  and order: §5.9 (table B.10).
 - A persistent "Last update attempt" line (the outcome and the version) in Settings → Updates and on the
   unlock screen.
 - It sits beside a named support contact (the Kit's support address on the project page and the
@@ -917,7 +1536,7 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
 - The app shows the date only when the file is present; a DIY drive shows only the age reminder.
 - **The build date** has one source: the release commit's committer date, written at build time into a
   generated JSON beside `keys.json` and pinned by the release guard (§2.7); never a file's modification
-  time, which a copy to exFAT resets.
+  time, which a copy to exFAT resets. Its name and shape: §5.10 (table B.11).
 - **The age reminder**: offline, 6 months after the build date; a dismissal hides it for 6 months, then
   it shows again; on Home and in Settings → Updates (G-29 (a)). It says that newer versions, if there
   are any, are listed at the update address. The page answers "you're up to date" where the Kit's line
@@ -939,7 +1558,7 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
   bump never stops release 1; a breaking layout takes a new file name;
 - `highest_version_seen` is a reserved name release 1 does not act on;
 - an absent file or field means no constraint; a malformed file, 0 bytes or a wrong-typed field counts
-  as absent and is logged;
+  as absent and is logged (the field types, the byte-order mark and the size limit: §5.10, table B.11);
 - release 1 never writes the file.
 
 **What every writer keeps:**
@@ -1297,7 +1916,27 @@ subsection at the end of its section, never by renumbering.
 | §2 | trust: the keys and their custody, the envelope, the payload, the version rule, the channel, the release guard, the key proof, the fork rule |
 | §3 | finding and importing an update: no online check, the addresses, the entry points, the locked channels, the refusals before reading |
 | §4 | staging and the update file container (protocol table A) |
+| §4.1 | how to read table A, and why its caps are set for a 2035 file |
+| §4.2 | table A.1: the staging names |
+| §4.3 | table A.2: the container (the ustar subset, the `HRUPDATE` prefix, member 0, the `payloadType`, the caps, the end, the header walk) |
+| §4.4 | table A.3: the member-name rule (F-18) and the root globs release 1 reads |
+| §4.5 | table A.4: staging (the order, the free-space formula, the reads, the `.incoming-<v>` folder, the commit, the sweep, the removals) |
+| §4.6 | table A.5: the grammars of `staged.txt` and `staged.json` |
+| §4.7 | table A.6: the verdicts of the container and of staging, with their codes |
+| §4.8 | the cases table A was checked against |
 | §5 | the hand-off, the apply script, the start files, "Continue the update", the outcome codes and notices (protocol table B) |
+| §5.1 | how to read table B: "frozen since", the system, version and token spellings, the common text rules G0 |
+| §5.2 | table B.1: every file and folder name of the hand-off, the apply and the start files |
+| §5.3 | table B.2: the grammars of `handoff.txt`, `journal.txt`, `unconfirmed.txt`, `launch-count.txt`, `last-result.txt`, `last-result.seen`, and the `update.log` line frame |
+| §5.4 | table B.3: the hand-off (order, pre-check, the spawn per system, the environment, failed-spawn classes, the start acknowledgement, `budget`, "Continue the update") |
+| §5.5 | table B.4 and B.5: the apply script (lock, wait, move order, the new app's start, the CE-1 rule, cmd and bash rules) and the journal states |
+| §5.6 | table B.6 and B.7: the start files (rule 1's exact text, the fall-through, the counter, rules 2 and 3) and every line they print |
+| §5.7 | table B.8: the confirmation (F-22) and the offers at a start (F-19) |
+| §5.8 | table B.9: the `last-result.txt` codes and the `UPD-*` reference codes with their copy keys |
+| §5.9 | table B.10: the "Copy details for support" fields |
+| §5.10 | table B.11: the build-date file and the `drive-release.json` reader's types |
+| §5.11 | the cases table B was checked against |
+| §5.12 | table B's owner calls and open values |
 | §6 | drive content, AI engines, the first start after an update, "Go back" |
 | §7 | the workspace guards, the last-writer stamp, the later-writer duties, the migration framework |
 | §8 | the policy keys, `update.log`, the support details, the support end and age, `drive-release.json`, the audit events, the pins |
