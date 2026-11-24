@@ -7,28 +7,34 @@
 //
 //   node scripts/release/golden-descriptors.mjs --tag <tag> [--tag …] [--out <dir>] [--work <scratch dir>] [--keep]
 //
-// The tag's sources come from scripts/release/snapshot-readers.mjs (`git archive`, read-only) and are bundled the same
-// way, by this checkout's vite in library mode, with ONE difference: the vault code's key derivation imports
-// `@noble/hashes` (every published tag does), and that one package is resolved from THIS checkout's installed copy, by
-// its absolute path under <repo>/node_modules, never from anywhere else (the orchestrator's decision in T2.8: the tags
-// pin 2.2.0 up to v0.1.62 and 2.4.0 from v0.1.63; Argon2id is a fixed standard, pinned by crypto.test.ts's
-// known-answer row). Any other import that is not `node:*` fails the run. Each printed line records the tag's own pin.
+// The tag's sources come from scripts/release/snapshot-readers.mjs (`git archive`, read-only) and are bundled by its
+// one build (`bundleCjs`: apps/desktop's vite in library mode, the #646 check, every module inside the tag's tree),
+// with ONE difference: the vault code's key derivation imports `@noble/hashes` (every published tag does), and that one
+// package is resolved from THIS checkout's installed copy, by its absolute path under <repo>/node_modules, never from
+// anywhere else (the orchestrator's decision in T2.8: the tags pin 2.2.0 up to v0.1.62 and 2.4.0 from v0.1.63). A tag
+// whose pin is another major version than the installed one is refused. Any other import that is not `node:*` fails
+// the run. Each printed line records the tag's own pin.
+//
+// Before a descriptor is kept, its verifier and its data key must open under node:crypto's own Argon2id
+// (`argon2Sync`, Node 24.7 or later; no @noble/hashes involved), with the parameters the descriptor records: a stand-in
+// package that derived another key cannot write a golden (review R-3).
 //
 // A descriptor holds a random salt and a random data key, so a rerun never reproduces a committed file: an existing
 // output file is kept, never overwritten (`v0.1.50-workspace.json` and `v0.1.65-workspace.json` predate this script).
 // The files are read by tests/integration/workspace-vault-format-guard.test.ts (one row each) and locked by
 // apps/desktop/tests/fixtures/golden-fixtures.sha256; their provenance is tests/fixtures/vault-golden/PROVENANCE.md.
+// The gates are tested by apps/desktop/tests/integration/release-scripts.test.ts.
 //
-// Exit codes: 0 ok · 1 a tag failed (its code, its bundle, or a changed descriptor) · 2 usage error.
+// Exit codes: 0 ok · 1 a tag failed (its code, its bundle, its key derivation, or a changed descriptor) · 2 usage error.
 
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import * as nodeCrypto from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { REPO_ROOT, SnapshotError, exportTag, foreignImportsIn } from './snapshot-readers.mjs'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { REPO_ROOT, SnapshotError, bundleCjs, checkTagName, exportTag, foreignImportsIn } from './snapshot-readers.mjs'
 
 const GENERATOR = 'scripts/release/golden-descriptors.mjs'
 const DEFAULT_OUT = 'apps/desktop/tests/fixtures/vault-golden'
@@ -84,68 +90,64 @@ function installedPackage() {
   return pin
 }
 
-/** `@noble/hashes/<subpath>` through Node's own resolver; any file outside PACKAGE_DIR is refused. */
+/** `@noble/hashes/<subpath>` by the package's own `exports` map, under PACKAGE_DIR; any file outside it is refused. */
 function packageFile(specifier) {
-  const file = fileURLToPath(import.meta.resolve(specifier))
-  const rel = relative(PACKAGE_DIR, file)
+  const subpath = specifier === PACKAGE ? '.' : `./${specifier.slice(PACKAGE.length + 1)}`
+  const exported = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8')).exports?.[subpath]
+  const target = typeof exported === 'string' ? exported : (exported?.import ?? exported?.default)
+  if (typeof target !== 'string') throw new SnapshotError(`${specifier}: ${PACKAGE} exports no ${subpath}`)
+  const file = realpathSync.native(join(PACKAGE_DIR, target))
+  const rel = relative(realpathSync.native(PACKAGE_DIR), file)
   if (rel.startsWith('..') || isAbsolute(rel)) throw new SnapshotError(`${specifier} resolved outside ${PACKAGE_DIR}: ${file}`)
   return file
 }
 
-/** The driver and the tag's vault code in one CommonJS file: snapshot-readers.mjs's build, with one package allowed. */
-async function bundleCapture(tag, tree) {
-  const { build } = await import('vite')
-  const foreign = []
-  const resolver = {
-    name: 'hilbertraum:node-builtins-and-noble-only',
-    enforce: 'pre',
-    resolveId(source, importer) {
-      if (source.startsWith('node:')) return { id: source, external: true }
-      if (importer === undefined || source.startsWith('\0')) return null // the entry itself; vite's virtual modules
-      if (source.startsWith('.') || isAbsolute(source)) return null // the tag's own files, and the package's own
-      if (source === PACKAGE || source.startsWith(`${PACKAGE}/`)) return packageFile(source)
-      foreign.push(`${source} (imported by ${relative(tree, importer).split(sep).join('/')})`)
-      return { id: source, external: true } // kept external so the build lists them all; the run fails below
-    }
-  }
-  const entry = join(tree, 'apps', 'desktop', 'src', 'golden-capture.ts')
-  writeFileSync(entry, DRIVER)
-  const result = await build({
-    configFile: false,
-    root: tree,
-    envDir: tree,
-    cacheDir: join(tree, '.vite-cache'),
-    publicDir: false,
-    mode: 'production',
-    logLevel: 'warn',
-    plugins: [resolver],
-    build: {
-      write: false,
-      outDir: join(tree, '.snapshot-out'),
-      emptyOutDir: false,
-      copyPublicDir: false,
-      reportCompressedSize: false,
-      target: 'node22',
-      minify: false,
-      sourcemap: false,
-      lib: { entry, formats: ['cjs'], fileName: () => 'golden-capture.cjs' },
-      rollupOptions: { output: { exports: 'named', inlineDynamicImports: true } }
-    }
-  })
-  const outputs = [result].flat().flatMap((r) => r.output)
-  if (outputs.length !== 1 || outputs[0].type !== 'chunk') throw new SnapshotError(`${tag}: expected one chunk`)
-  const bad = foreign.length > 0 ? foreign : foreignImportsIn(outputs[0].code, outputs[0])
-  if (bad.length > 0) throw new SnapshotError(`${tag}'s vault code needs more than node:* and ${PACKAGE}: ${bad.join('; ')}`)
+/** The driver and the tag's vault code in one CommonJS file: the recipe's build, with that one package allowed. */
+export async function bundleCapture(tag, tree) {
+  writeFileSync(join(tree, 'apps', 'desktop', 'src', 'golden-capture.ts'), DRIVER)
+  const resolveBare = (source) => (source === PACKAGE || source.startsWith(`${PACKAGE}/`) ? packageFile(source) : null)
+  const { chunk, foreign } = await bundleCjs({ tree, entry: 'apps/desktop/src/golden-capture.ts', fileName: 'golden-capture.cjs', resolveBare, roots: [PACKAGE_DIR] })
+  const bad = [...foreign, ...foreignImportsIn(chunk.code, chunk)]
+  if (bad.length > 0) throw new SnapshotError(`${tag}'s vault code needs more than node:* and ${PACKAGE}: ${[...new Set(bad)].join('; ')}`)
   const file = join(tree, 'golden-capture.cjs')
-  writeFileSync(file, outputs[0].code)
+  writeFileSync(file, chunk.code)
   return file
 }
 
-/** One descriptor from `tag`'s own code, checked for the shape every published release writes. */
-async function captureDescriptor(tag, work) {
-  if (NEVER_PUBLISHED.has(tag)) throw new SnapshotError(`${tag} was never published: no descriptor of its own to keep`)
-  const { tree, commit } = exportTag(tag, work)
-  const pin = lockedPin(git(['show', `${commit}:package-lock.json`]), tag)
+/** The descriptor's verifier and data key, opened with node:crypto's own Argon2id and AES-256-GCM (review R-3). */
+function openWithNodeArgon2(tag, d, password) {
+  if (typeof nodeCrypto.argon2Sync !== 'function') {
+    throw new SnapshotError(`node:crypto has no argon2Sync on Node ${process.version} (24.7 or later): the key derivation cannot be checked`)
+  }
+  const kek = nodeCrypto.argon2Sync('argon2id', {
+    message: Buffer.from(password, 'utf8'),
+    nonce: Buffer.from(d.saltB64, 'base64'),
+    parallelism: d.kdf.p,
+    tagLength: d.kdf.keyLen,
+    memory: d.kdf.m,
+    passes: d.kdf.t
+  })
+  const open = (blob) => {
+    const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', kek, Buffer.from(blob.ivB64, 'base64'))
+    decipher.setAuthTag(Buffer.from(blob.tagB64, 'base64'))
+    return Buffer.concat([decipher.update(Buffer.from(blob.ciphertextB64, 'base64')), decipher.final()])
+  }
+  try {
+    open(d.verifier)
+    if (open(d.dataKey).length !== 32) throw new Error('the data key is not 32 bytes')
+  } catch (err) {
+    throw new SnapshotError(`${tag}'s descriptor does not open under node:crypto's Argon2id with its own kdf block (${err.message})`)
+  } finally {
+    kek.fill(0)
+  }
+}
+
+/** One descriptor from the tag's own code in `tree`, checked for the published shape and its key derivation. */
+export async function captureFromTree({ tag, commit, tree, work, pin }) {
+  const head = installedPackage()
+  if (pin.version.split('.')[0] !== head.version.split('.')[0]) {
+    throw new SnapshotError(`${tag} pins ${PACKAGE} ${pin.version}, another major version than the installed ${head.version}: no stand-in`)
+  }
   const bundle = await bundleCapture(tag, tree)
   const password = `golden-throwaway-${tag}`
   const root = join(work, 'root')
@@ -155,10 +157,19 @@ async function captureDescriptor(tag, work) {
   const d = JSON.parse(bytes.toString('utf8'))
   const kdf = d.kdf ?? {}
   if (d.version !== 2 || d.mode !== 'encrypted' || !d.dataKey || kdf.algo !== 'argon2id' || kdf.m !== 19456 || kdf.t !== 2) {
-    throw new SnapshotError(`${tag} wrote a descriptor of another shape: version ${d.version}, mode ${d.mode}, kdf ${JSON.stringify(kdf)}`)
+    throw new SnapshotError(`${tag} (${commit}) wrote a descriptor of another shape: version ${d.version}, mode ${d.mode}, kdf ${JSON.stringify(kdf)}`)
   }
   if (bytes[0] === 0xef || bytes.includes(0x0d)) throw new SnapshotError(`${tag}'s descriptor starts with a BOM or holds a CR`)
-  return { commit, password, bytes, pin }
+  openWithNodeArgon2(tag, d, password)
+  return { password, bytes, kdfPackage: pin.version === head.version ? `${PACKAGE} ${pin.version}, the tag's pin` : `the tag pins ${PACKAGE} ${pin.version}; ${head.version} stood in` }
+}
+
+/** One descriptor from `tag`'s own code: its sources, its lockfile's pin, then `captureFromTree`. */
+async function captureDescriptor(tag, work) {
+  if (NEVER_PUBLISHED.has(tag)) throw new SnapshotError(`${tag} was never published: no descriptor of its own to keep`)
+  const { tree, commit } = exportTag(tag, work)
+  const pin = lockedPin(git(['show', `${commit}:package-lock.json`]), tag)
+  return { commit, ...(await captureFromTree({ tag, commit, tree, work, pin })) }
 }
 
 function parseArgs(argv) {
@@ -170,7 +181,7 @@ function parseArgs(argv) {
       if (v === undefined) throw new SnapshotError(`${a} needs a value`)
       return v
     }
-    if (a === '--tag') args.tags.push(value())
+    if (a === '--tag') args.tags.push(checkTagName(value()))
     else if (a === '--out') args.out = value()
     else if (a === '--work') args.work = value()
     else if (a === '--keep') args.keep = true
@@ -185,15 +196,16 @@ async function main(argv) {
   try {
     args = parseArgs(argv)
   } catch (err) {
+    if (!(err instanceof SnapshotError)) throw err
     console.error(`${err.message}\nusage: node ${GENERATOR} --tag <tag> [--tag …] [--out <dir>] [--work <dir>] [--keep]`)
     return 2
   }
   const outDir = resolve(REPO_ROOT, args.out)
   if (args.work) mkdirSync(resolve(args.work), { recursive: true })
-  const work = mkdtempSync(join(args.work ? resolve(args.work) : tmpdir(), 'hr-golden-')) // removed below unless --keep
+  // Removed below unless --keep; in the file system's own spelling before anything derives from it (#646).
+  const work = realpathSync.native(mkdtempSync(join(args.work ? resolve(args.work) : tmpdir(), 'hr-golden-')))
   let failed = false
   try {
-    const head = installedPackage()
     mkdirSync(outDir, { recursive: true })
     for (const tag of args.tags) {
       const name = `${tag}-workspace.json`
@@ -202,11 +214,9 @@ async function main(argv) {
         continue
       }
       try {
-        const { commit, password, bytes, pin } = await captureDescriptor(tag, mkdtempSync(join(work, `${tag}-`)))
+        const { commit, password, bytes, kdfPackage } = await captureDescriptor(tag, mkdtempSync(join(work, `${tag}-`)))
         writeFileSync(join(outDir, name), bytes)
-        const sha256 = createHash('sha256').update(bytes).digest('hex')
-        const kdfPackage =
-          pin.version === head.version ? `${PACKAGE} ${pin.version}, the tag's pin` : `the tag pins ${PACKAGE} ${pin.version}; ${head.version} stood in`
+        const sha256 = nodeCrypto.createHash('sha256').update(bytes).digest('hex')
         console.log(`| \`${name}\` | \`${tag}\` | \`${commit}\` | \`${password}\` | \`${sha256}\` | ${kdfPackage} |`)
       } catch (err) {
         if (!(err instanceof SnapshotError)) throw err

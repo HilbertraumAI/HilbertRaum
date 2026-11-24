@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Db } from '../../src/main/services/db'
@@ -29,7 +30,9 @@ function readerSnapshot<T>(tag: string, file: string): T {
 describe('reader snapshots: released readers open what HEAD writes (W-53)', () => {
   it("v0.1.60's openDatabase opens a database HEAD created and reads HEAD's rows", () => {
     const v0160 = readerSnapshot<ReaderV0160>('v0.1.60', 'open-database.cjs')
-    expect(v0160.SCHEMA_VERSION).toBe(1) // the snapshot is the stamp-reading build, not a stand-in
+    // 1 at v0.1.60 (and at HEAD today, so this line does not tell the two apart: that the file is v0.1.60's own code is
+    // the manifest's lock and its provenance).
+    expect(v0160.SCHEMA_VERSION).toBe(1)
     // HEAD's create path for a workspace database (what WorkspaceController's create and plaintext open run).
     const { db, root } = freshWorkspaceDb('reader-snapshots')
     seedSettings(db)
@@ -46,5 +49,34 @@ describe('reader snapshots: released readers open what HEAD writes (W-53)', () =
     } finally {
       old.close()
     }
+  })
+
+  // T2.8 review R-5: v0.1.60's open runs its whole schema and its column list on the file. Reading is not enough: an
+  // index or column HEAD dropped and the old open put back, a changed stamp, or a rewritten row would be a release that
+  // changes a newer workspace just by opening it. So the schema, the stamp and the rows must read the same through the
+  // old open, and the file must not change by one byte.
+  it("v0.1.60's openDatabase leaves HEAD's database as HEAD made it: same schema, stamp and rows, not one byte written", () => {
+    const v0160 = readerSnapshot<ReaderV0160>('v0.1.60', 'open-database.cjs')
+    const { db, root } = freshWorkspaceDb('reader-snapshots-unchanged')
+    seedSettings(db)
+    updateSettings(db, { contextTokens: 8192 })
+    const state = (d: Db): unknown => ({
+      schema: d.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name').all(),
+      stamp: d.prepare('PRAGMA user_version').get(),
+      settings: d.prepare('SELECT key, value_json, updated_at FROM settings ORDER BY key').all()
+    })
+    const made = state(db)
+    db.close()
+    const path = join(root, 'test.sqlite')
+    const bytes = readFileSync(path)
+
+    const old = v0160.openDatabase(path)
+    try {
+      expect(state(old)).toEqual(made)
+      expect(old.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' })
+    } finally {
+      old.close()
+    }
+    expect(readFileSync(path).equals(bytes)).toBe(true)
   })
 })
