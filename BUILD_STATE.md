@@ -28,6 +28,7 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-11-24 — **App-update wave (Phase 22, §5 item 3; integration branch `feat/app-updates`): P1 (spikes and the design record) in progress.** The wave runs on the integration branch, merged into master once, by its final PR; no release before release 1. Design record: [`docs/app-updates.md`](docs/app-updates.md). The working ledger is outside the repo (`tmp/app-update-analysis/`, gitignored)._
 _2026-11-23 — **#1033 (a file hash settles only once the file is closed; branch `fix/1033-hash-settles-on-close`, on `f7f632ce`): in review.** `sha256File` resolved on the read stream's `end`, before the stream had closed its file; under load a folder rename right after the hash met the open file and Windows refused it (EPERM: 1,000 of 1,000 with one pool thread and CPU load, 0 after the fix), the `engine-swap.test.ts` flake. Now an unaborted hash settles on `close`; an abort after the read settles at once with the digest (the #420 rule; the cache stores it, so no second read), and a close that fails after a complete read keeps the digest. Records: architecture.md #420 Trap 1, CHANGELOG. Open: `archive-size.ts` `tarGzListing` resolves before its stream closes (the Linux and macOS tar.gz engines only, where nothing refuses the rename)._
 _2026-11-23 — **#1028 (an engine install marker that is there but damaged no longer turns the pre-spawn check off; PR #1035): merged 2026-11-23 (`f7f632ce`).** One reading for every reader (`readRuntimeMarkerState`): a marker cut short, garbled, with a `binaries` entry that is no SHA-256, or recording files but not the program is the new verdict `marker-damaged`, never cached, with no fallback to the family marker for a `cpu/` net; the engines refuse it as `files-damaged` with "Install again", the sell gate names it, and both `fetch-runtime` twins fetch it again (review round 2: each reads it with its own JSON reader). Owner call 2026-11-23: Q1 (a), the knowledge-pack tools refuse it like a missing file (the repair is outside the app). Records: security-model.md "Re-hash sidecar binaries before spawn", architecture.md "Engine load failures" §14, data-contracts.md (the reading rule, the frozen writer rules), known-limitations.md, troubleshooting.md. Open: plan 06's F-24 split and W-62's marker fixtures (orchestrator); the `binaries`-garble residual._
 _2026-11-23 — **#1024 (a back-end start that throws; PR #1034): merged 2026-11-23 (`6d065598`).** `initBackend` runs through `runBackendStart`: a throw logs its code (no path), drops the channels the partial start registered and registers the failure state, so `getWorkspaceState` answers `start_failed` (a cause + the code) and the gate shows "The app could not start", what helps, the code and "Copy details for support". Review round 1: a masked mkdir errno is read again, a throw after the back end shows an error box and exits, the crash lines log codes. Owner calls 2026-11-23: OQ-1 (b) the copy button, OQ-2 (b) three texts. Records: data-contracts "Start failure (#1024)" (P6: the update registrar takes the narrow failure context), security-model, troubleshooting, known-limitations. Dev app: as designed; the card's text waits two frames. Open: a Narrator listen; Electron's handler swap after a late throw; review. German read done 2026-11-23: texts kept._
@@ -199,8 +200,8 @@ the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble bu
 
 **Phases 0–43: all done.** The per-phase table (43 rows, every one 🟢, each pointing at the design
 record that absorbed it) was retired to [`docs/build-log.md`](docs/build-log.md) on 2026-08-20 —
-it had been a completed-history table for months. Phase 22 (signed offline update bundles) is the
-one exception and is 🔴 blocked on key-management design; it lives in §5 item 3.
+it had been a completed-history table for months. Phase 22 (in-field app updates) is the
+one exception: 🟡 in progress on the integration branch `feat/app-updates` (§5 item 3).
 
 What each phase built is in the topic docs' §-numbered design records
 ([`docs/architecture.md`](docs/architecture.md) is the index); what it cost and how it went is in
@@ -257,7 +258,7 @@ until 2026-08-20; it was never a project fact, and `package.json` `engines` +
 ## 5. Next actions (do these next) — POST-MVP
 
 **Everything shipped is summarized in §1/§3 and detailed in the design records. What remains:
-manual release acceptance, one blocked phase (22), one drafted phase (30).** In rough priority:
+manual release acceptance, one phase on its branch (22), one drafted phase (30).** In rough priority:
 
 > **Definition of Done (MVP, spec §22 — folded in from the retired `docs/IMPLEMENTATION_PLAN.md`):**
 > app builds on ≥1 OS; architecture supports Win/macOS/Linux; local model chat works; local doc
@@ -345,8 +346,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    RSS are machine-independent).
 3. **Phase 22 — in-field app updates** (spec §12.3): 🟡 **in progress on the integration branch `feat/app-updates`** (owner
    decisions 2026-11-22/23: merged to master once, by its final PR; **deploy stop: no release and no `v*` tag before release 1**,
-   the first version with the updater, tagged on master after that PR). Its design record (`docs/app-updates.md`) and ledger
-   live on the branch; this item is rewritten at the merge. **Release 1 freezes behaviour in these files: ask the owner before
+   the first version with the updater, tagged on master after that PR). Its design record is [`docs/app-updates.md`](docs/app-updates.md); the
+   wave's working ledger is outside the repo; this item is rewritten at the merge. **Release 1 freezes behaviour in these files: ask the owner before
    changing one (each change is synced into the branch).** Under `apps/desktop/src/main/`:
    `services/{workspace-vault,db,policy,drive,commercial-drive,workspace,models,resolve-model,assets,runtime-download}.ts`,
    `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log}.ts`,
@@ -507,7 +508,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       action can't recreate it); never delete it.
     - [ ] **File the known open work as GitHub issues** (good first public-tracker content; then
       add issue cross-references where the Phase-4 readability sweep left plain-language gap
-      descriptions): signed offline update bundles (item 3, blocked on key management) · big slot
+      descriptions): signed offline update bundles (item 3, in progress on `feat/app-updates`) · big slot
       + embeddings (item 4) · PDF→PDF output for redact/edit (item 6, #45) ·
       generic result-tables residuals (architecture.md result-tables record §6: invoice
       `TableSpec` port, derived-column eval, no-skill tabular routing, remaining §5 deferrals) ·
