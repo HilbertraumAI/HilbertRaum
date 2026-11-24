@@ -3044,7 +3044,7 @@ one's behaviour stays owned by the design record named beside it.
 | Benchmark recommendation exists | ✅ Phase 7 |
 | Non-technical demo possible | ✅ documented end-to-end (user-guide.md); live run = manual (R5) |
 | No cloud API | ✅ enforced (offline guard, CSP, deny-by-default policy) |
-| No model weights in git | ✅ `.gitignore` (`models/`, `*.gguf`, `/runtime/`, `release/`) |
+| No model weights in git | ✅ `.gitignore` (`models/`, `*.gguf`, `/runtime/`, `/apps/desktop/release/`, `/release/`; anchored so `scripts/release/` stays tracked, W-81) |
 | README explains DIY | ✅ (+ user-guide + packaging + drive-layout) |
 | Commercial drive layout documented | ✅ drive-layout.md + packaging.md |
 

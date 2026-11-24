@@ -1087,6 +1087,58 @@ describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
   })
 })
 
+// W-81 (app-update plan, T2.8): `.gitignore` had an unanchored `release/`, meant for electron-builder's output
+// (`electron-builder.yml` `directories.output: release`, i.e. apps/desktop/release/). It also ignored every file under
+// scripts/release/ (the update wave's snapshot, payload, signing and check tools) and any fixture folder named release/,
+// so a plain `git add` skipped them and a PR could merge without them. Walking the real folders cannot catch that: git
+// says nothing about a tracked file, and an ignored one never reaches CI. So the row asks git to judge MADE-UP paths by
+// the rules alone (`--no-index`): one per folder the wave commits into, one per trap name its later fixtures carry (a
+// nested release/, the drive marker, and the drive folders whose rules are anchored to the root: a bare `runtime/` once
+// un-tracked the runtime service). The build output must stay ignored, which also proves the judge can see a match.
+// Names the repo ignores everywhere on purpose (`*.log`, `*.db`, `*.sqlite`, `*.bin`, `*.key`, `models/`, `workspace/`,
+// `logs/`, `dist/`, `out/`) are not probed: a fixture avoids them. The verdict includes the box's own excludes, so a red
+// on one box only can name a personal rule (`git check-ignore -v --no-index <path>` says which).
+describe("repo hygiene — no ignore rule drops the update wave's release tools or golden fixtures (W-81)", () => {
+  let inCheckout = false
+  try {
+    inCheckout = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim() === 'true'
+  } catch {
+    inCheckout = false // not a git checkout (e.g. a source tarball) — nothing to judge
+  }
+  /** The probes git's ignore rules match (`--stdin` without `-v`, so a negated rule counts as not ignored). */
+  const ignoredAmong = (probes: string[]): string[] => {
+    try {
+      const input = `${probes.join('\n')}\n`
+      const out = execFileSync('git', ['check-ignore', '--no-index', '--stdin'], { cwd: REPO_ROOT, encoding: 'utf8', input })
+      return out.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+    } catch (err) {
+      if ((err as { status?: number }).status === 1) return [] // exit 1: no probe is ignored; 128 (git refused) rethrows
+      throw err
+    }
+  }
+  const fixtures = 'apps/desktop/tests/fixtures'
+  const notIgnored = [
+    // one per folder
+    'scripts/release/probe.mjs',
+    `${fixtures}/readers/v0.0.0/probe.cjs`,
+    `${fixtures}/updates/vectors/probe.json`,
+    `${fixtures}/workspace-history/v0.0.0/probe.json`,
+    `${fixtures}/vault-golden/v0.0.0-workspace.json`,
+    `${fixtures}/golden-fixtures.sha256`, // the golden-fixture manifest's own path
+    // one per trap name
+    `${fixtures}/readers/set/release/probe.json`,
+    `${fixtures}/readers/set/.hilbertraum-runtime.json`,
+    `${fixtures}/readers/set/runtime/probe.json`,
+    `${fixtures}/readers/set/zim/probe.json`,
+    `${fixtures}/readers/set/ocr/probe.json`,
+    `${fixtures}/readers/set/tmp/probe.json`
+  ]
+  const stayIgnored = ['apps/desktop/release/win-unpacked/HilbertRaum.exe', 'release/HilbertRaum.AppImage']
+  it.skipIf(!inCheckout)('ignores exactly the build output among the probes (scripts/release/ and the fixture folders are tracked)', () => {
+    expect(ignoredAmong([...notIgnored, ...stayIgnored])).toEqual(stayIgnored)
+  })
+})
+
 // #891: the "Use this model" channel is `runtime:use` (IPC.useModel). A "models"-prefixed spelling of it, written by
 // analogy with `models:select` and then copied from comment to comment, sent readers hunting for a channel that does not
 // exist. The frozen archive (docs/build-log.md) keeps retired text verbatim, so it is the one exemption.
