@@ -57,6 +57,7 @@ import {
   verifyKey,
   classifyFrameMagic,
   isKnownKdfAlgo,
+  kdfParamAboveBounds,
   newerFrameError,
   VaultNewerError,
   isVaultNewerError,
@@ -234,10 +235,16 @@ export class VaultOpenFailedError extends Error {
 
 /** What a failure of the unlock's open, or of its own settings writes, is thrown as (#208, #247,
  *  #844): a newer build's database as itself, SQLite's damage verdict as `VaultDamagedError`, and
- *  anything else as `VaultOpenFailedError`. */
-function openFailure(err: unknown): unknown {
+ *  anything else as `VaultOpenFailedError`.
+ *  T2.9 fix round (R1-1): SQLite's damage verdict on the decrypted file at `dbPath` is checked against
+ *  {@link probeDatabaseFile} first: a file it calls `newer` (its header's stamp above this build's) is a newer build's
+ *  database, thrown as `WorkspaceNewerError`. A file format this SQLite refuses (header byte 19, the read version, above
+ *  2) fails the open's first statement with SQLITE_NOTADB before the open reads the stamp, and was called damaged. */
+function openFailure(err: unknown, dbPath: string): unknown {
   if (isWorkspaceNewerError(err)) return err
-  return sqliteJudgedDamaged(err) ? new VaultDamagedError() : new VaultOpenFailedError(err)
+  if (!sqliteJudgedDamaged(err)) return new VaultOpenFailedError(err)
+  const probe = probeDatabaseFile(dbPath)
+  return probe.verdict === 'newer' ? new WorkspaceNewerError(probe.found) : new VaultDamagedError()
 }
 
 /**
@@ -451,7 +458,8 @@ export type VaultDescriptorRead =
  * unreadable and one with `dataKey` as v2, and a password change then rewrote it as v2. A `version` that is a string
  * holding no number (`"3.0.0"`) is `unreadable`: no build wrote one, and read as v1 it had a staged password change
  * discarded. A descriptor of a known version naming a KDF this build does not know is `newer` too (its derive would
- * fail). Anything else keeps the shape rules every shipped build applied, so a descriptor a published release wrote
+ * fail), and (T2.9, R1-6) so is one whose KDF parameters are above this build's bounds under a KDF it knows. Anything
+ * else keeps the shape rules every shipped build applied, so a descriptor a published release wrote
  * reads `ok` exactly as before (tests/fixtures/vault-golden).
  */
 export function readVaultDescriptorChecked(descriptorPath: string): VaultDescriptorRead {
@@ -482,6 +490,11 @@ export function readVaultDescriptorChecked(descriptorPath: string): VaultDescrip
   if (typeof algo === 'string' && !isKnownKdfAlgo(algo)) {
     return { kind: 'newer', what: 'kdf', found: algo.slice(0, 40) }
   }
+  // T2.9 fix round (R1-6): so was a parameter above this build's bounds under a KDF it knows (`kdfParamAboveBounds`).
+  // Read here, by the format verdict at the head of `init()` and of the unlock, so it is refused before the start's
+  // salvage, sweep and rekey recovery and before the unlock's `recoverPendingRekey`, as an unknown `kdf.algo` is.
+  const above = kdfParamAboveBounds(d.kdf)
+  if (above !== null) return { kind: 'newer', what: 'kdf', found: above.slice(0, 40) }
   return { kind: 'ok', descriptor: d }
 }
 
@@ -544,7 +557,8 @@ export type VaultFormatVerdict = { kind: 'ok' } | { kind: 'newer'; what: VaultNe
 
 /**
  * Is any vault artifact in a format a NEWER build wrote (#845)? Read-only, and independent of the password: the
- * descriptor (a numeric `version` above 2, or an unknown `kdf.algo`), the rekey journal (a numeric `version` above 1,
+ * descriptor (a numeric `version` above 2, an unknown `kdf.algo`, or, T2.9 R1-6, KDF parameters above this build's
+ * bounds), the rekey journal (a numeric `version` above 1,
  * whatever the descriptor says: shipped builds roll staged files forward under any v2 descriptor, so a newer build's
  * uncommitted stage would be swapped in under a key that exists nowhere), and the frames of `.enc` and of every staged
  * file a recovery would swap in (`stagedRekeyFiles`: `.enc.new`, `documents/` and `images/` `*.enc.new` by scan, and
@@ -1185,9 +1199,10 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   // (`<id>.tmp` on write, `<id>.read-<pid>.tmp` on read — vision/history.ts). Never touches
   // the stored copies themselves — only the clearly-transient `.parse`/`.tmp` names (the
   // stored image is `<id><ext>.enc`, which matches neither).
-  const workspaceDir = dirname(vaultPaths.dbPath)
+  // T2.9 (R2-3): only in a store folder that is a real folder inside the workspace ({@link storeFolderInside}).
   for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
-    const dir = join(workspaceDir, sub)
+    const dir = storeFolderInside(vaultPaths, sub)
+    if (dir === null) continue
     try {
       for (const name of readdirSync(dir)) {
         if (name.includes('.parse') || name.endsWith('.tmp')) shredFile(join(dir, name))
@@ -1387,7 +1402,11 @@ function encryptedFileState(vaultPaths: VaultPaths): EncryptedFileStat['state'] 
  *   - the `-wal` is replayed into the main file first ({@link checkpointLeftoverWal}): after an unclean end the
  *     session's last commits sit there, and the main file alone lacks them. A `-wal` that still holds commits after
  *     the replay (a full drive, another connection reading it) blocks the start, all three files kept (`'failed'`, as
- *     #242). A database SQLite calls damaged goes on to the probe;
+ *     #242), whatever the replay answered. T2.9 fix round (R1-3 = R2-1): also after a replay SQLite answers with
+ *     `damaged`. A newer build's copy whose schema this SQLite cannot parse answers so (SQLITE_CORRUPT) although it is
+ *     intact; SQLite's close usually copies its `-wal` in anyway, and when that copy cannot finish the main file alone
+ *     is stale, so it was kept (or discarded) without the commits the sweep then shredded with the `-wal`. A replay
+ *     whose `-wal` is gone afterwards goes on to the probe;
  *   - a file that reads as a database (`database`, `unchecked` judged by its header, or, #985, `newer`: a newer
  *     build's copy, kept whatever its schema holds) is moved to `<db>.recovery`, which the next unlock with the right
  *     password rolls forward over the missing `.enc` (every build since 0.1.47 does; this build's unlock refuses a
@@ -1408,8 +1427,9 @@ function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNot
   // existence, and the sweep then shredded the working file, the only copy of the workspace.
   if (isFileAt(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) return 'not-needed'
   if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
-    const replay = checkpointLeftoverWal(vaultPaths.dbPath)
-    if (replay.outcome !== 'damaged' && walAwaitsCheckpoint(vaultPaths.dbPath)) return 'failed'
+    checkpointLeftoverWal(vaultPaths.dbPath)
+    // T2.9 (R1-3 = R2-1): re-checked whatever the replay answered, `damaged` included (see above).
+    if (walAwaitsCheckpoint(vaultPaths.dbPath)) return 'failed'
   }
   const probe = probeDatabaseFile(vaultPaths.dbPath)
   if (probe.verdict === 'damaged') return 'discarded-only-copy'
@@ -2076,14 +2096,37 @@ function isFileAt(path: string): boolean {
   }
 }
 
+/**
+ * T2.9 fix round (R2-3, owner 2026-11-24): `workspace/<sub>` (`documents/`, `images/`) as the start may read it, or null
+ * when it is not a real folder inside the workspace folder: `lstat` says it is a link (a Windows junction reads as one)
+ * or no folder, or it resolves elsewhere. That is the test #1014's journal containment applies to an entry's folder
+ * ({@link folderContainment}: `outside`), and the one the knowledge-pack transient sweep refuses a linked folder by
+ * (`zim/transients.ts`: no link, a folder, resolving to its own name under the workspace), so the three agree. Every start
+ * of an encrypted workspace, before any password, read such a link as a folder of its own: the sweep overwrote and
+ * removed the `*.tmp` and `*.parse*` files behind it, and the stage scan had the rekey recovery rename `*.enc.new` files
+ * there over stored copies that were gone (delete them all, under a v1 descriptor) and the unlock remove or swap in the
+ * rest. Now nothing behind the link is shredded, renamed or deleted. A store a user keeps behind a link of their own gets
+ * no sweep of its transients and no recovery of its stages (only a v1 → v2 password change writes stages there, and no
+ * published release wrote a v1 descriptor). A folder not there passes (nothing below it to act on: the caller's `readdir`
+ * fails), and so does one a stat that proves nothing leaves open (`unknown`: a hold or an I/O error on `lstat` or
+ * `realpath`): it is read as before, where every stage beside a stored copy is still judged under the data key at the
+ * unlock, since the journal vouches for none of its entries while their containment is unknown (#1014 round 4).
+ */
+function storeFolderInside(vaultPaths: VaultPaths, sub: string): string | null {
+  const ws = workspaceDirOf(vaultPaths)
+  const dir = join(ws, sub)
+  return folderContainment(ws, dir, { folders: new Map() }) === 'outside' ? null : dir
+}
+
 /** The in-store sidecar stages, by scan: every file in `documents/` and `images/` named `*.enc.new`. #1001 (review round
  *  1): a file only. A folder at such a name is no stage, and nothing here touches it: before, the start shredded the
- *  stored copy and renamed the folder into its place. */
+ *  stored copy and renamed the folder into its place. T2.9 (R2-3): only in a store folder that is a real folder inside
+ *  the workspace ({@link storeFolderInside}); the format verdict, both recoveries and the unlock's #1001 pass read this. */
 function scannedSidecarStages(vaultPaths: VaultPaths): string[] {
-  const ws = workspaceDirOf(vaultPaths)
   const out: string[] = []
   for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
-    const dir = join(ws, sub)
+    const dir = storeFolderInside(vaultPaths, sub)
+    if (dir === null) continue
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (entry.isFile() && entry.name.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) out.push(join(dir, entry.name))
@@ -2701,11 +2744,12 @@ function statSaysAbsent(path: string): boolean {
  * #1014 round 4: "lists" means an entry {@link planRekeyJournal} admits, never the journal as written. With `documents/`
  * itself a junction to a folder elsewhere, the plan refuses an entry through it, but the scan still finds the stage there
  * (`readdir` follows the link); vouched for by the journal as written, it was no doubt, and the start shredded the stored
- * copy behind the link and renamed the stage over it. Now it is a doubt: the start leaves it, and the unlock judges it
- * under the data key, where a planted stage fails its tag and never reaches a shred. The scan does not skip a linked
- * `documents/` or `images/` folder on purpose: a user may keep the store behind a link of their own, and the stages of a
- * change cut short there would be lost; judged at the unlock, a legitimate one still rolls forward. An entry the plan
- * cannot judge (a failed stat) vouches for nothing either.
+ * copy behind the link and renamed the stage over it. Round 4 made it a doubt for the unlock to judge under the data key.
+ * T2.9 fix round (R2-3, owner 2026-11-24): the scan skips a linked `documents/` or `images/` folder altogether
+ * ({@link storeFolderInside}), so no stage behind such a link is a doubt either: neither the start nor the unlock touches
+ * it (round 4 kept the link in the scan so that a legitimate stage in a store a user keeps behind a link of their own
+ * would still roll forward; only a v1 → v2 password change writes one, and no published release wrote a v1 descriptor).
+ * An entry the plan cannot judge (a failed stat) vouches for nothing either.
  */
 function sidecarStagesInDoubt(vaultPaths: VaultPaths): string[] {
   const listed = new Set(planRekeyJournal(vaultPaths, readRekeyJournal(vaultPaths)).staged.map(pathKey))
@@ -3115,7 +3159,8 @@ export interface UnlockedVault {
  * fails, the DB is never touched). Before the password is even checked: `VaultNewerError` when a
  * vault artifact is in a format a newer build wrote (#845). After the password verified:
  * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` copy a newer build
- * stamped that may hold the freshest data, before the staged-file check, the roll-forward or any shred), `VaultDamagedError` when `.enc`
+ * stamped that may hold the freshest data, before the staged-file check, the roll-forward or any shred; T2.9 R1-1: and
+ * for a decrypted database SQLite cannot open whose header stamp is above this build's), `VaultDamagedError` when `.enc`
  * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208),
  * `VaultOpenFailedError` when the open could not finish otherwise (#844), and `VaultMissingError` when there is no `.enc`
  * and no `.recovery` copy to roll forward over it (#911).
@@ -3350,8 +3395,9 @@ export function unlockEncryptedVault(
       // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
       // #844: damage only when SQLite says so. Any other failure of the open or of the unlock's
       // own settings writes is a step that could not finish on a database that is fine, and the
-      // open does not rewrite `.enc`: not "restore a backup".
-      throw openFailure(err)
+      // open does not rewrite `.enc`: not "restore a backup". T2.9 (R1-1): and not when the
+      // file's header says a newer build wrote it, whatever SQLite made of it.
+      throw openFailure(err, vaultPaths.dbPath)
     }
     // #1014: the out-of-store stages the start left for the database, which lists their stored copies. Best-effort: one
     // it cannot finish waits for the next unlock, and the unlock goes on.

@@ -108,22 +108,51 @@ export function generateDataKey(): Buffer {
 /** Upper bound for a descriptor's argon2id `m`, in KiB (2 GiB). */
 const ARGON2_MAX_M_KIB = 2 ** 21
 
+/** The upper bound of every KDF parameter a descriptor may raise, per algorithm (`m` in KiB): one table for the derive's
+ *  check below and for {@link kdfParamAboveBounds}, so the two cannot drift apart. */
+const KDF_UPPER_BOUNDS: Readonly<Record<KdfAlgo, Readonly<Record<string, number>>>> = {
+  scrypt: { N: 2 ** 22, r: 32, p: 16 },
+  argon2id: { m: ARGON2_MAX_M_KIB, t: 64, p: 16 }
+}
+
 function validateKdfBounds(params: KdfParams): void {
   if (params.keyLen !== 32) {
     throw new Error(`KDF keyLen must be 32 (AES-256), got ${String(params.keyLen)}`)
   }
   if (params.algo === 'scrypt') {
     const { N, r, p } = params
-    if (!N || !r || !p || N < 1024 || N > 2 ** 22 || (N & (N - 1)) !== 0 || r < 1 || r > 32 || p < 1 || p > 16) {
+    const max = KDF_UPPER_BOUNDS.scrypt
+    if (!N || !r || !p || N < 1024 || N > max.N || (N & (N - 1)) !== 0 || r < 1 || r > max.r || p < 1 || p > max.p) {
       throw new Error('scrypt parameters out of bounds (descriptor may be corrupt or tampered)')
     }
   }
   if (params.algo === 'argon2id') {
     const { m, t, p } = params
-    if (!m || !t || !p || m < 8 || m > ARGON2_MAX_M_KIB || t < 1 || t > 64 || p < 1 || p > 16) {
+    const max = KDF_UPPER_BOUNDS.argon2id
+    if (!m || !t || !p || m < 8 || m > max.m || t < 1 || t > max.t || p < 1 || p > max.p) {
       throw new Error('argon2id parameters out of bounds (descriptor may be corrupt or tampered)')
     }
   }
+}
+
+/**
+ * T2.9 fix round (R1-6): the first KDF parameter of `kdf` (a descriptor's, as read: unchecked) that is a number above
+ * this build's upper bound for its algorithm, as `<algo> <param> <value>` (content-free, for the log), or null. Only for
+ * an algorithm this build knows. F-9's later-writer duty keeps a later build's parameters inside these bounds under
+ * descriptor version 2, so one above them was written by a newer build (a stronger setting): the vault's format verdict
+ * reads it as newer (`workspace_newer`) before anything is written, where the derive used to refuse it with a plain
+ * error ("Could not open") after the start's steps and the unlock's rekey recovery had run. A value below a lower
+ * bound, of another type, or a key length other than 32 is no setting any build writes: the derive still refuses it.
+ */
+export function kdfParamAboveBounds(kdf: unknown): string | null {
+  const params = kdf as Record<string, unknown> | null
+  const algo = params?.algo
+  if (!isKnownKdfAlgo(algo)) return null
+  for (const [name, max] of Object.entries(KDF_UPPER_BOUNDS[algo])) {
+    const value = params?.[name]
+    if (typeof value === 'number' && value > max) return `${algo} ${name} ${String(value)}`
+  }
+  return null
 }
 
 /**
