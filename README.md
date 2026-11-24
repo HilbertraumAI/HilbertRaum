@@ -387,6 +387,7 @@ is in [`docs/knowledge-packs.md`](docs/knowledge-packs.md); the step-by-step wal
 | [`docs/benchmark.md`](docs/benchmark.md) | In-app hardware benchmark and model recommendation (the machine-capability probe) |
 | [`docs/drive-layout.md`](docs/drive-layout.md) | On-drive directory layout and how the app finds its data |
 | [`docs/packaging.md`](docs/packaging.md) | Preparing a drive, fetch scripts, portable builds |
+| [`docs/app-updates.md`](docs/app-updates.md) | In-app updates (planned): signed update files imported offline, the signing keys, the fork rule, what the first Kit release freezes |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | Common problems and fixes |
 | [`docs/known-limitations.md`](docs/known-limitations.md) | Consciously accepted gaps |
 | [`docs/data-contracts.md`](docs/data-contracts.md) | Shared cross-module data contracts (IPC surface, DB schema, streaming, …) |

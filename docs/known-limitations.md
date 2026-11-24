@@ -1074,12 +1074,11 @@ password recovery — are documented in
 - **Drive updates are manual — signed offline update bundles (spec §12.3) are not built yet;
   there is no update mechanism.** The `updates/` and `workspace/backups/` directories
   are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)
-  ("Updating a drive"). **Blocker: the key-management design** — who holds the signing key and
-  where it lives (dev-machine key vs. an offline-born production key; HSM/hardware-token class
-  questions), what public key drives trust (and whether DIY drives trust a repo key or generate
-  their own), offline key rotation/continuity, and rollback protection. Deliberately **not yet
-  decided**; the update-bundle work needs its own short design doc
-  (outline in BUILD_STATE §5) before any code.
+  ("Updating a drive"). The in-field update is being built on the integration branch
+  `feat/app-updates` (BUILD_STATE §5 item 3); its design record [`app-updates.md`](app-updates.md)
+  settles the key-management questions this entry once listed as the blocker: who holds the
+  signing keys and where they live, which public keys a build trusts, rotation and continuity,
+  and rollback protection (§1.3's K1–K5, §2). Until release 1 ships, drives are updated by hand.
   One constraint already understood from that discussion: a trust anchor cannot be
   retroactively strengthened, so whatever key signs during development must never anchor
   commercial drives — the production key would be a different, offline-generated key.

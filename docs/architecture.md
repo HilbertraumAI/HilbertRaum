@@ -14,6 +14,8 @@ remediation waves; the full original working papers live in git history._
    **§ numbers restart inside every record** (standing decision — `§N` collisions across
    records are deliberate; resolve a citation via the record named alongside it), and
    several records end with their own "§-anchor legend" for retired-plan citations.
+   The in-field app-update record is a file of its own: [`app-updates.md`](app-updates.md) — in-field app updates
+   (planned): a signed update file imported offline; its own §1–§12.
 3. **Audit remediation ledgers §24–§52** — one continuous series interleaved among the
    records (find one with `### §N <audit name>`); each holds a round's finding dispositions.
 4. **Data flow (RAG)** and the **Module ↔ spec map** — near the end of the file.
@@ -18882,7 +18884,7 @@ unchanged — those anchors resolve here:
 | §9.2 service interfaces | "Swappable interfaces (spec §9.2)" (this doc) |
 | §10.x UI screens | [`design-guidelines.md`](design-guidelines.md) — §10.3 → §3 (+ D-UI4 Quick/Balanced/Thorough), §10.4 → §11.6, §10.6 → §2/§11.3; §10.7 → "Diagnostics & transcript export" (this doc) |
 | §11.1–§11.4 benchmark & profiles | [`benchmark.md`](benchmark.md) (goals / detection steps / profile classification / "Warnings"); the §11.4 friendly-language rule also in [`design-guidelines.md`](design-guidelines.md) §7 |
-| §12, §12.2 packaging / §12.3 updates | [`packaging.md`](packaging.md) (commercial drive + release workflow); manual drive update in [`drive-layout.md`](drive-layout.md) |
+| §12, §12.2 packaging / §12.3 updates | [`packaging.md`](packaging.md) (commercial drive + release workflow); manual drive update in [`drive-layout.md`](drive-layout.md); in-field app updates (planned): the design record [`app-updates.md`](app-updates.md) |
 | §13 model licensing | [`model-policy.md`](model-policy.md) "Manifest fields" + "License review gate" |
 | §17 demo script | [`packaging.md`](packaging.md) "The canonical USB demo (original spec §17)" |
 | §18.1 offline statement | `shared/i18n/en.ts` `privacy.statement.offline` (verbatim) |

@@ -198,7 +198,9 @@ HILBERTRAUM/
 
 ## Updating a drive (manual — spec §12.3)
 
-There is **no in-app updater** (by design: the app makes no internet calls of its own). Updating a prepared
+In-app updates from a signed update file, imported offline, are **planned** (design record:
+[`app-updates.md`](app-updates.md)). Until they ship there is **no in-app updater**, and the manual
+update below is the way. Updating a prepared
 drive is the same flow as building it, run again from a machine with the repo:
 
 1. `prepare-drive --target <drive>` refreshes `model-manifests/` + the bundled skills, docs and
