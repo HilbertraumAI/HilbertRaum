@@ -343,14 +343,21 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    (events appear; export saves — the last wave-1 live-UI item); an icon/`buildResources` for
    electron-builder; the **optional** Phase-29 dev-box speed sweep (completeness only — QA +
    RSS are machine-independent).
-3. **Phase 22 — signed offline update bundles** (spec §12.3): 🔴 blocked. Outline (kept here
-   from the retired wave-1 record): a signed bundle (manifests + optionally weights/runtime/
-   app) dropped into `updates/incoming/`, verified (Ed25519 via Node's built-in `crypto.verify`, which the bundled Electron
-   supports — probed on Electron 43.8.6, so no new dependency; `@noble/hashes`, the only `@noble` package shipped, has no Ed25519), applied atomically, recorded in `updates/applied/` + the audit
-   log. **Blocking decision = key management** (who holds the signing key, rotation, whether
-   DIY drives trust a repo key) — needs its own short design doc before any code. The
-   commercial pitch ("signed update bundles", spec §1.3) makes this the first priority once
-   drives actually ship.
+3. **Phase 22 — in-field app updates** (spec §12.3): 🟡 **in progress on the integration branch `feat/app-updates`** (owner
+   decisions 2026-11-22/23: merged to master once, by its final PR; **deploy stop: no release and no `v*` tag before release 1**,
+   the first version with the updater, tagged on master after that PR). Its design record (`docs/app-updates.md`) and ledger
+   live on the branch; this item is rewritten at the merge. **Release 1 freezes behaviour in these files: ask the owner before
+   changing one (each change is synced into the branch).** Under `apps/desktop/src/main/`:
+   `services/{workspace-vault,db,policy,drive,commercial-drive,workspace,models,resolve-model,assets,runtime-download}.ts`,
+   `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log}.ts`,
+   `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,ingestion/index}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
+   `services/skills/{run,invoice-run,registry,loader,installer}.ts`, `{index,backend-start,shutdown,close-guard}.ts`,
+   `tools/assert-commercial-drive.ts`, `ipc/{registerEngineIpc,engine-recheck,registerSkillsIpc,registerStartFailureIpc}.ts`,
+   `ipc/{registerCoreIpc,registerWorkspaceIpc,log-copy}.ts`. Under `apps/desktop/src/`: `shared/{manifest,app-version,skill-manifest}.ts`,
+   `shared/i18n/{en,de,es,fr,it,nl,pl,ru,tr,uk}.ts`, `renderer/lib/displayMap.ts`, `renderer/screens/WorkspaceGate.tsx`, `preload/index.ts`.
+   Elsewhere: `apps/desktop/electron-builder.yml`, `apps/desktop/tests/fixtures/vault-golden/`, `launchers/*`, `model-manifests/**`,
+   `app-skills/**`, `scripts/{prepare-drive,build-commercial-drive,fetch-runtime,fetch-models,verify-models}.*`,
+   `.github/workflows/{ci,release}.yml`, `.gitattributes`.
 4. **Embedder swap (ex-Phase-30 Track B) — deferred post-MVP; write a fresh short plan when it
    actually starts.** The 2026-06-11 big-slot plan was retired unimplemented on 2026-07-12 (file
    deleted; disposition + the durable Track-B facts: `model-benchmarks.md` §9.2; full text
