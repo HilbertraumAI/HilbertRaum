@@ -737,3 +737,7 @@ public issue or PR for an undisclosed vulnerability.
 HilbertRaum is licensed **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)). Public contributions are
 distributed under GPL-3.0-or-later; in addition, the [CLA](#license-and-cla) grants the Project
 the right to also offer the software under commercial licenses (dual licensing).
+Once in-app updates ship, builds from this repository carry the project's update-signing public keys
+and so accept the project's signed update files; a fork that publishes its own builds replaces those
+keys with its own or leaves the key set empty, which turns in-app updates off (see
+[`docs/app-updates.md`](docs/app-updates.md) §2).

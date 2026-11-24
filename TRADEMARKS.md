@@ -27,7 +27,12 @@ curation, signed builds, and support — or from someone else.
 
 - Using "HilbertRaum" (or a confusingly similar name) or the logo **for a
   modified version** of the software. Forks are welcome and expressly permitted
-  by the GPL — under a different name and logo.
+  by the GPL — under a different name and logo. Once in-app updates ship, a fork
+  that publishes its own builds should also replace the project's update-signing
+  public keys with its own, or leave the key set empty to turn in-app updates
+  off: a build that keeps the project's keys accepts the project's signed update
+  files, and installing one replaces the fork's app with the official HilbertRaum
+  build (see [`docs/app-updates.md`](docs/app-updates.md) §2).
 - Selling or distributing **hardware products** (USB drives, SSDs, kits,
   preloaded devices) under the "HilbertRaum" name or logo, or in packaging
   that suggests they are official HilbertRaum products. Only official
