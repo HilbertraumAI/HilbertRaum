@@ -376,8 +376,8 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 `disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.8.7 (as for 43.8.6 since #564): `000011001`.
-Before #564 it was `001011001` (43.7.7 through 43.8.6).
+Decode it with the library, not by hand. Expected for 43.8.10 (as for 43.8.6 and 43.8.7 since #564):
+`000011001`. Before #564 it was `001011001` (43.7.7 through 43.8.6).
 `release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
 `EXPECTED_WIRE` on every run (#769); by hand:
 
@@ -386,7 +386,7 @@ Before #564 it was `001011001` (43.7.7 through 43.8.6).
 node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
 ```
 
-The nine positions on Electron 43.8.7 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
+The nine positions on Electron 43.8.10 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
 1 EnableCookieEncryption (off), **2 EnableNodeOptionsEnvironmentVariable (off, #564)**,
 **3 EnableNodeCliInspectArguments (off, #562)**, **4 EnableEmbeddedAsarIntegrityValidation (on,
 #562)**, **5 OnlyLoadAppFromAsar (on, #562)**, 6 LoadBrowserProcessSpecificV8Snapshot (off),
@@ -1343,7 +1343,7 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    Windows keys against the production menu with `webContents.sendInputEvent`, but only a packaged
    build and a physical keyboard prove the shipped binary.
 13. **A download behind TLS inspection, and the fuse wire (#564).** Decode the packaged binary's
-   fuse wire ("Electron fuses" above; `000011001` for 43.8.7). Then, on a computer whose antivirus or
+   fuse wire ("Electron fuses" above; `000011001` for 43.8.10). Then, on a computer whose antivirus or
    proxy re-signs HTTPS (Norton's web protection does), start the packaged build with
    `NODE_EXTRA_CA_CERTS` removed from its environment and begin one in-app download from github.com
    or huggingface.co: the AI engine or a model, not an OCR file (jsDelivr is not re-signed by

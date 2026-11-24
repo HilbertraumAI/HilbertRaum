@@ -16106,6 +16106,23 @@ window loading a static page; first-contentful-paint in ms after the window is c
   traineddata on this machine), the three real-Electron smokes 24/24. The visible-window probe (a
   scratch copy of the same design, occlusion tracking off), 7 interleaved runs each with a discarded
   warm-up: 1,131 ms (43.8.6) and 1,147 ms (43.8.7), ranges overlapping, no change.
+- **43.8.10 (Dependabot #1038, 2026-11-23), same desktop.** Three releases since 43.8.7. 43.8.9 adds
+  the eight RSA intermediates that eMudhra revoked on 2026-11-07 to Chromium's and Node's TLS
+  blocklists (electron/electron#55744, the follow-up to 43.8.1's ECDSA set, GHSA-jr5w-w6x2-84p9), so
+  the model, engine and OCR downloads through Node's `fetch` refuse certificates issued by them too; no
+  advisory was published for it. 43.8.8 and 43.8.10 bring 198 upstream security cherry-picks (ANGLE,
+  Chromium, crabbyavif, Dawn, devtools-frontend, FFmpeg, ICU, PDFium, Skia, V8; electron/electron#55586,
+  #55710, #55749), and in 43.8.8 an unbounded `webRequest` redirect loop no longer crashes the renderer
+  (#55684: the 21st redirect fails with `ERR_TOO_MANY_REDIRECTS`). That reaches no path here: the app's
+  only `webRequest` hook adds the CSP header in `onHeadersReceived` and never redirects. Both stock
+  binaries report the same Chromium 150.0.7871.250 (the cherry-picks leave the string as it is), Node
+  24.22.1, V8 15.0.245.31, SQLite 3.53.4 and undici 7.30.1, and the same stock fuse wire; no OS floor
+  moves. A `--win portable` package: fuse wire `000011001`, the release workflow's packaged-archive
+  rows 51/51, `packaged-app-probe.mjs` 10 passed and none failed (with `--renderer-dir` and
+  `--clipboard-read`; OCR skipped: no traineddata on this machine), started with
+  `ELECTRON_RUN_AS_NODE=1` in its environment and running as the app; the three real-Electron smokes
+  24/24. The visible-window probe (a scratch copy, occlusion tracking off), 7 interleaved runs each
+  with a discarded warm-up: 1,162 ms (43.8.7) and 1,150 ms (43.8.10), ranges overlapping, no change.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 
