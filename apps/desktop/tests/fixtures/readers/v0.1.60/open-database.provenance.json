@@ -1,0 +1,12 @@
+{
+  "bundle": "open-database.cjs",
+  "entry": "apps/desktop/src/main/services/db.ts",
+  "tag": "v0.1.60",
+  "commit": "5a4894ae17fef711d71c4c8d74229de018139b2f",
+  "bundler": "vite 6.4.6 (library mode, CommonJS, node:* imports only)",
+  "recipe": "scripts/release/snapshot-readers.mjs",
+  "command": "node scripts/release/snapshot-readers.mjs --tag v0.1.60 --out apps/desktop/tests/fixtures/readers/v0.1.60 --entry apps/desktop/src/main/services/db.ts=open-database.cjs",
+  "node": "v24.13.0",
+  "created": "2026-11-24T21:18:43.161Z",
+  "runs_on": "the loading process's own Node and node:sqlite, not the tag's Electron"
+}

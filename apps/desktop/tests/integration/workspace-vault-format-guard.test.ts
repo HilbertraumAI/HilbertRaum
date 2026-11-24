@@ -745,6 +745,22 @@ describe('what is not newer (#845)', () => {
   it.each([
     ['v0.1.65', 'v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4', false],
     ['v0.1.50', 'v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c', false],
+    // T2.8 (app-update plan W-80 (d)): one per other published tag, each written by that tag's own code
+    // (scripts/release/golden-descriptors.mjs; v0.1.51 was never published). Rows added only: this is F-9's golden test.
+    ['v0.1.52', 'v0.1.52', 'golden-throwaway-v0.1.52', '6b65f30f2335da9fff59580d95fe686a105eb1975927ebe35b252a844f458aa7', false],
+    ['v0.1.53', 'v0.1.53', 'golden-throwaway-v0.1.53', 'f27698d22067937211c682d91587e5597613c80254f0134622b1f16a89b9a29d', false],
+    ['v0.1.54', 'v0.1.54', 'golden-throwaway-v0.1.54', '3dd42ab32459165cf44c312e369be2b86809a7ba5e31c57349c11a57c430a80f', false],
+    ['v0.1.55', 'v0.1.55', 'golden-throwaway-v0.1.55', '27b43bc4ef6bf1ebe1e12c8c34172d6be12bf5738bad57e47a28e93251f2ca1a', false],
+    ['v0.1.56', 'v0.1.56', 'golden-throwaway-v0.1.56', 'c236decd45e141f2d02a6054ec972c924053428a430486c7e2300ec2aa33c518', false],
+    ['v0.1.57', 'v0.1.57', 'golden-throwaway-v0.1.57', 'a8eb5930dc4dd3947a19a11bfd7d7bb86f5877839930db801f835b75fba6a843', false],
+    ['v0.1.58', 'v0.1.58', 'golden-throwaway-v0.1.58', '265712e921f47f69518ba911fbd5250e6084bb77441c8bbf3adf18bde6a78e05', false],
+    ['v0.1.59', 'v0.1.59', 'golden-throwaway-v0.1.59', '29e4c6b567f416f22bf148675322bb1578cb7a4f32a0edaad10cf07d76466c61', false],
+    ['v0.1.60', 'v0.1.60', 'golden-throwaway-v0.1.60', 'd5f03b5b32f407ca07b3f37089df9de7bbe25ff45865e7f09ffe26fddfabea89', false],
+    ['v0.1.61', 'v0.1.61', 'golden-throwaway-v0.1.61', '49731bf60d575e085bd9ddb3165698606f3443f0e85a6cdea1ad3dee8d233bb8', false],
+    ['v0.1.62', 'v0.1.62', 'golden-throwaway-v0.1.62', 'ecf2e4265a0d76d781e7544dd70a3f64e14f35a96288882a2d2b368dfcd6ce42', false],
+    ['v0.1.63', 'v0.1.63', 'golden-throwaway-v0.1.63', '542d4550a66ec8201984ca823d5a134164a524e886fb4882acfae7a8e94139de', false],
+    ['v0.1.64', 'v0.1.64', 'golden-throwaway-v0.1.64', '9ecc217c7d085c68c7755fc03b9b8e66bbbd0c7d97557e4251efe5eda22da2ad', false],
+    ['v0.1.66', 'v0.1.66', 'golden-throwaway-v0.1.66', 'd277868c63b1ff684be9d19c44f49987769a42ecf02705851966189a0c2fab57', false],
     [
       'v0.1.65, saved again with a byte-order mark (#974),',
       'v0.1.65',

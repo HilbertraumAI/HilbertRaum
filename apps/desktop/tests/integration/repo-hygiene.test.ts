@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import * as ts from 'typescript'
@@ -1136,6 +1137,51 @@ describe("repo hygiene — no ignore rule drops the update wave's release tools 
   const stayIgnored = ['apps/desktop/release/win-unpacked/HilbertRaum.exe', 'release/HilbertRaum.AppImage']
   it.skipIf(!inCheckout)('ignores exactly the build output among the probes (scripts/release/ and the fixture folders are tracked)', () => {
     expect(ignoredAmong([...notIgnored, ...stayIgnored])).toEqual(stayIgnored)
+  })
+})
+
+// T2.8 (app-update plan C14, W-53, W-80 (d)): the golden fixtures are captures of released code's own output (the vault
+// descriptors) and bundles of released code (the reader snapshots). Release 1 is judged against them for ever, and no
+// rerun reproduces a descriptor (its salt and key are random), so their bytes are locked here. The manifest
+// tests/fixtures/golden-fixtures.sha256 is `sha256sum` text: `<64 hex>  <path under tests/fixtures/, forward slashes>`,
+// LF only (fixtures are stored byte for byte, `.gitattributes`, so a CRLF line would be committed as one), sorted by
+// path, one line per file. Every top-level folder a line names is a golden folder (vault-golden/ and readers/ always
+// are): each of its files needs a line, so a fixture cannot join, change or go missing unseen. A later phase adds lines
+// only. By hand: `cd apps/desktop/tests/fixtures && sha256sum -c golden-fixtures.sha256`.
+describe('repo hygiene — every golden fixture matches the sha256 manifest (T2.8)', () => {
+  const fixtures = join(DESKTOP_ROOT, 'tests', 'fixtures')
+  const ALWAYS_GOLDEN = ['readers', 'vault-golden']
+  const LINE = /^([0-9a-f]{64}) {2}((?:[A-Za-z0-9_.@+-]+\/)+[A-Za-z0-9_.@+-]+)$/
+
+  it('lists every file of the golden folders once, with the sha256 of its bytes', () => {
+    const bytes = readFileSync(join(fixtures, 'golden-fixtures.sha256'))
+    const text = bytes.toString('utf8')
+    const problems: string[] = []
+    if (bytes.includes(0x0d)) problems.push('the manifest holds a carriage return (LF only)')
+    if (!text.endsWith('\n')) problems.push('the manifest does not end with a newline')
+    const listed = new Map<string, string>()
+    text.replace(/\n$/, '').split('\n').forEach((line, i) => {
+      const m = LINE.exec(line)
+      if (!m || m[2].split('/').some((s) => s === '.' || s === '..')) problems.push(`line ${i + 1} is not "<sha256>  <dir>/<file>": ${line}`)
+      else if (listed.has(m[2])) problems.push(`${m[2]} is listed twice`)
+      else listed.set(m[2], m[1])
+    })
+    const paths = [...listed.keys()]
+    if (paths.join('\n') !== [...paths].sort().join('\n')) problems.push('the lines are not sorted by path')
+    for (const [path, sha256] of listed) {
+      const file = join(fixtures, ...path.split('/'))
+      if (!existsSync(file)) problems.push(`${path} is listed but missing`)
+      else if (createHash('sha256').update(readFileSync(file)).digest('hex') !== sha256) problems.push(`${path} does not match its sha256`)
+    }
+    const golden = new Set([...ALWAYS_GOLDEN, ...paths.map((p) => p.split('/')[0])])
+    for (const dir of golden) {
+      for (const file of filesUnder(join(fixtures, dir), /./)) {
+        const path = file.slice(fixtures.length + 1).split('\\').join('/')
+        if (!listed.has(path)) problems.push(`${path} is in a golden folder but not in the manifest`)
+      }
+    }
+    expect(problems).toEqual([])
+    expect(ALWAYS_GOLDEN.every((dir) => paths.some((p) => p.startsWith(`${dir}/`)))).toBe(true) // never an empty lock
   })
 })
 
