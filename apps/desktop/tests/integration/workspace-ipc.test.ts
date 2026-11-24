@@ -69,6 +69,8 @@ import {
 import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
+import { setStampAppVersion } from '../../src/main/services/db'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, t, type MessageKey } from '../../src/shared/i18n'
@@ -1309,6 +1311,37 @@ describe('a lock whose probe fell back to the header (#876)', () => {
       expect(lines[0]).toMatch(/"code":"sqlite 1\b/)
     } finally {
       ctrl.shutdown()
+    }
+  })
+})
+
+// App-update T2.2 (W-9, F-10): every open stamps `last_writer`, best effort, so a stamp that cannot be written never fails
+// the unlock; support learns of it from one log line with a content-free code. Never SQLite's message: a trigger a later
+// or foreign build planted on the table quotes its own text there.
+describe('an unlock whose last-writer stamp could not be written (app-update T2.2)', () => {
+  it('opens, and logs exactly one line with the content-free code and none of the message text', async () => {
+    const quote = 'the quoted text of a planted trigger'
+    const version = (JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+    setStampAppVersion(version)
+    const vp = lockedVault('wsipc', PW)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    db.exec(`CREATE TRIGGER block_stamp BEFORE INSERT ON schema_meta BEGIN SELECT RAISE(ABORT, '${quote}'); END;`)
+    lockEncryptedVault(vp, db, key)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `T2.2 stamp marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      const logged = lines.filter((l) => l.includes('last-writer stamp'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toMatch(/"code":"sqlite \d+: [A-Za-z ]+"/)
+      expect(lines.join('\n')).not.toContain(quote)
+    } finally {
+      ctrl.shutdown()
+      setStampAppVersion('')
     }
   })
 })

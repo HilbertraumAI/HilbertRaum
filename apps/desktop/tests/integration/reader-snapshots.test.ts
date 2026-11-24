@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import type { Db } from '../../src/main/services/db'
+import { LAST_WRITER_APPLIED_THROUGH, openDatabaseWithStamp, setStampAppVersion, type Db } from '../../src/main/services/db'
 import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import { freshWorkspaceDb, listTables } from '../helpers/db-fixtures'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 
 // W-53 (app-update plan T2.8): an "old reader" row runs the released code itself, not today's code under another name.
 // Each snapshot under tests/fixtures/readers/<tag>/ is the tag's own module, bundled from the tag's sources by
@@ -78,5 +79,39 @@ describe('reader snapshots: released readers open what HEAD writes (W-53)', () =
       old.close()
     }
     expect(readFileSync(path).equals(bytes)).toBe(true)
+  })
+
+  // App-update T2.2 (F-10, row N9): release 1 stamps `last_writer` on every open, and no build before it ever stamps. So
+  // v0.1.60's open must keep the table and leave the stamp as HEAD wrote it, and still not write one byte; HEAD's next
+  // open stamps again and hands back the value the old open left.
+  it("v0.1.60's openDatabase opens a stamped database: schema_meta kept, last_writer as HEAD wrote it; HEAD's next open stamps again", () => {
+    const version = (JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+    const headStamp = `${version};${LAST_WRITER_APPLIED_THROUGH}`
+    setStampAppVersion(version)
+    try {
+      const v0160 = readerSnapshot<ReaderV0160>('v0.1.60', 'open-database.cjs')
+      const { db, root } = freshWorkspaceDb('reader-snapshots-stamped')
+      const stamp = (d: Db): unknown => d.prepare('SELECT key, value FROM schema_meta ORDER BY key').all()
+      expect(stamp(db)).toEqual([{ key: 'last_writer', value: headStamp }])
+      db.close()
+      const path = join(root, 'test.sqlite')
+      const bytes = readFileSync(path)
+
+      const old = v0160.openDatabase(path)
+      try {
+        expect(v0160.listTables(old)).toContain('schema_meta')
+        expect(stamp(old)).toEqual([{ key: 'last_writer', value: headStamp }])
+        expect(old.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' })
+      } finally {
+        old.close()
+      }
+      expect(readFileSync(path).equals(bytes)).toBe(true)
+
+      const next = openDatabaseWithStamp(path)
+      next.db.close()
+      expect(next.stamp).toEqual({ written: true, previous: headStamp })
+    } finally {
+      setStampAppVersion('')
+    }
   })
 })

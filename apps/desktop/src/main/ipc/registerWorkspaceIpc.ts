@@ -204,6 +204,18 @@ function logProbeFallbacks(ctx: AppContext): void {
 }
 
 /**
+ * App-update T2.2 (W-9): log each `last_writer` stamp an open could not write; the stamp is best effort, so the workspace
+ * opened as usual. The content-free code only (SQLite's result code and fixed description, a Node error code, or
+ * `no-app-version`), never SQLite's message, which quotes what a planted trigger says and names objects. The controller
+ * keeps the codes until a handler that can log (an unlock, a create, a lock); `main/index.ts` logs the start's.
+ */
+export function logStampFailures(workspace: { takeStampFailures?: () => string[] }): void {
+  for (const code of workspace.takeStampFailures?.() ?? []) {
+    log.warn("The workspace opened, but its database's last-writer stamp could not be written", { code })
+  }
+}
+
+/**
  * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
  * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
  * it, or it came from another workspace), or (#1027) because the workspace file opens under that key too and so holds
@@ -310,6 +322,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       }
       logStageOutcome(ctx)
       logProbeFallbacks(ctx)
+      logStampFailures(ctx.workspace)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
@@ -557,6 +570,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         // the plain file (`attachLogKey` dispatches on the workspace mode).
         attachLogKey(ctx)
         log.info('Workspace created', { mode })
+        logStampFailures(ctx.workspace)
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
         // Settings are readable now — main-side emissions follow the user's language.
         refreshUiLanguage(ctx)
@@ -959,6 +973,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // (S-5: before, the line named no cause at all). No path, no message of the cause.
     log.error('Workspace lock failed — workspace stays unlocked', failureForLog(err))
     logProbeFallbacks(ctx)
+    logStampFailures(ctx.workspace) // the re-open after a failed lock stamps, often on a full drive
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
@@ -973,6 +988,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
   }
   logProbeFallbacks(ctx)
+  logStampFailures(ctx.workspace)
   log.info('Workspace locked (sidecars stopped)')
   return state
 }

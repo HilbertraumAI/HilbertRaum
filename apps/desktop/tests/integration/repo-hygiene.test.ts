@@ -596,6 +596,80 @@ describe('repo hygiene — every piped stdio stream of a spawned child has an er
   })
 })
 
+// App-update plan T2.2 (Δ-40, Δ-42 row 8, row N12): node:sqlite's `defensive` default depends on the runtime (spike 7:
+// on in the packaged app's Node 24.22.1, off under vitest on Node 24.13.0, absent on Node 22.21.1), so a read-write
+// connection under src/main passes `defensive: true` itself and the tests run the database as the app does.
+// db-schema-meta's N11 proves the option in effect on an `openDatabase` handle. Nothing observable can show it on the
+// lock's WAL retry (`checkpointLeftoverWal`: a checkpoint does nothing defensive mode forbids, and node:sqlite has a
+// setter but no getter), nor on a connection added later, so this is a syntax latch: src/main constructs ONE read-write
+// connection, and it is defensive; every other constructor is read-only. Read from the syntax tree, not by text, so a
+// rename of the factory or of a variable changes nothing; an alias of the class, a spread or a computed options object
+// fails closed.
+describe('repo hygiene — every read-write node:sqlite connection under src/main is defensive (app-update T2.2)', () => {
+  const MAIN = join(DESKTOP_ROOT, 'src', 'main')
+  const relOf = (file: string): string => file.slice(DESKTOP_ROOT.length + 1).replace(/\\/g, '/')
+
+  /** A literal `true`/`false` option, `absent`, or `unreadable` (anything this check cannot judge). */
+  const option = (options: ts.Expression | undefined, name: string): boolean | 'absent' | 'unreadable' => {
+    if (options === undefined) return 'absent'
+    if (!ts.isObjectLiteralExpression(options)) return 'unreadable'
+    if (options.properties.some((p) => ts.isSpreadAssignment(p) || (p.name !== undefined && ts.isComputedPropertyName(p.name)))) {
+      return 'unreadable'
+    }
+    const prop = options.properties.find(
+      (p) => p.name !== undefined && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === name
+    )
+    if (prop === undefined) return 'absent'
+    if (!ts.isPropertyAssignment(prop)) return 'unreadable'
+    if (prop.initializer.kind === ts.SyntaxKind.TrueKeyword) return true
+    if (prop.initializer.kind === ts.SyntaxKind.FalseKeyword) return false
+    return 'unreadable'
+  }
+
+  it('src/main constructs one read-write DatabaseSync, with `defensive: true`; every other one is `readOnly: true`', () => {
+    const readWrite: Array<{ at: string; defensive: boolean | 'absent' | 'unreadable' }> = []
+    const readOnly: string[] = []
+    const unclassified: string[] = []
+    const sqliteModules = new Set<string>()
+    for (const file of filesUnder(MAIN, /\.(ts|tsx|mts)$/)) {
+      const text = readFileSync(file, 'utf8')
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const at = (n: ts.Node): string => `${relOf(file)}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}`
+      const visit = (n: ts.Node): void => {
+        // The module specifier in code (a require, an import, `typeof import(…)`), never a comment.
+        if (ts.isStringLiteral(n) && n.text === 'node:sqlite') sqliteModules.add(relOf(file))
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'enableDefensive') {
+          unclassified.push(`${at(n)} enableDefensive()`) // the setter can switch the option off again
+        }
+        if (ts.isIdentifier(n) && n.text === 'DatabaseSync') {
+          const parent = n.parent
+          if (ts.isNewExpression(parent) && parent.expression === n) {
+            const options = parent.arguments?.[1]
+            const ro = option(options, 'readOnly')
+            const defensive = option(options, 'defensive')
+            if (ro === 'unreadable' || defensive === 'unreadable') unclassified.push(`${at(n)} options`)
+            else if (ro === true) readOnly.push(at(n))
+            else readWrite.push({ at: at(n), defensive })
+          } else if (!ts.isTypeQueryNode(parent) && !(ts.isBindingElement(parent) && parent.propertyName === undefined)) {
+            unclassified.push(`${at(n)} ${parent.getText(source).slice(0, 60)}`) // an alias would construct unseen
+          }
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(source)
+    }
+    // The walk really found the module and its constructors (not a moved root): the probe's read-only open, at least.
+    expect([...sqliteModules]).toEqual(['src/main/services/db.ts'])
+    expect(readOnly.length).toBeGreaterThanOrEqual(1)
+    expect(unclassified, 'a DatabaseSync use this check cannot judge: construct it inline, or widen the check').toEqual([])
+    expect(
+      readWrite.map((s) => s.defensive),
+      `the read-write constructors under src/main (${readWrite.map((s) => s.at).join(', ')}): open every read-write ` +
+        'connection through the one factory in db.ts, which passes `defensive: true` (T2.2)'
+    ).toEqual([true])
+  })
+})
+
 // #188 wave — the bundler tripwire. `electron-vite`'s `esmShimPlugin` decides where to inject its
 // CommonJS shim by finding the LAST match of a loose "static import" regex over the whole rendered
 // chunk. That regex matches the bare word `import` (preceded by whitespace/`;`/start) followed

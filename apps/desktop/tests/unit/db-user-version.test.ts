@@ -1,9 +1,16 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { openDatabase, SCHEMA_VERSION, WorkspaceNewerError } from '../../src/main/services/db'
+import {
+  LAST_WRITER_APPLIED_THROUGH,
+  openDatabase,
+  SCHEMA_VERSION,
+  setStampAppVersion,
+  WorkspaceNewerError
+} from '../../src/main/services/db'
 import { openRawDb, tempRoot } from '../helpers/db-fixtures'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 
 // #247 (owner decision #225 — "ratify"): the workspace database carries `PRAGMA user_version`
 // = SCHEMA_VERSION so an OLDER build refuses a NEWER workspace instead of opening it and
@@ -12,6 +19,13 @@ import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 // 0 forever, and a build could not tell it had opened a database written by a newer schema.
 // Builds ≤ 0.1.59 ignore the stamp — the guard protects only pairs where the OLDER build is
 // newer than this change.
+//
+// App-update T2.2 (F-10): every open also upserts the `last_writer` row of `schema_meta` (db-schema-meta.test.ts). The
+// rows here open with the app version set, as the app does, so the refused file's byte identity below holds with the
+// stamp in place (the refusal comes before it), and "a second open" is a write of the stamp, never of `user_version`.
+const PACKAGE_VERSION = (JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+beforeEach(() => setStampAppVersion(PACKAGE_VERSION))
+afterEach(() => setStampAppVersion(''))
 
 function freshPath(): string {
   return join(tempRoot('user-version'), 'workspace.sqlite')
@@ -50,7 +64,7 @@ describe('PRAGMA user_version (#247)', () => {
     expect(readVersion(p)).toBe(SCHEMA_VERSION)
   })
 
-  it('an existing pre-stamp database (version 0) upgrades in place; a second open is a no-op', () => {
+  it('an existing pre-stamp database (version 0) upgrades in place; every later open writes the stamp again, never user_version', () => {
     const p = freshPath()
     openDatabase(p).close()
     // Every database written before this change: stamp 0, and (as an older build left it)
@@ -63,13 +77,21 @@ describe('PRAGMA user_version (#247)', () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('documents') WHERE name = 'ocr_meta_json'").get()).toEqual({ n: 1 })
     db.close()
     expect(readVersion(p)).toBe(SCHEMA_VERSION)
-    // A second open at the current version writes NOTHING: an unconditional stamp would
-    // rewrite page 1 (the change counter moves) and this hash would differ.
-    const before = sha(p)
+    // App-update T2.2 (F-10, row N4; was "a second open is a no-op"): every open upserts `last_writer`, so a second open
+    // at the current version is a write: another value planted between the two opens is replaced. What stays true is
+    // that `user_version` is written only when moving up: the database header (page 1's first 100 bytes, which hold it;
+    // writing page 1 moves its change counter) is byte-identical across that open, whose one write is the stamp's row.
+    // The whole file's hash cannot say it any more: a stamp of the same value leaves the file unchanged (measured), so
+    // the old hash check would stay green whether or not this open wrote.
+    rawExec(p, "UPDATE schema_meta SET value = '0.0.1;planted' WHERE key = 'last_writer'")
+    const header = readFileSync(p).subarray(0, 100)
     const again = openDatabase(p)
     expect((again.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION)
+    expect(again.prepare("SELECT value FROM schema_meta WHERE key = 'last_writer'").get()).toEqual({
+      value: `${PACKAGE_VERSION};${LAST_WRITER_APPLIED_THROUGH}`
+    })
     again.close()
-    expect(sha(p)).toBe(before)
+    expect(readFileSync(p).subarray(0, 100).equals(header)).toBe(true)
   })
 
   it('a database stamped by a NEWER build is refused with WorkspaceNewerError — closed, no writes', () => {

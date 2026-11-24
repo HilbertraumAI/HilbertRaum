@@ -25,6 +25,7 @@ import {
   devToolsAllowed,
   disableSpellCheckerDownloads
 } from './window-security'
+import { setStampAppVersion } from './services/db'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
 import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
@@ -35,7 +36,7 @@ import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from 
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
-import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { logStampFailures, registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { endWorkOnModelStop } from './ipc/model-stop'
@@ -129,6 +130,10 @@ import type { AppContext } from './services/context'
 // The first statement, at module scope: every child started later (the sidecars) inherits the filter, and nothing
 // secret exists yet. Every other platform: a no-op. Logging does not exist yet, so `initBackend` reports a refusal.
 const coreDumpLimit = limitCoreDumps({ platform: process.platform, writeFile: writeFileSync })
+
+// App-update T2.2 (F-10): every database open stamps `last_writer` with this app's version, so it is set here, before
+// anything can open one (the plaintext workspace opens inside `workspace.init()`). Until it is set an open writes none.
+setStampAppVersion(app.getVersion())
 
 // The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
 // from import.meta.url (the fileURLToPath idiom already used across the test suite).
@@ -323,6 +328,7 @@ function initBackend(): void {
       { refused: journalRefusals }
     )
   }
+  logStampFailures(workspace) // T2.2: the plaintext open's `last_writer` stamp, when it could not be written (codes only)
   if (workspace.discardedOnlyCopy()) {
     // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept
     // it. Content-free, no path; no marker and no audit type. The unlock then answers `vault_missing`.

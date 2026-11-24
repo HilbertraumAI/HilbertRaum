@@ -3007,7 +3007,8 @@ export function createEncryptedVaultOnDisk(
   vaultPaths: VaultPaths,
   password: string,
   kdf: KdfParams = DEFAULT_KDF,
-  opts: { legacyV1?: boolean } = {}
+  /** T2.2: `onStampFailed` hears the content-free code when the new database's `last_writer` stamp was not written. */
+  opts: { legacyV1?: boolean; onStampFailed?: (code: string) => void } = {}
 ): void {
   // Refuse to overwrite an existing vault — `.enc` IS the user's data (chats, documents,
   // settings), and re-creating would irreversibly replace it with an empty database. A
@@ -3073,7 +3074,7 @@ export function createEncryptedVaultOnDisk(
   try {
     // #247: a leftover plaintext file at `dbPath` stamped by a NEWER build makes this open
     // throw (handled: the create IPC reports `workspace_newer`) — the key is zeroed either way.
-    const db = openDatabase(vaultPaths.dbPath)
+    const db = openDatabase(vaultPaths.dbPath, { onStampFailed: opts.onStampFailed })
     seedSettings(db)
     updateSettings(db, { workspaceMode: 'encrypted' })
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
@@ -3178,7 +3179,10 @@ export function unlockEncryptedVault(
   /** #1014: hears what this unlock's passes left as they are. Round 4: the recovery before the password too (it counted
    *  nothing, so an entry it refused in a journal that turned up after the start was dropped with no trace), and the
    *  passes once it holds the data key. */
-  onJournalRefusals?: (refused: number) => void
+  onJournalRefusals?: (refused: number) => void,
+  /** T2.2 (W-9): hears the content-free code when the open's `last_writer` stamp was not written. The unlock goes on:
+   *  a stamp never reaches `openFailure`. */
+  onStampFailed?: (code: string) => void
 ): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
   // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
@@ -3380,7 +3384,7 @@ export function unlockEncryptedVault(
     // plaintext user data sitting on disk while the workspace reports locked.
     let db: Db
     try {
-      db = openDatabase(vaultPaths.dbPath)
+      db = openDatabase(vaultPaths.dbPath, { onStampFailed })
       openedDb = db
       seedSettings(db)
       // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it
@@ -3793,6 +3797,12 @@ export class WorkspaceController {
   private readonly noteProbeFallback: ProbeFallbackNote = (site, code) => {
     if (this._probeFallbacks.length < 20) this._probeFallbacks.push({ site, code })
   }
+  /** T2.2 (W-9): the content-free codes of the `last_writer` stamps an open could not write, for the log
+   *  ({@link takeStampFailures}). Bounded. */
+  private _stampFailures: string[] = []
+  private readonly noteStampFailed = (code: string): void => {
+    if (this._stampFailures.length < 20) this._stampFailures.push(code)
+  }
   /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
    * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
@@ -3868,6 +3878,15 @@ export class WorkspaceController {
   takeProbeFallbacks(): Array<{ site: ProbeFallbackSite; code: string }> {
     const notes = this._probeFallbacks
     this._probeFallbacks = []
+    return notes
+  }
+
+  /** T2.2 (W-9): the codes of the `last_writer` stamps the opens since the last call could not write (SQLite's result
+   *  code and fixed description, a Node error code, or `no-app-version`; never a message, a path or a value). The open
+   *  went on each time (the stamp is best effort). Returns them once, for one log line each. */
+  takeStampFailures(): string[] {
+    const notes = this._stampFailures
+    this._stampFailures = []
     return notes
   }
 
@@ -3961,7 +3980,7 @@ export class WorkspaceController {
   }
 
   private openPlaintext(): void {
-    const db = openDatabase(this.vaultPaths.dbPath)
+    const db = openDatabase(this.vaultPaths.dbPath, { onStampFailed: this.noteStampFailed })
     seedSettings(db)
     updateSettings(db, { workspaceMode: 'plaintext_dev' })
     this._db = db
@@ -4304,7 +4323,8 @@ export class WorkspaceController {
         this.noteProbeFallback,
         this.noteStageInDoubt,
         this.noteSidecarStages,
-        this.noteJournalRefusals
+        this.noteJournalRefusals,
+        this.noteStampFailed
       )
     } catch (err) {
       // #911: a failed unlock can end the state the notice is about (a damaged kept copy shredded; a roll-forward that
@@ -4388,8 +4408,16 @@ export class WorkspaceController {
       if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()
     } else {
-      createEncryptedVaultOnDisk(this.vaultPaths, password)
-      const { db, key, descriptor } = unlockEncryptedVault(this.vaultPaths, password)
+      createEncryptedVaultOnDisk(this.vaultPaths, password, DEFAULT_KDF, { onStampFailed: this.noteStampFailed })
+      const { db, key, descriptor } = unlockEncryptedVault(
+        this.vaultPaths,
+        password,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        this.noteStampFailed
+      )
       this._db = db
       this.key = key
       this.descriptor = descriptor
@@ -4671,8 +4699,11 @@ export class WorkspaceController {
         // main file alone looks like.
         try {
           const replayable = walPending && (workingCopy === 'damaged' || workingCopy === 'not-database')
-          if (workingCopy === 'database' || workingCopy === 'unchecked' || replayable) this._db = openDatabase(dbPath)
-          else if (workingCopy === 'gone') cleanSidecars(dbPath)
+          // T2.2: the stamp is this open's one write attempt on what is often a full drive; it fails into the note and
+          // the connection is kept.
+          if (workingCopy === 'database' || workingCopy === 'unchecked' || replayable) {
+            this._db = openDatabase(dbPath, { onStampFailed: this.noteStampFailed })
+          } else if (workingCopy === 'gone') cleanSidecars(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the
           // closed handle — isUnlocked() stays true, so no unlock can decrypt the STALE
