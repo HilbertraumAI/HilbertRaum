@@ -19,6 +19,7 @@ import {
   listImageSessions
 } from '../../src/main/services/vision/history'
 import { testCipher } from '../helpers/test-cipher'
+import { FOLDER_LINKS, unlinkFolder } from '../helpers/folder-links'
 
 // A recognizable image-byte pattern no real PNG header would contain — lets us assert the
 // ENCRYPTED copy never leaks the plaintext bytes to disk.
@@ -153,6 +154,35 @@ describe('image history — delete', () => {
     expect(listImageSessions(db)).toHaveLength(0)
     expect(readFileSync(victim, 'utf8')).toBe('USER FILE: a photo')
   })
+
+  // T2.7 security re-check 1 (N-2): with `images/` itself a link to a folder elsewhere, every bare name there passed the
+  // guard above (the store was compared with itself). Containment is judged from the workspace folder now, as the start's
+  // sweep judges a store (T2.9 R2-3): behind a linked images folder neither a delete nor a clear shreds anything. The
+  // cost, recorded: an images folder a user keeps behind a link of their own keeps a deleted image's encrypted copy.
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the images folder ${label} to a folder elsewhere: a delete and a clear shred nothing behind it, the rows go (N-2)`, async () => {
+      const { db, workspacePath } = freshWorkspace()
+      const elsewhere = mkdtempSync(join(tmpdir(), 'hilbertraum-imghist-elsewhere-'))
+      const dir = join(workspacePath, 'images')
+      make(elsewhere, dir)
+      try {
+        const cipher = testCipher()
+        const a = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, cipher)
+        await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, cipher)
+        const before = Object.fromEntries(readdirSync(elsewhere).map((n) => [n, readFileSync(join(elsewhere, n)).toString('base64')]))
+        expect(Object.keys(before)).toHaveLength(2)
+
+        await deleteImageSession(db, dir, a)
+        expect(await clearImageSessions(db, dir)).toBe(1)
+
+        expect(listImageSessions(db)).toHaveLength(0)
+        const after = Object.fromEntries(readdirSync(elsewhere).map((n) => [n, readFileSync(join(elsewhere, n)).toString('base64')]))
+        expect(after).toEqual(before)
+      } finally {
+        unlinkFolder(dir)
+      }
+    })
+  }
 
   it('REL-5: a failed row delete leaves the image intact — no undeletable ghost session', async () => {
     // The fix deletes the ROW first, then shreds. Inject a failure on the row delete and assert the

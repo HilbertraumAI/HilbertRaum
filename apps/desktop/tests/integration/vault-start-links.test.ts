@@ -19,6 +19,7 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
+  QUARANTINE_SUFFIX,
   ROTATED_ENCRYPTED_LOG_NAME,
   VaultRecoveryBlockedError,
   WORKING_COPY_LOST_MARKER,
@@ -529,6 +530,42 @@ describe('a link at one of the vault’s fixed write-temp names is never written
     expect(sha(victim)).toBe(before)
     expect(existsSync(vp.descriptorPath), 'nothing committed').toBe(false)
     expect(existsSync(vp.encPath)).toBe(false)
+  })
+})
+
+// T2.7 security re-check 1 (N-1; the owner's "keep the set-aside files"): a create sets a leftover database aside under
+// `hilbertraum.sqlite.quarantine`. A create that failed after it opened its own fresh database left that file, and a retry
+// moved it over the copy set aside before, which was lost. A failed create now removes its own fresh database, and a
+// set-aside goes to the first free name (`.quarantine`, then `.quarantine-<n>`), so nothing set aside is replaced.
+describe('a create never replaces what an earlier create set aside (T2.7 re-check, N-1)', () => {
+  it('two creates that fail after their open, a leftover before each: both set-aside copies stay byte for byte, and neither leaves its own database', () => {
+    const vp = freshVaultPaths('start-links-n1')
+    const leftover = (text: string): string => {
+      const raw = openRawDb(vp.dbPath)
+      try {
+        raw.exec(`CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('${text}');`)
+      } finally {
+        raw.close()
+      }
+      return sha(vp.dbPath)
+    }
+    // A folder at the staged encrypt's temp name fails each create after it opened and wrote its fresh database.
+    mkdirSync(`${vp.encPath}${REKEY_SUFFIX}.tmp`)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      const first = leftover('USER COPY A')
+      expect(() => ctl.create(PW, 'encrypted')).toThrow(/EEXIST/)
+      expect(existsSync(vp.dbPath), 'the failed create removed its own database').toBe(false)
+      const second = leftover('USER COPY B')
+      expect(() => ctl.create(PW, 'encrypted')).toThrow(/EEXIST/)
+      expect(existsSync(vp.dbPath)).toBe(false)
+      const aside = `${vp.dbPath}${QUARANTINE_SUFFIX}`
+      expect(sha(aside), 'the first copy set aside').toBe(first)
+      expect(sha(`${aside}-1`), 'the second, at the next free name').toBe(second)
+    } finally {
+      ctl.shutdown()
+    }
   })
 })
 

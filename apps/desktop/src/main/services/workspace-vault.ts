@@ -2106,12 +2106,17 @@ function folderAtItsName(dir: string): Containment {
  * folder that resolves elsewhere, or a stat that proves nothing answers no). A row names its file by a recorded path or
  * name, which a later version, a cloned drive or a database the app did not make can point at any file: such a file is
  * left as it is, and only the row goes. The app writes every stored copy into its store, so its own always pass.
+ * Re-check 1 (N-2): the folders are judged from the workspace folder that holds the store (`storeDir`'s parent), as the
+ * start's sweep judges a store ({@link storeFolderInside}, T2.9 R2-3): judged from the store itself, the store folder
+ * always matched its own resolution, so behind a `documents/` or `images/` that is a link to a folder elsewhere every
+ * file passed. Behind such a link nothing is shredded now; the cost, recorded: a store a user keeps behind a link of
+ * their own keeps a deleted document's or image's encrypted copy, as it already gets no sweep.
  */
 export function storeHoldsFile(storeDir: string, path: string): boolean {
   const store = resolve(storeDir)
   const full = resolve(path)
   if (!isInsideDir(store, full)) return false
-  return folderContainment(store, dirname(full)) === 'inside'
+  return folderContainment(dirname(store), dirname(full)) === 'inside'
 }
 
 /** #1014 round 3: the staged database's or an in-store stage's entry (`documents/`, `images/`), which the start settles:
@@ -3281,12 +3286,17 @@ export function createEncryptedVaultOnDisk(
   /** The encrypt returned: `.enc.new` is this create's. */
   let stagedHere = false
   let committed = false
+  /** T2.7 re-check 1 (N-1): the open below makes the database files itself (none of the three names held anything), so
+   *  they are this create's own: a failure before the commit shreds them (seeded settings only), and a retry finds no
+   *  leftover of this create's to set aside. A database the create adopts (a dev build's) is never removed. */
+  let ownDatabase = false
   try {
     // T2.7 security fix round (F-2): SQLite opens the three names below and writes through a link at any of them
     // ({@link createMayOpenDatabase}); with one there the create is refused before anything is written.
     if (!createMayOpenDatabase(vaultPaths.dbPath)) {
       throw new Error('A workspace database file is a link or has a second name; nothing was created')
     }
+    ownDatabase = ['', '-wal', '-shm'].every((tail) => lstatOrAbsent(`${vaultPaths.dbPath}${tail}`) === null)
     // #247: a leftover plaintext file at `dbPath` stamped by a NEWER build makes this open
     // throw (handled: the create IPC reports `workspace_newer`) — the key is zeroed either way.
     // T2.7 (L-4): any other failure of the open or of its first writes is thrown as the unlock's open throws one, a
@@ -3337,6 +3347,11 @@ export function createEncryptedVaultOnDisk(
           /* best-effort: the failure being reported is the create's own */
         }
       }
+      // T2.7 re-check 1 (N-1): and its own fresh database (best-effort, as `shredFile` is; the open closed its handle).
+      if (ownDatabase) {
+        shredFile(vaultPaths.dbPath)
+        cleanSidecars(vaultPaths.dbPath)
+      }
     }
     throw err
   } finally {
@@ -3362,7 +3377,8 @@ function createMayOpenDatabase(dbPath: string): boolean {
  * T2.7 security fix round (F-3; FU-P2-6 in P2): the suffix a create sets a leftover aside under, on a build that allows no
  * plaintext workspace ({@link setLeftoversAside}): `hilbertraum.sqlite.quarantine` with its `-wal` and `-shm` as
  * `hilbertraum.sqlite.quarantine-wal` and `-shm` (so they stay a pair a person can open), and
- * `hilbertraum.sqlite.recovery.quarantine`. Chosen so that nothing reads, shreds or vouches for them: the start's sweep
+ * `hilbertraum.sqlite.recovery.quarantine`; (re-check 1, N-1) then `.quarantine-<n>` (n from 1) while those are taken,
+ * so nothing set aside is ever replaced. Chosen so that nothing reads, shreds or vouches for them: the start's sweep
  * removes exact names (the working file, its `.tmp`, `-wal` and `-shm`), the salvage reads the working file and
  * `.recovery` only, the stage scan and the rekey journal admit only `.enc.new` names, and the orphaned-stage removal only
  * `.enc.new` and its temps.
@@ -3375,22 +3391,33 @@ export const QUARANTINE_SUFFIX = '.quarantine'
  * workspace, its settings kept, and the create's unlock rolled a `.recovery` forward over the new `.enc` when that copy's
  * time was later: a drive could so hand the user a database the app did not make (rows naming files to shred, settings)
  * under the user's new key. Each of those names that holds anything is moved, by its name (a link moves as the link), to
- * its {@link QUARANTINE_SUFFIX} name, replacing a file a create set aside there before; none is opened. A move that fails
- * (a hold, a folder at the target) throws, and the create fails with nothing of its own written. A newer build's copy
- * never gets here: the create refuses it first (#985).
+ * a {@link QUARANTINE_SUFFIX} name; none is opened. T2.7 re-check 1 (N-1; the owner: set-aside files are kept): never
+ * over one set aside before. The working file with its `-wal` and `-shm` goes to the first suffix (`.quarantine`, then
+ * `.quarantine-1` … `-64`, as {@link quarantineName} names the journal's) that is free for all three, and `.recovery` to
+ * the first free `.recovery.quarantine[-<n>]`; free means an `lstat` that says ENOENT. With none free, or a move that
+ * fails (a hold), it throws, and the create fails with nothing of its own written. A newer build's copy never gets here:
+ * the create refuses it first (#985).
  */
 function setLeftoversAside(vaultPaths: VaultPaths): void {
   const db = vaultPaths.dbPath
-  const aside = `${db}${QUARANTINE_SUFFIX}`
-  const moves: Array<[string, string]> = [
-    [db, aside],
-    [`${db}-wal`, `${aside}-wal`],
-    [`${db}-shm`, `${aside}-shm`],
-    [`${db}${RECOVERY_SUFFIX}`, `${db}${RECOVERY_SUFFIX}${QUARANTINE_SUFFIX}`]
-  ]
-  for (const [from, to] of moves) {
-    if (lstatOrAbsent(from) !== null) renameSync(from, to)
+  const present = (path: string): boolean => lstatOrAbsent(path) !== null
+  /** The first `<base>.quarantine[-<n>]` at which every one of `tails` is free. */
+  const freeAside = (base: string, tails: readonly string[]): string => {
+    for (let n = 0; n <= QUARANTINE_NAMES; n++) {
+      const aside = `${base}${QUARANTINE_SUFFIX}${n === 0 ? '' : `-${n}`}`
+      if (tails.every((tail) => !present(`${aside}${tail}`))) return aside
+    }
+    throw new Error('No free name to set a leftover workspace file aside; nothing was created')
   }
+  const sqliteTails = ['', '-wal', '-shm']
+  if (sqliteTails.some((tail) => present(`${db}${tail}`))) {
+    const aside = freeAside(db, sqliteTails)
+    for (const tail of sqliteTails) {
+      if (present(`${db}${tail}`)) renameSync(`${db}${tail}`, `${aside}${tail}`)
+    }
+  }
+  const recovery = `${db}${RECOVERY_SUFFIX}`
+  if (present(recovery)) renameSync(recovery, freeAside(recovery, ['']))
 }
 
 /** #985: the probe of the `.recovery` copy, or null when there is none. */
