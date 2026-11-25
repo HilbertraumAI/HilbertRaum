@@ -25,6 +25,20 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Changed
+
+- **HilbertRaum now recognises what a newer version left on the drive, and leaves it alone.** A workspace, AI model,
+  skill or knowledge pack from a newer version is shown as needing a newer version instead of being opened, changed
+  or called damaged, and statements and invoices that a newer version read from your documents are not read again
+  and replaced. When this version can't read a workspace's database, the lock screen no longer calls it damaged and
+  sends you to a backup: it says your password is correct, the workspace is unchanged and was probably last used
+  with a newer version, and names this version and where to get the newer one. The other messages about newer
+  versions now say the same thing the same way, and a skill's details no longer promise tools "in a later version".
+  The encrypted workspace is also stricter about its own files: it removes or replaces files only inside its own
+  folders and never through a link, and it checks what it reads before you unlock more carefully. A damaged
+  text-recognition (OCR) language file on the drive no longer makes the app crash at start; text recognition shows
+  as unavailable instead.
+
 ### Fixed
 
 - **When HilbertRaum can't start, it now says why and what to do.** If the app could not write to its drive (for
