@@ -299,12 +299,13 @@ verify_file() {
 }
 # Collect manifest paths WITHOUT `mapfile` (a Bash 4+ builtin absent from macOS's stock
 # Bash 3.2) and WITHOUT `sort -z` (not on BSD/macOS sort). Newline-delimited read is
-# portable; manifest filenames are controlled and contain no newlines.
+# portable; manifest filenames are controlled and contain no newlines. `-iname`: the app and
+# the .ps1 twin read an extension, and reserve runtime-sources, in any case (`K20.YAML`, T2.7).
 MANIFEST_FILES=()
 while IFS= read -r mf; do
   [ -n "$mf" ] && MANIFEST_FILES+=("$mf")
-done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
-         ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
+done < <(find "$MANIFESTS_DIR" \( -iname '*.yaml' -o -iname '*.yml' \) -type f \
+         ! -iname 'runtime-sources.yaml' ! -iname 'runtime-sources.yml' | sort)
 
 # No manifests is not an early exit: --generate still writes `entries: []` (as the .ps1 and the
 # app's buildChecksumsJson do), and --strict / --kit still fail below (#767).

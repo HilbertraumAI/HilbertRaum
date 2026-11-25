@@ -905,6 +905,41 @@ for (const leg of SCRIPT_LEGS) {
         expect({ ...written, generated_at: '' }).toEqual({ ...app, generated_at: '' })
         expect(written.entries.map((e) => e.id)).toEqual(['u-model'])
       })
+
+      // T2.7 fix round (R1 MJ-5): the app reads a manifest whatever the case of its extension, so both twins do. The .sh
+      // twins' `find -name` saw neither file below, and `--kit` failed for "no manifests" instead of on the newer one.
+      it('manifests named in upper case are read as the app reads them: --kit fails on the newer .YAML, the .YML is used (T2.7, R1 MJ-5)', () => {
+        const root = scriptRoot('script-models-')
+        const usable = manifestYaml({ id: 'u-model', localPath: 'models/chat/u-model.gguf', sha256: sha256('u') }, [BUNDLED])
+        writeDriveFile(root, 'model-manifests/U-MODEL.YML', usable)
+        writeDriveFile(root, 'model-manifests/N-MODEL.YAML', fetchable('n-model', { extra: [BUNDLED, 'min_app_version: 99999.0.0'] }))
+        writeDriveFile(root, 'models/chat/u-model.gguf', 'u')
+        setManifestAppVersion(APP_VERSION)
+        let found: ReturnType<typeof discoverManifests>
+        try {
+          found = discoverManifests(join(root, 'model-manifests'))
+        } finally {
+          setManifestAppVersion('')
+        }
+        expect([found.manifests.map((m) => m.manifest.id), found.unsupported.map((u) => u.manifest.id)]).toEqual([['u-model'], ['n-model']])
+
+        const kit = leg.run(verifier, [f('Target'), root, f('Kit')])
+        const out = outputOf(kit)
+        expect(kit.status, out).toBe(1)
+        expect(out).toContain(SKIP_LINE('n-model'))
+        expect(out).toMatch(/VERIFIED\s+u-model/)
+        expect(out).toContain('KIT: 1 manifest(s) need a newer HilbertRaum')
+
+        // fetch-models plans the usable one (its weight is absent there) and counts the newer one.
+        rmSync(join(root, 'models'), { recursive: true, force: true })
+        writeDriveFile(root, 'model-manifests/U-MODEL.YML', fetchable('u-model', { extra: [BUNDLED] }))
+        const plan = leg.run(`fetch-models.${leg.ext}`, [f('Target'), root, f('DryRun')])
+        const planned = outputOf(plan)
+        expect(plan.status, planned).toBe(0)
+        expect(planned).toContain(SKIP_LINE('n-model'))
+        expect(planned).toContain('fetch  u-model')
+        expect(planned).toContain('Planned 1 | fetched 0 | skipped 0 | for a newer HilbertRaum 1')
+      })
     })
 
     // Real manifests, the real script, no network: a dry run stops short of every download. The real

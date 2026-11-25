@@ -384,11 +384,12 @@ handle_file() {
   fi
 }
 
+# `-iname`: the app and the .ps1 twin read an extension, and reserve runtime-sources, in any case (T2.7).
 MANIFEST_FILES=()
 while IFS= read -r mf; do
   [ -n "$mf" ] && MANIFEST_FILES+=("$mf")
-done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
-         ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
+done < <(find "$MANIFESTS_DIR" \( -iname '*.yaml' -o -iname '*.yml' \) -type f \
+         ! -iname 'runtime-sources.yaml' ! -iname 'runtime-sources.yml' | sort)
 
 planned=0; fetched=0; skipped=0; had_failure=0; newer_count=0
 # --only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.

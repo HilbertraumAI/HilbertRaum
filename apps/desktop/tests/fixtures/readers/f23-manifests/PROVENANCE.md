@@ -17,6 +17,11 @@ Round 2 (T2.10 fix round 2, after the Fable QA of the set from the docs only) ad
 `s5`, `s6` and the second flat-read probe; no earlier verdict changed. Round 3 (after the QA's re-check 1) added
 `d13` (a new value of the closed enum `speculative_decoding` without `min_app_version`: dropped) and the scenario
 `s7-two-usable-one-id` (two usable files of one id: the first in walk order is the model, the other is logged),
-and ran the escaped files through the `.sh` twins too; no earlier verdict changed. Release 1 reads every file a later
+and ran the escaped files through the `.sh` twins too; no earlier verdict changed. Round 4 (T2.7's F-23/F-25 fix round,
+2026-11-25, on `dc46db15`, from the two Fable reviews of F-23 as built) pins what release 1 does as built: a misplaced
+minimum (`a14`, the skills' `minAppVersion` at the top level; `a15`, `min_app_version` nested in a block; R1 MJ-6:
+ignored, the file is used, by the app and both twins) and a file under `model-manifests/` that is no model (`l18`, a
+catalog index with an id, a display name and a minimum: listed and skipped; `d14`, a hash table: dropped; R1 MJ-4: any
+`.yaml` there is read as a manifest); no earlier verdict changed. Release 1 reads every file a later
 release puts on a drive, for ever: a verdict here never changes. A later release adds files and lines only.
 Locked by `../../golden-fixtures.sha256`.

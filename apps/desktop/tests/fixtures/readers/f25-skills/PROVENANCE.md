@@ -16,4 +16,10 @@ Round 2 (after the Fable QA) added six folders (`g25-min-suffix`, `g25-min-four-
 folders: a `v`-prefixed and a `+build` minimum, both invalid at every version, and a leading-zero minimum
 (`0.01.66`), valid and compared as numbers; no earlier verdict changed. `unavailable-reasons.json` is T2.14 round 2's
 addition beside `verdicts.json` (the reason a reconcile gives for an unavailable row), over this set's folders.
-Locked by `../../golden-fixtures.sha256`.
+Round 4 (T2.7's F-23/F-25 fix round, 2026-11-25, on `dc46db15`, from the two Fable reviews of F-25 as built) pins what
+release 1 does as built: three folders with a value it does not know of a key it reads leniently and no minimum
+(`g25-analysis-unknown`, `g25-permission-unknown`, `g25-tool-unknown`; R1 MJ-3: valid, the value dropped, the skill runs
+without it, under the new `reads` key), two with a misplaced minimum (`g25-min-top-level`, `g25-min-top-level-snake`;
+R1 MJ-6: ignored, the skill is used), and two sequences (R2 M-3: an app row off with no reason, never written since, is
+read as the version gate's and switched back on; on an app version the gate cannot read its reason is recorded as
+`min_app_version` first). No earlier verdict changed. Locked by `../../golden-fixtures.sha256`.

@@ -20,6 +20,7 @@ import {
   type ReconcileOptions
 } from '../../src/main/services/skills/registry'
 import { loadSkillPackage } from '../../src/main/services/skills/loader'
+import { runnableToolNames } from '../../src/main/services/skills/tool-runs'
 import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
 import { DEFAULT_SKILL_LIMITS, type SkillLimits } from '../../src/main/services/skills/limits'
 
@@ -687,10 +688,19 @@ interface F25Verdict {
   gate?: 'compatible' | 'needsNewerApp'
   row: { enabled: boolean; reason: string | null } | null
 }
+/** T2.7 fix round (R1 MJ-3): what release 1 reads of a value it does not know, of a key it reads leniently. */
+interface F25Reads {
+  analysis: string | null
+  permissions: Record<string, string>
+  allowedTools: string[]
+  runnableTools: string[]
+  noteCodes: string[]
+}
 interface F25Data {
+  appVersion: string
   appVersions: string[]
   /** `id`: the declared id, where it is not the folder name (round 2). */
-  skills: Array<F25Verdict & { folder: string; id?: string; class: string; at?: Record<string, F25Verdict> }>
+  skills: Array<F25Verdict & { folder: string; id?: string; class: string; at?: Record<string, F25Verdict>; reads?: F25Reads }>
   sequences: Array<{
     name: string
     folder: string
@@ -779,6 +789,28 @@ describe('F-25 golden skill folders: what release 1 accepts, lists, drops and ig
       const status = registry.reconcileStatus()
       expect(status.errorCount).toBe(count(['invalidManifest', 'invalidFolderName']))
       expect(status.needsNewerAppCount).toBe(newer > 0 ? newer : undefined)
+    }
+  )
+
+  // T2.7 fix round (R1 MJ-3): a new value of a key release 1 reads leniently (an analysis mode, a permission value, a tool),
+  // with no minimum. The skill is valid and the value is dropped, so it runs without it: the parse, and the tools the app
+  // skill's row may run.
+  it.each(data.skills.filter((s) => s.reads !== undefined).map((s) => [s.folder, s] as const))(
+    '%s: the value release 1 does not know is dropped and the skill runs without it (T2.7, R1 MJ-3)',
+    (_folder, s) => {
+      const dirs = goldenDirs()
+      const parsed = parseSkillMarkdown(readFileSync(join(dirs.appSkillsDir, s.folder, 'SKILL.md'), 'utf8'))
+      expect(parsed.ok, parsed.errors.join('; ')).toBe(true)
+      const db = freshDb()
+      reconcileSkills(db, { ...dirs, appVersion: data.appVersion })
+      const record = getSkill(db, `app:${s.folder}`)!
+      expect({
+        analysis: parsed.manifest!.analysis ?? null,
+        permissions: parsed.manifest!.permissions,
+        allowedTools: parsed.manifest!.allowedTools,
+        runnableTools: runnableToolNames(record, data.appVersion),
+        noteCodes: (parsed.noteCodes ?? []).map((n) => n.code)
+      }).toEqual(s.reads)
     }
   )
 

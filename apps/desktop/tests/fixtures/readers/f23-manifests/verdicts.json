@@ -531,6 +531,44 @@
           "": "use"
         },
         "why": "a new value of a closed enum (speculative_decoding: eagle3) without min_app_version: release 1 refuses the value and drops the file, as the release rule says; the scripts, which read role and min_app_version only, use it"
+      },
+      {
+        "file": "a14-min-camel-case.yaml",
+        "id": "g23-a14-min-camel-case",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "T2.7 (R1 MJ-6): the skills' spelling minAppVersion at the top level is a key release 1 does not know: ignored, so the manifest is used whatever version it names, by the app and by both twins"
+      },
+      {
+        "file": "a15-min-nested.yaml",
+        "id": "g23-a15-min-nested",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "T2.7 (R1 MJ-6): min_app_version nested in a block (here the skills' compatibility) is no top-level minimum: the block is an unknown key, so the manifest is used, by the app and by both twins"
+      },
+      {
+        "file": "l18-catalog-index.yaml",
+        "id": "g23-l18-catalog-index",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "T2.7 (R1 MJ-4): any .yaml under model-manifests/ is read as a manifest. A file that is no model (a catalog index) with id, display_name and a min_app_version above the app is listed as a model under \"Needs a newer HilbertRaum\", and both twins skip it"
+      },
+      {
+        "file": "d14-owned-hashes.yaml",
+        "verdict": "drops",
+        "why": "T2.7 (R1 MJ-4): a .yaml under model-manifests/ that is no model (a hash table) and has no id is read as a manifest too, and dropped with a log line"
       }
     ]
   },

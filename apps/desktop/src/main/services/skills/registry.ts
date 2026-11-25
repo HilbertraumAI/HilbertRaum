@@ -18,13 +18,19 @@ import { join } from 'node:path'
 import type { Db } from '../db'
 import { log } from '../logging'
 import {
+  SKILL_ANALYSIS_MODES,
   SKILL_ID_RE,
+  SKILL_V1_PERMISSION_CEILING,
   failedSkillNeedsNewerApp,
   parseSemverCore,
   skillNeedsNewerApp,
+  type SkillCompatibility,
   type SkillKind,
+  type SkillLocalizedText,
   type SkillManifest,
-  type SkillTrustedLevel
+  type SkillPermissions,
+  type SkillTrustedLevel,
+  type SkillTriggers
 } from '../../../shared/skill-manifest'
 import type { SkillUnavailableReason } from '../../../shared/types'
 import { parseSkillManifestFromDir } from './manifest'
@@ -161,10 +167,97 @@ function rowToRecord(r: SkillRow): SkillRecord {
     enabled: r.enabled === 1,
     warningAck: r.warning_ack === 1,
     trustedLevel: r.trusted_level as SkillTrustedLevel,
-    manifest: JSON.parse(r.manifest_json) as SkillManifest,
+    manifest: storedManifest(r),
     unavailableAt: r.unavailable_at,
     installedAt: r.installed_at,
     updatedAt: r.updated_at
+  }
+}
+
+function isMapping(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
+
+/** The values each permission can hold in a manifest this build wrote (`validateSkillManifest` clamps to them). */
+const STORED_PERMISSION_VALUES: { [K in keyof SkillPermissions]: readonly string[] } = {
+  documents: ['none', 'selected_only'],
+  network: ['denied'],
+  filesystem: ['none', 'skill_resources_only']
+}
+
+/**
+ * App-update T2.7 fix round (R1 MJ-1 = R2 M-1): a row's cached `manifest_json`, read tolerantly. The reconcile rewrites
+ * it only for a folder this build can read, so the rows read as another version wrote them are exactly those whose
+ * folder it cannot read (marked unavailable). One of those whose cache is no JSON, or lacks or mistypes a member this
+ * build reads, used to throw for the whole Skills list, the picker and the suggestion. Each member now falls back to this
+ * build's own default where it is missing or of another shape (the v1 permission ceiling per permission, no minimum, no
+ * triggers, no tools, no per-language texts; the id, title, version and kind from the row's columns), and the row shows
+ * by the states it already has. A manifest this build wrote reads exactly as before.
+ */
+function storedManifest(r: SkillRow): SkillManifest {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(r.manifest_json)
+  } catch {
+    parsed = undefined
+  }
+  const m = isMapping(parsed) ? parsed : {}
+  const text = (v: unknown, fallback: string): string => (typeof v === 'string' ? v : fallback)
+
+  const compat = isMapping(m.compatibility) ? m.compatibility : {}
+  const compatibility: SkillCompatibility = typeof compat.minAppVersion === 'string' ? { minAppVersion: compat.minAppVersion } : {}
+
+  const perms = isMapping(m.permissions) ? m.permissions : {}
+  const permission = <K extends keyof SkillPermissions>(key: K): SkillPermissions[K] => {
+    const v = perms[key]
+    return (typeof v === 'string' && STORED_PERMISSION_VALUES[key].includes(v) ? v : SKILL_V1_PERMISSION_CEILING[key]) as SkillPermissions[K]
+  }
+  const permissions: SkillPermissions = {
+    documents: permission('documents'),
+    network: permission('network'),
+    filesystem: permission('filesystem')
+  }
+
+  let localized: SkillManifest['localized']
+  if (isMapping(m.localized)) {
+    const out: NonNullable<SkillManifest['localized']> = {}
+    for (const [lang, entry] of Object.entries(m.localized)) {
+      if (!isMapping(entry)) continue
+      const kept: SkillLocalizedText = {
+        ...(typeof entry.title === 'string' ? { title: entry.title } : {}),
+        ...(typeof entry.description === 'string' ? { description: entry.description } : {})
+      }
+      if (kept.title !== undefined || kept.description !== undefined) out[lang] = kept
+    }
+    if (Object.keys(out).length > 0) localized = out
+  }
+
+  const trig = isMapping(m.triggers) ? m.triggers : {}
+  const triggers: SkillTriggers = {
+    keywords: isStringList(trig.keywords) ? trig.keywords : [],
+    mimeTypes: isStringList(trig.mimeTypes) ? trig.mimeTypes : [],
+    filenamePatterns: isStringList(trig.filenamePatterns) ? trig.filenamePatterns : [],
+    ...(typeof trig.autoFire === 'boolean' ? { autoFire: trig.autoFire } : {})
+  }
+
+  const analysis = SKILL_ANALYSIS_MODES.find((mode) => mode !== 'none' && mode === m.analysis)
+  return {
+    id: text(m.id, r.id),
+    title: text(m.title, r.title),
+    description: text(m.description, ''),
+    version: text(m.version, r.version),
+    author: text(m.author, ''),
+    language: text(m.language, 'en'),
+    kind: text(m.kind, r.kind) as SkillKind,
+    compatibility,
+    ...(localized ? { localized } : {}),
+    permissions,
+    allowedTools: isStringList(m.allowedTools) ? m.allowedTools : [],
+    ...(typeof m.reservesTools === 'boolean' ? { reservesTools: m.reservesTools } : {}),
+    ...(analysis ? { analysis } : {}),
+    triggers
   }
 }
 

@@ -580,6 +580,20 @@ describe('TS ↔ shell-script drift (the model scripts skip a manifest for a new
     for (const role of roles) expect(declaresUnknownRole({ role }), role).toBe(false)
   })
 
+  // T2.7 fix round (R1 MJ-5): the app reads a manifest by its extension in any case (`K20.YAML`) and reserves
+  // runtime-sources in any case (models.ts collectManifestFiles); PowerShell's -in / -notin compare without case. The .sh
+  // twins' `find -name` did not, so `verify-models.sh --kit` passed a drive whose newer manifest was named in upper case.
+  // What the walks then find is run on both legs: script-execution.test.ts.
+  it.each(MODEL_SCRIPTS)('%s walks the manifest names the app walks, in any case', (rel) => {
+    const walk = codeLines(rel).map((l) => l.text).join('\n')
+    if (rel.endsWith('.ps1')) {
+      expect(walk).toContain("$_.Extension -in @('.yaml', '.yml') -and $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml')")
+    } else {
+      expect(walk).toMatch(/find "\$MANIFESTS_DIR" \\\( -iname '\*\.yaml' -o -iname '\*\.yml' \\\) -type f \\\n\s+! -iname 'runtime-sources\.yaml' ! -iname 'runtime-sources\.yml' \| sort/)
+      expect(walk).not.toMatch(/ -name '/)
+    }
+  })
+
   it.each(MODEL_SCRIPTS)("%s reads the version it compares with from the checkout's apps/desktop/package.json", (rel) => {
     const code = codeLines(rel).map((l) => l.text).join('\n')
     if (rel.endsWith('.ps1')) {

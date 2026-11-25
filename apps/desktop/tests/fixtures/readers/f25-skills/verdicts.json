@@ -7,7 +7,8 @@
   "verdicts": {
     "discovery": "valid | invalidManifest | needsNewerApp | invalidFolderName | ignored (no code, no row)",
     "gate": "skillNeedsNewerApp on a valid skill: compatible | needsNewerApp",
-    "row": "the row a first reconcile of the folder as an app skill leaves: { enabled, reason } (disabled_reason), or null for no row"
+    "row": "the row a first reconcile of the folder as an app skill leaves: { enabled, reason } (disabled_reason), or null for no row",
+    "reads": "T2.7 fix round (R1 MJ-3): what release 1 reads of a value it does not know, of a key it reads leniently, with no minimum: the analysis engine (null: none, the top-k path), the permissions, the declared tools, the tools an app skill may run (runnableToolNames), the note codes of the parse"
   },
   "appVersion": "0.1.66",
   "appVersions": [
@@ -266,6 +267,102 @@
         }
       },
       "why": "a leading zero in a part is still plain MAJOR.MINOR.PATCH for a skill and compares as a number: 0.01.66 is 0.1.66, met by the app and not by its pre-release (unlike a manifest minimum, where a leading zero counts as newer)"
+    },
+    {
+      "folder": "g25-analysis-unknown",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "reads": {
+        "analysis": null,
+        "permissions": {
+          "documents": "selected_only",
+          "network": "denied",
+          "filesystem": "skill_resources_only"
+        },
+        "allowedTools": [],
+        "runnableTools": [],
+        "noteCodes": [
+          "analysisInvalid"
+        ]
+      },
+      "why": "T2.7 (R1 MJ-3): an analysis mode release 1 does not know, with no minimum: the skill is valid and the mode is dropped with a note, so it runs on the ordinary top-k path"
+    },
+    {
+      "folder": "g25-permission-unknown",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "reads": {
+        "analysis": null,
+        "permissions": {
+          "documents": "selected_only",
+          "network": "denied",
+          "filesystem": "skill_resources_only"
+        },
+        "allowedTools": [],
+        "runnableTools": [],
+        "noteCodes": [
+          "permissionUnrecognized",
+          "permissionUnrecognized",
+          "permissionUnrecognized"
+        ]
+      },
+      "why": "T2.7 (R1 MJ-3): permission values release 1 does not know, and a permission key it does not know, with no minimum: each value is read as the v1 ceiling with a note, the key is ignored, and the skill is valid"
+    },
+    {
+      "folder": "g25-tool-unknown",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "reads": {
+        "analysis": null,
+        "permissions": {
+          "documents": "selected_only",
+          "network": "denied",
+          "filesystem": "skill_resources_only"
+        },
+        "allowedTools": [
+          "ledger_reconcile_v2"
+        ],
+        "runnableTools": [],
+        "noteCodes": []
+      },
+      "why": "T2.7 (R1 MJ-3): a tool skill naming a tool release 1 does not have, with no minimum: valid, the declared name kept, and none of it runs, even as an app skill (the run set is declared, registered and wired)"
+    },
+    {
+      "folder": "g25-min-top-level",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "T2.7 (R1 MJ-6): minAppVersion at the top level, outside compatibility, is a key release 1 does not know: ignored, so the skill is used whatever version it names"
+    },
+    {
+      "folder": "g25-min-top-level-snake",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "T2.7 (R1 MJ-6): the manifests' spelling min_app_version at the top level of a skill is ignored the same way: the skill is used"
     }
   ],
   "sequences": [
@@ -411,6 +508,80 @@
           "expect": {
             "enabled": false,
             "reason": "from-a-newer-build",
+            "available": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "an app row off with no reason, never written since, is read as the version gate's and switched back on (T2.7, R2 M-3)",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "setRow": {
+            "enabled": false,
+            "reason": null
+          },
+          "expect": {
+            "enabled": false,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "on an app version it cannot read, that row stays off and its reason is recorded as min_app_version, then switched on (T2.7, R2 M-3)",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "setRow": {
+            "enabled": false,
+            "reason": null
+          },
+          "expect": {
+            "enabled": false,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "",
+          "expect": {
+            "enabled": false,
+            "reason": "min_app_version",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
             "available": true
           }
         }
