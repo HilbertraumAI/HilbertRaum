@@ -90,12 +90,19 @@ export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
  *  - is another key's value or alias, or belongs to a key not above;
  *  - breaks the placeholder rule just named;
  *  - has the shape of a code (the code branch would answer first);
- *  - is a template with no text of its own besides its placeholders (it would read any string);
- *  - is plain text that an interpolated key's pattern reads (it would take that key's rows).
+ *  - is longer than MAX_STORED_LENGTH (no stored row that long is ever read);
+ *  - is a template with fewer than three letters of its own besides its placeholders (it would read nearly any string;
+ *    a current template is refused the same way);
+ *  - is plain text that an interpolated key's pattern, current or old, reads (it would take that key's rows; a current
+ *    exact value is refused the same way). Two interpolated patterns that overlap are not detected (a recorded limit).
  *
  * Empty: no released value has ever changed (v0.1.8 to v0.1.66). The one old form not here is the pre-i18n
  * unsupported-type wording, a hand-written pattern in `renderer/lib/displayMap.ts` (its literal would trip the
  * copy-tone guard).
+ *
+ * The copy-tone guard (`tests/unit/copy-tone.test.ts`) fails on a retired phrase in any string literal of `src/`, and a
+ * value is often reworded because its phrase was retired. Decided (T2.12, R2 M-7): when the first alias that holds a
+ * phrase on that guard's list lands, the guard skips this table, in the same change, because an alias is never shown.
  */
 export const PERSISTED_ALIASES: Readonly<Partial<Record<MessageKey, readonly string[]>>> = {}
 
@@ -133,9 +140,11 @@ function placeholdersOf(template: string): string[] {
   return [...new Set(names)]
 }
 
-/** Whether `template` has text of its own once its placeholders are removed (not only spaces). */
+/** Whether `template` has text of its own once its placeholders are removed: at least three letters, so brackets or a
+ *  dash around a placeholder (`({ext})`, `- {ext}`) never pass as a template that would read nearly any string. */
 function hasOwnText(template: string): boolean {
-  return /\S/.test(template.split(PLACEHOLDER_SPLIT_RE).filter((_part, i) => i % 2 === 0).join(''))
+  const literal = template.split(PLACEHOLDER_SPLIT_RE).filter((_part, i) => i % 2 === 0).join('')
+  return (literal.match(/\p{L}/gu) ?? []).length >= 3
 }
 
 interface TemplatePattern {
@@ -224,25 +233,35 @@ export function buildPersistedMessageParser(
     const template = entries[key]!
     claim(template, key)
     if (!hasOwnText(template)) {
-      throw new Error(`persisted-messages: the template ${JSON.stringify(template)} of ${key} has no text of its own besides its placeholders`)
+      throw new Error(
+        `persisted-messages: the template ${JSON.stringify(template)} of ${key} has fewer than three letters of text of its own besides its placeholders`
+      )
     }
     return templatePattern(key, template, new Set(placeholdersOf(template)))
   })
-  const exactAliases: Array<[string, MessageKey]> = []
+  const tooLong = `is longer than the ${MAX_STORED_LENGTH}-unit cap, so no stored row can match it`
+  // Every exact text with its owner, so none can be one another key's pattern reads (R1 N-2: values and aliases).
+  const exactTexts: Array<{ text: string; key: MessageKey; what: 'value' | 'alias' }> = exactKeys.map((key) => ({
+    text: entries[key]!,
+    key,
+    what: 'value'
+  }))
   for (const key of exactKeys) {
     for (const alias of aliases[key] ?? []) {
       claim(alias, key)
+      if (alias.length > MAX_STORED_LENGTH) refuse(alias, key, tooLong)
       if (CODE_RE.test(alias)) refuse(alias, key, 'has the shape of a code')
       if (placeholdersOf(alias).length > 0) refuse(alias, key, 'holds a placeholder, and its key is an exact one')
       exact.set(alias, key)
-      exactAliases.push([alias, key])
+      exactTexts.push({ text: alias, key, what: 'alias' })
     }
   }
   const old = interpolatedKeys.flatMap((key) =>
     (aliases[key] ?? []).map((alias) => {
       claim(alias, key)
+      if (alias.length > MAX_STORED_LENGTH) refuse(alias, key, tooLong)
       if (CODE_RE.test(alias)) refuse(alias, key, 'has the shape of a code')
-      if (!hasOwnText(alias)) refuse(alias, key, 'has no text of its own besides its placeholders')
+      if (!hasOwnText(alias)) refuse(alias, key, 'has fewer than three letters of text of its own besides its placeholders')
       const names = new Set(placeholdersOf(alias))
       const missing = placeholdersOf(entries[key]!).filter((name) => !names.has(name))
       if (missing.length > 0) refuse(alias, key, `lacks {${missing.join('}, {')}}, which its current template has`)
@@ -250,9 +269,11 @@ export function buildPersistedMessageParser(
     })
   )
   const patterns = [...current, ...old]
-  for (const [alias, key] of exactAliases) {
-    const taker = patterns.find(({ re }) => re.test(alias))
-    if (taker) refuse(alias, key, `is text the pattern of ${taker.key} reads`)
+  for (const { text, key, what } of exactTexts) {
+    const taker = patterns.find(({ re }) => re.test(text))
+    if (taker) {
+      throw new Error(`persisted-messages: the ${what} ${JSON.stringify(text)} of ${key} is text the pattern of ${taker.key} reads`)
+    }
   }
 
   return (raw: string): PersistedMessage | null => {

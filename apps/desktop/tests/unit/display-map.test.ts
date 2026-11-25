@@ -15,7 +15,8 @@ import {
 import {
   PERSISTED_ALIASES,
   buildPersistedMessageParser,
-  parsePersistedMessage
+  parsePersistedMessage,
+  type PersistedMessage
 } from '../../src/shared/persisted-messages'
 import { DESKTOP_ROOT, filesUnder } from '../helpers/repo-files'
 import {
@@ -324,6 +325,34 @@ const APPEND_ONLY =
 /** F-26's length cap: a longer stored string is no persisted message (R1 M-1). */
 const CAP = 4096
 
+/** The keys release 1 acts on, not only shows (R2 N-2), kept by hand as the second copy of the fixture's `actedOn`
+ *  marks, as the persist-canonical list above is of DISPLAY_MAP_KEYS: scanDetected (`ingestion/index.ts`), the retry
+ *  offer (`format.tsx`), the photo remedy (`ocrRemedy.ts`), the default-title check (`chat.ts`), the slow-read upsert
+ *  (`benchmark.ts`). */
+const ACTED_ON_KEYS: readonly MessageKey[] = [
+  'main.ingest.pdfScanDetected',
+  'main.ingest.imageNeedsOcr',
+  'main.ingest.fileTooLarge',
+  'main.ingest.tooManyChunks',
+  'main.ingest.unsupportedType',
+  'main.chat.defaultTitle',
+  'main.benchmark.warnSlowRead'
+]
+
+/** Each value of `history` read back by `parse` as a stored row of `key`: the key, and the values its current template
+ *  reads (an old template's dropped placeholder is not read: R2 N-1). The problems, one line each. */
+function historyReadProblems(key: string, history: readonly string[], parse: (raw: string) => PersistedMessage | null): string[] {
+  const current = new Set([...(en as Record<string, string>)[key]!.matchAll(/\{(\w+)\}/g)].map(([, name]) => name))
+  return history.flatMap((stored) => {
+    const row = rowFrom(stored)
+    const expected = Object.fromEntries(Object.entries(row.params).filter(([name]) => current.has(name)))
+    const read = parse(row.text)
+    return read?.kind === 'message' && read.key === key && JSON.stringify(read.params) === JSON.stringify(expected)
+      ? []
+      : [`${key}: a row stored as ${JSON.stringify(row.text)} reads as ${JSON.stringify(read)}`]
+  })
+}
+
 /** A stored row written from `template`: each `{name}` filled with a sample, and the params that fill it. */
 function rowFrom(template: string): { text: string; params: Record<string, string> } {
   const params: Record<string, string> = {}
@@ -376,15 +405,26 @@ describe('the English a message was ever stored as never stops reading as its ke
 
   it('every value in a history still reads as its key, with its values', () => {
     const problems = Object.entries(valuesFixture.messages).flatMap(([key, { history }]) =>
-      history.flatMap((stored) => {
-        const row = rowFrom(stored)
-        const read = parsePersistedMessage(row.text)
-        return read?.kind === 'message' && read.key === key && JSON.stringify(read.params) === JSON.stringify(row.params)
-          ? []
-          : [`${key}: a row stored as ${JSON.stringify(row.text)} reads as ${JSON.stringify(read)}`]
-      })
+      historyReadProblems(key, history, parsePersistedMessage)
     )
     expect(problems).toEqual([])
+  })
+
+  // R2 N-1: a legal old template may hold a placeholder the current one dropped. The parser reads only the current
+  // template's values, so the comparison above must too, or that history could never pass.
+  it('a history whose old template had a placeholder the current one dropped passes the same comparison', () => {
+    const old = 'An older wording of the file type failure ({ext}, {mime}).'
+    const parse = buildPersistedMessageParser(en, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, { 'main.ingest.unsupportedType': [old] })
+    expect(historyReadProblems('main.ingest.unsupportedType', [old, en['main.ingest.unsupportedType']], parse)).toEqual([])
+  })
+
+  it('the keys marked actedOn are exactly the ones release 1 acts on', () => {
+    const marked = Object.entries(valuesFixture.messages)
+      .filter(([, { actedOn }]) => actedOn === true)
+      .map(([key]) => key)
+    expect(marked.sort(), 'mark every key release 1 acts on with "actedOn": true in values.json; never remove a mark').toEqual(
+      [...ACTED_ON_KEYS].sort()
+    )
   })
 
   // R2 M-5: release 1 cannot read a reworded value of a key it acts on (scanDetected, the retry offer, the photo remedy,
@@ -401,14 +441,15 @@ describe('the English a message was ever stored as never stops reading as its ke
 // crafted 1 MB value kept the two-placeholder template's pattern busy for 12 s, in main for every failed row of a
 // document listing, and a 7 M-char code overflowed the stack.
 describe('a stored string longer than 4,096 units is no persisted message (F-26)', () => {
-  it('a 1 MB string crafted against the two-placeholder template is none, well under 50 ms', () => {
+  // R1 N-4: 2 s leaves a CI runner room; without the cap this took 12.3 s, so the row still bites.
+  it('a 1 MB string crafted against the two-placeholder template is none, well under 2 s', () => {
     const [head, middle] = en['main.benchmark.warnRecommendationLowered'].split(/\{\w+\}/)
     const crafted = head! + middle!.repeat(Math.ceil(1_048_576 / middle!.length))
     const started = performance.now()
     const read = parsePersistedMessage(crafted)
     const elapsed = performance.now() - started
     expect(read).toBeNull()
-    expect(elapsed).toBeLessThan(50)
+    expect(elapsed).toBeLessThan(2000)
     expect(classifyServerCopy(tDe, crafted)).toEqual({ text: crafted, recognized: false })
   })
 
@@ -523,6 +564,12 @@ describe('an old value kept in the alias table reads as its key (F-26)', () => {
     // R1 m-7 + R2 m-6: three aliases that can never be read as written.
     ['has the shape of a code (the code branch answers first)', { 'main.rag.noContext': ['hr:main.rag.noContext'] }],
     ['has no text of its own besides its placeholders (it would read any string)', { 'main.ingest.unsupportedType': ['{ext}'] }],
+    // R1 N-1: brackets or a dash around the placeholder still read nearly any string.
+    ['has only brackets of its own besides its placeholder', { 'main.ingest.unsupportedType': ['({ext})'] }],
+    ['has only a dash of its own besides its placeholder', { 'main.ingest.unsupportedType': ['- {ext}'] }],
+    // R1 N-3: a stored row that long is never read (the cap), so the alias would be dead.
+    ['is plain text longer than the 4,096-unit cap', { 'main.rag.noContext': ['An older answer. '.repeat(250)] }],
+    ['is an old template longer than the cap', { 'main.ingest.unsupportedType': [`An older wording ({ext}).${' And more.'.repeat(420)}`] }],
     [
       'is plain text another key’s current template reads (it would take that key’s rows)',
       { 'main.rag.noContext': [t('en', 'main.ingest.unsupportedType', { ext: '.xyz' })] }
@@ -533,6 +580,22 @@ describe('an old value kept in the alias table reads as its key (F-26)', () => {
     ]
   ])('refuses, when the module loads, an alias that %s', (_why, aliases) => {
     expect(() => buildPersistedMessageParser(en, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, aliases)).toThrow(/alias/)
+  })
+
+  // R1 N-2: the overlap refusal covers this version's own exact values too, not only aliases.
+  it.each<[string, Partial<Record<MessageKey, readonly string[]>>, string]>([
+    ['another key’s current template', {}, t('en', 'main.ingest.unsupportedType', { ext: '.xyz' })],
+    ['another key’s old template', { 'main.ingest.unsupportedType': ['An older wording ({ext}).'] }, 'An older wording (.xyz).']
+  ])('refuses, when the module loads, a current exact value that %s reads', (_what, aliases, value) => {
+    const catalog = { ...en, 'main.rag.noContext': value }
+    expect(() => buildPersistedMessageParser(catalog, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, aliases)).toThrow(
+      /pattern of main\.ingest\.unsupportedType/
+    )
+  })
+
+  it('refuses a current template with fewer than three letters of its own besides its placeholders (R1 N-1)', () => {
+    const catalog = { ...en, 'main.ingest.unsupportedType': '({ext}) —' }
+    expect(() => buildPersistedMessageParser(catalog, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, {})).toThrow(/letters/)
   })
 
   it('refuses a current template with no text of its own besides its placeholders, too', () => {
