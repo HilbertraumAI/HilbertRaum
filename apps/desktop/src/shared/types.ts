@@ -366,6 +366,15 @@ export interface WorkspaceStateInfo {
   lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full' | 'encrypted_file_missing'
   /** #1024: present exactly when `state` is `start_failed`: the cause the gate words and the code it shows. */
   startFailure?: BackendStartFailure
+  /**
+   * App-update T2.6: the running app's version (`app.getVersion()`, which `main/index.ts` passes the workspace IPC),
+   * on what `getWorkspaceState` and `lockWorkspace` answer in a normal start: the states the gate is shown. The gate
+   * fills the `{version}` of `main.workspace.newer` and `main.workspace.schemaUnreadable` with it before any unlock,
+   * as main fills its own message (`workspaceFailureParams`, `shared/workspace-failure-keys.ts`). Absent in a failed
+   * start (`start_failed`, where nothing is unlocked; the update plan's P6 adds it there) and on the states an unlock,
+   * a create or a password change answers (the shell takes those, not the gate).
+   */
+  appVersion?: string
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
@@ -378,7 +387,7 @@ export interface WorkspaceStateInfo {
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
  *  is lost.
  *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
- *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. Also (#845)
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; the copy says to install the newer version. Also (#845)
  *  a vault format a newer build wrote (descriptor, KDF, `.enc` frame, rekey journal), refused
  *  before the password is checked.
  *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not

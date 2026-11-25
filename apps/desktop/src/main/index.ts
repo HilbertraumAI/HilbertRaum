@@ -958,7 +958,8 @@ function initBackend(): void {
   registerCoreIpc(ctx)
   // #1002: a successful unlock tells the quit closure, which leaves the state a session-end lock left behind when the
   // app ran on (`shutdown.ts`).
-  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked })
+  // App-update T2.6: the version fills the newer-workspace copy and rides on the states the gate is shown.
+  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked, appVersion: app.getVersion() })
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)

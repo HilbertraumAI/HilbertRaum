@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import * as ts from 'typescript'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
+import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
 import { supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import { ENCRYPTED_DOC_SUFFIX } from '../../src/main/services/workspace-vault'
@@ -720,6 +721,76 @@ describe('repo hygiene — the app sets the stamp version before it opens a data
     expect(start).toBeGreaterThanOrEqual(0)
     expect(source.statements.indexOf(statement as ts.Statement)).toBeLessThan(start)
     expect(moduleLevelControllers).toEqual([])
+  })
+})
+
+// App-update T2.6: X01 (`main.workspace.newer`) and C01 (`.schemaUnreadable`) name this version's number. Main fills
+// its message with the version `main/index.ts` passes the workspace IPC beside the context (`WorkspaceIpcHooks`), and
+// the gate fills its copy from the state main answers (`WorkspaceStateInfo.appVersion`). The hook is optional (the
+// test contexts leave it out), so a start that lost it would pass the whole suite and show every buyer "{version}" in
+// English, frozen in release 1. Read from the syntax tree: the one `registerWorkspaceIpc(...)` call passes an object
+// literal whose `appVersion` is `app.getVersion()`.
+describe('repo hygiene — the app passes its version to the workspace IPC (app-update T2.6)', () => {
+  it('main/index.ts calls registerWorkspaceIpc(ctx, { …, appVersion: app.getVersion() }) once', () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const calls: ts.CallExpression[] = []
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'registerWorkspaceIpc') calls.push(n)
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(calls, 'exactly one registerWorkspaceIpc(...) call in main/index.ts').toHaveLength(1)
+    const hooks = calls[0]!.arguments[1]
+    const appVersion =
+      hooks !== undefined && ts.isObjectLiteralExpression(hooks)
+        ? hooks.properties.find(
+            (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'appVersion'
+          )
+        : undefined
+    const value = appVersion?.initializer
+    expect(
+      value !== undefined &&
+        ts.isCallExpression(value) &&
+        value.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(value.expression) &&
+        ts.isIdentifier(value.expression.expression) &&
+        value.expression.expression.text === 'app' &&
+        value.expression.name.text === 'getVersion',
+      'the hooks object passed to registerWorkspaceIpc carries `appVersion: app.getVersion()`'
+    ).toBe(true)
+  })
+})
+
+// App-update T2.6 (O15): the update address the copy names (`{address}` in X01 and C01; later F-2's refusals, F-21 and
+// the support notices of P4, P6 and P7) is one constant, `UPDATE_ADDRESS` in `shared/update-address.ts`, which main and
+// the renderer import: no other file under src/ writes it. Until P11c types the real address it is a placeholder on
+// the reserved `.invalid` domain (RFC 2606), which must never ship: release 1's version bump moves
+// apps/desktop/package.json off the version below, and from then on the address must be the real one. (A master
+// release synced into the integration branch moves the version too: then this row asks for the address early, or for
+// the version below to follow.)
+const VERSION_BEFORE_RELEASE_1 = '0.1.66'
+/** True when the address is the placeholder and the version is no longer the one before release 1's bump. */
+const placeholderAddressShips = (address: string, version: string): boolean =>
+  new URL(address).hostname.endsWith('.invalid') && version !== VERSION_BEFORE_RELEASE_1
+
+describe('repo hygiene — the update address is one constant, and its placeholder never ships (app-update T2.6)', () => {
+  it('src/ writes the update address once, in shared/update-address.ts', () => {
+    const writes = filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx)$/).flatMap((file) => {
+      const count = readFileSync(file, 'utf8').split(UPDATE_ADDRESS).length - 1
+      return count === 0 ? [] : [`${relative(DESKTOP_ROOT, file).split('\\').join('/')}: ${count}`]
+    })
+    expect(writes, 'import UPDATE_ADDRESS from shared/update-address.ts instead of writing the address').toEqual([
+      'src/shared/update-address.ts: 1'
+    ])
+  })
+
+  it('the placeholder address does not outlive version 0.1.66: release 1’s version bump needs the real address', () => {
+    const version = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')).version as string
+    expect(
+      placeholderAddressShips(UPDATE_ADDRESS, version),
+      `UPDATE_ADDRESS (${UPDATE_ADDRESS}) is still the placeholder at version ${version}: type the real address (P11c, O15)`
+    ).toBe(false)
   })
 })
 

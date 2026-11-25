@@ -3535,7 +3535,7 @@ export function unlockEncryptedVault(
       // #247: a database a NEWER build stamped is not damage — the password verified and the
       // file is a database; it is refused as such (the plaintext is shredded exactly like the
       // damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
-      // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
+      // forward first, so nothing is lost) and the IPC layer names the remedy: install the newer version.
       // #844: damage only when SQLite says so. Any other failure of the open or of the unlock's
       // own settings writes is a step that could not finish on a database that is fine, and the
       // open does not rewrite `.enc`: not "restore a backup". T2.9 (R1-1): and not when the
@@ -3916,7 +3916,7 @@ export class WorkspaceController {
     try {
       const kept = `${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`
       // #985 (review round 2 R8): a copy a newer build stamped is not one this unlock encrypts again: it answers
-      // "written by a newer HilbertRaum" instead, so no notice promises it.
+      // `workspace_newer` ("last used with a newer version of HilbertRaum") instead, so no notice promises it.
       return startsLikeDatabase(kept) && headerSchemaStamp(kept) <= SCHEMA_VERSION
     } catch {
       return false // absent, or unreadable
@@ -4169,7 +4169,8 @@ export class WorkspaceController {
   private runStartSteps(): void {
     // #845: FIRST, before anything below can rename, shred or roll forward a file: a vault artifact in a format a
     // NEWER build wrote (the descriptor, its KDF, the `.enc` and staged frames, the rekey journal) leaves the whole
-    // workspace as it is. It stays locked, the create flow is refused, and every unlock answers "update the app".
+    // workspace as it is. It stays locked, the create flow is refused, and every unlock answers `workspace_newer`
+    // ("install the newer version").
     // Every per-start flag is re-decided from the disk first: unlock() re-runs init(), and a flag a previous run set
     // (a blocked salvage, #242) must not outlive it, or it would answer instead of the newer format (W2 review 2).
     this._recoveryBlocked = false

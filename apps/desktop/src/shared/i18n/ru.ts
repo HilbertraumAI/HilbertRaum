@@ -913,8 +913,8 @@ export const ru: UiCatalog<'ru'> = {
     'поэтому ответ охватывает только его начало. Чтобы проверить что-то из дальнейшей части ' +
     'документа, спросите напрямую об этой детали.',
   'analysis.newerExtractorNote':
-    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
-    'them._',
+    '_Эти цифры прочитала более новая версия HilbertRaum, и они показаны так, как их прочитала та ' +
+    'версия._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Прочитано транзакций по всей выписке: **{count}**.',
   'skills.bankAnalysis.countPartial':
@@ -1177,8 +1177,8 @@ export const ru: UiCatalog<'ru'> = {
   'models.newerApp.heading': 'Нужна более новая версия HilbertRaum',
   'models.newerApp.badge': 'Нужно обновление',
   'models.newerApp.hint':
-    'Эта модель предназначена для более новой версии HilbertRaum. Обновите приложение на этом ' +
-    'компьютере, чтобы ее использовать.',
+    'Этой модели нужна более новая версия HilbertRaum. Чтобы ее использовать, установите обновление ' +
+    'здесь: Настройки → Обновления.',
   'models.library.memory': 'Минимальный объем оперативной памяти: {size}',
   'models.library.clear': 'Сбросить фильтры',
   'models.library.showVariants': 'Показать все варианты ({count})',
@@ -1686,17 +1686,17 @@ export const ru: UiCatalog<'ru'> = {
     '{count} папки навыков не прочитаны и пропущены. Каждой папке нужен действительный файл ' +
     'SKILL.md.',
   'skills.reconcile.needsNewerApp.one':
-    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
-    'it, install the update in Settings → Updates.',
+    '{count} навык на этом диске создан для более новой версии HilbertRaum и пропущен. Чтобы его ' +
+    'использовать, установите обновление здесь: Настройки → Обновления.',
   'skills.reconcile.needsNewerApp.few':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} навыка на этом диске созданы для более новой версии HilbertRaum и пропущены. Чтобы их ' +
+    'использовать, установите обновление здесь: Настройки → Обновления.',
   'skills.reconcile.needsNewerApp.many':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} навыков на этом диске созданы для более новой версии HilbertRaum и пропущены. Чтобы их ' +
+    'использовать, установите обновление здесь: Настройки → Обновления.',
   'skills.reconcile.needsNewerApp.other':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} навыка на этом диске созданы для более новой версии HilbertRaum и пропущены. Чтобы их ' +
+    'использовать, установите обновление здесь: Настройки → Обновления.',
   'skills.empty.title': 'Навыков пока нет',
   'skills.empty.line':
     'Каждый навык учит ИИ-модель выполнять определенную задачу. Добавьте навык, чтобы начать.',
@@ -1715,7 +1715,8 @@ export const ru: UiCatalog<'ru'> = {
   'skills.unavailable.title': 'Файлов этого навыка больше нет на диске.',
   'skills.incompatible.chip': 'Нужно обновление',
   'skills.incompatible.title':
-    'Этому навыку нужна более новая версия приложения; обновите приложение, чтобы включить навык.',
+    'Этому навыку нужна более новая версия HilbertRaum. Чтобы его использовать, установите ' +
+    'обновление здесь: Настройки → Обновления.',
   'skills.review.chip': 'Проверить',
   'skills.warn.title': 'Проверьте, что может этот навык',
   'skills.warn.body':
@@ -1741,8 +1742,8 @@ export const ru: UiCatalog<'ru'> = {
   'skills.kind.instruction': 'Указания',
   'skills.kind.tool': 'Использует инструменты',
   'skills.tool.note':
-    'Пока навык добавляет только указания. Описанные в нем инструменты появятся в одной из ' +
-    'следующих версий.',
+    'Этот навык только добавляет указания. Эта версия HilbertRaum не запускает инструменты, которые ' +
+    'в нем описаны.',
   'skills.tool.note.active':
     'По вашей просьбе этот навык может запускать разрешенные локальные инструменты для ' +
     'выбранного вами документа. Инструменты, которые только читают данные, могут запускаться и ' +
@@ -1828,8 +1829,8 @@ export const ru: UiCatalog<'ru'> = {
   'skills.import.note.languageInvalid':
     'Поле «language» не содержит допустимого кода языка; используется «en».',
   'skills.import.note.allowedToolsIgnored':
-    'Для навыка с указаниями объявленные инструменты игнорируются (инструменты появятся в одной ' +
-    'из следующих версий).',
+    'Для навыка с указаниями объявленные инструменты игнорируются (эта версия HilbertRaum их не ' +
+    'запускает).',
   'skills.import.note.analysisInvalid':
     'Поле «analysis» имеет неизвестное значение и игнорируется.',
   'skills.import.note.analysisIgnoredForTool':
@@ -2447,7 +2448,7 @@ export const ru: UiCatalog<'ru'> = {
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
   'common.newerVersionText':
-    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
+    'Этот текст пришел из более новой версии HilbertRaum, и эта версия не может его показать.',
   'indicator.offline': 'Локально · Офлайн',
   'indicator.online': 'Локально · Скачивание разрешено',
   'indicator.offlineDetail': 'Все остается на этом диске. Подключение к интернету не используется.',
@@ -2697,12 +2698,12 @@ export const ru: UiCatalog<'ru'> = {
     'удалось. Повторный ввод пароля не поможет. Не создавайте новое рабочее пространство — ' +
     'оставьте файлы как есть и восстановите папку «workspace» из резервной копии.',
   'main.workspace.schemaUnreadable':
-    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
-    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
-    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
-    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
-    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
-    'drive.',
+    'Ваш пароль верный, но эта версия HilbertRaum не может прочитать рабочее пространство. Вероятно, ' +
+    'в последний раз оно использовалось в более новой версии. Ваше рабочее пространство не изменено. ' +
+    'Чтобы открыть его, установите более новую версию: выберите «Установить обновление из файла…». ' +
+    'Если у вас нет файла обновления для более новой версии, его можно скачать по адресу ' +
+    '{address}/from/{version}. Если на этом диске никогда не использовалась более новая версия, ' +
+    'оставьте файлы как есть и загляните в руководство по устранению неполадок в папке docs на диске.',
   'main.workspace.vaultMissing':
     'Ваш пароль верный, но зашифрованный файл рабочего пространства отсутствует на диске, и не ' +
     'осталось копии, из которой его можно восстановить. Не создавайте новое рабочее пространство. ' +
@@ -2727,8 +2728,10 @@ export const ru: UiCatalog<'ru'> = {
     '(антивирус, индексирование поиска, окно файлового менеджера с папкой «workspace»), ' +
     'подождите немного и попробуйте еще раз. Ничего не потеряно.',
   'main.workspace.newer':
-    'Это рабочее пространство записано более новой версией HilbertRaum — обновите приложение, ' +
-    'чтобы открыть его. Ничего не изменено.',
+    'В последний раз это рабочее пространство использовалось в более новой версии HilbertRaum, ' +
+    'поэтому эта версия не может его открыть. Ваше рабочее пространство не изменено. Чтобы открыть ' +
+    'его, установите более новую версию: выберите «Установить обновление из файла…». Если у вас нет ' +
+    'файла обновления для более новой версии, его можно скачать по адресу {address}/from/{version}.',
   'main.workspace.createFailed': 'Не удалось создать рабочее пространство.',
   'main.workspace.passwordTooShort': 'Пароль должен содержать не менее {min} символов.',
   'main.workspace.exists':
@@ -3132,8 +3135,8 @@ export const ru: UiCatalog<'ru'> = {
     'Рабочее пространство заблокировано. Разблокируйте его, чтобы управлять навыками.',
   'main.skills.notPicked': 'Сначала выберите пакет навыка в окне выбора файла.',
   'main.skills.incompatible':
-    'Этому навыку нужна более новая версия приложения. Обновите приложение, чтобы использовать ' +
-    'навык.',
+    'Этому навыку нужна более новая версия HilbertRaum. Чтобы его использовать, установите ' +
+    'обновление здесь: Настройки → Обновления.',
   'main.skills.run.unavailable': 'Инструмент этого навыка сейчас недоступен.',
   'main.skills.run.noDocument': 'Сначала добавьте документ в этот чат, затем попробуйте еще раз.',
   'main.skills.run.busy':
@@ -3266,7 +3269,7 @@ export const ru: UiCatalog<'ru'> = {
   'chat.packs.outcome.disabled': 'поиск не выполнен: пакет выключен',
   'chat.packs.outcome.file-missing': 'поиск не выполнен: нет файла',
   'chat.packs.outcome.identity-mismatch': 'поиск не выполнен: по этому пути другой архив',
-  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
+  'chat.packs.outcome.newer-format': 'поиск не выполнен: более новый формат ZIM',
   'chat.packs.outcome.not-served': 'поиск не выполнен: имя файла конфликтует с другим пакетом',
   'chat.packs.outcome.not-searchable': 'поиск не выполнен: нет поискового индекса',
   'chat.packs.outcome.tools-missing': 'поиск не выполнен: программы kiwix-tools не установлены',
@@ -3365,8 +3368,8 @@ export const ru: UiCatalog<'ru'> = {
     'или папки есть кириллица, умлаут, диакритический знак или другой символ не из набора ASCII. ' +
     'Скопируйте файл в папку «zim/» на диске под именем без таких символов и добавьте его снова.',
   'packs.addFailed.newerFormat':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
-    'added. A newer version of HilbertRaum may be able to add it.',
+    'Этот архив использует более новый формат ZIM, чем может прочитать эта версия HilbertRaum, ' +
+    'поэтому он не добавлен. Возможно, более новая версия HilbertRaum сможет его добавить.',
   'packs.addFailed.other': 'Не удалось добавить архив.',
   'packs.removedToast': 'Пакет знаний убран',
   'packs.articleCount.one': '{count} статья',
@@ -3380,10 +3383,10 @@ export const ru: UiCatalog<'ru'> = {
   'packs.state.identityMismatch': 'Другой архив',
   'packs.state.identityMismatchTitle':
     'По пути этого пакета находится другой архив — уберите этот пакет и добавьте файл снова',
-  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormat': 'Более новый формат',
   'packs.state.newerFormatTitle':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
-    'used. A newer version of HilbertRaum may be able to use it.',
+    'Этот архив использует более новый формат ZIM, чем может прочитать эта версия HilbertRaum, ' +
+    'поэтому он не используется. Возможно, более новая версия HilbertRaum сможет его использовать.',
   'packs.state.notSearchable': 'Нет поискового индекса',
   'packs.state.notSearchableTitle':
     'У этого архива нет полнотекстового поискового индекса. При вопросах он пропускается, но его ' +

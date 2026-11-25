@@ -1,5 +1,6 @@
-import type { MessageKey } from './i18n'
-import type { BackendStartFailure, StartFailureCause, WorkspaceActionResult } from './types'
+import type { MessageKey, MessageParams } from './i18n'
+import { MIN_PASSWORD_LENGTH, type BackendStartFailure, type StartFailureCause, type WorkspaceActionResult } from './types'
+import { UPDATE_ADDRESS } from './update-address'
 
 // The copy for a failed unlock or create, by `reason` (UI languages wave, UI-languages owner
 // call D-17 (a), 2026-11-11). Before unlock the gate (`renderer/screens/WorkspaceGate.tsx`)
@@ -23,9 +24,27 @@ import type { BackendStartFailure, StartFailureCause, WorkspaceActionResult } fr
 // whose key the gate renders with that floor (`{ min }`). The gate's `canSubmit` holds the same
 // floor before sending, so it shouldn't get that refusal back. That is decided by what the gate
 // knows, never by matching the text (i18n record §3.3 Rule 3).
+//
+// App-update T2.6: `main.workspace.newer` (X01) and `main.workspace.schemaUnreadable` (C01) also
+// name this version's number and the update address. Main and the gate fill every key from
+// `workspaceFailureParams`, so the two texts can only differ by language.
 
 /** Why an unlock or create failed: the `reason` of a failed `WorkspaceActionResult`. */
 export type WorkspaceFailureReason = Extract<WorkspaceActionResult, { ok: false }>['reason']
+
+/**
+ * The parameters every unlock and create failure key is rendered with, by main (`registerWorkspaceIpc.ts`, with the
+ * version `main/index.ts` passes it) and by the gate (with the `appVersion` of main's state): the password floor
+ * (`{min}`), this version's number (`{version}`) and the update address (`{address}`). A key ignores what it doesn't
+ * name. No version (a caller that has none) leaves `{version}` out, so `t()` shows the English text, never a blank.
+ */
+export function workspaceFailureParams(appVersion: string | undefined): MessageParams {
+  return {
+    min: MIN_PASSWORD_LENGTH,
+    address: UPDATE_ADDRESS,
+    ...(appVersion === undefined ? {} : { version: appVersion })
+  }
+}
 
 /** The gate's copy for a failed unlock, by reason (`null`: main never sends it; shows main's `message`). */
 export const UNLOCK_FAILURE_KEYS = {
@@ -39,7 +58,7 @@ export const UNLOCK_FAILURE_KEYS = {
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
   // W-68 (app-update wave, T2.14): a schema this version can't parse (copy deck C01). Its `{version}` and `{address}`
-  // are filled by T2.6; until then the text shows them as written.
+  // come from `workspaceFailureParams` (T2.6), as X01's do.
   workspace_schema_unreadable: 'main.workspace.schemaUnreadable',
   // `null`: main never sends these for this call. If it ever does, give the entry a key: a
   // `null` shows main's `message`, in main's language, and the screen is in two languages again.

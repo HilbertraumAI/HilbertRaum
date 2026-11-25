@@ -12,7 +12,7 @@ import {
   passwordStrength
 } from '../components'
 import { useT } from '../i18n'
-import type { MessageKey } from '@shared/i18n'
+import type { MessageKey, MessageParams } from '@shared/i18n'
 import {
   MIN_PASSWORD_LENGTH,
   type ModelVerifyProgress,
@@ -23,6 +23,7 @@ import {
   CREATE_FAILURE_KEYS,
   UNLOCK_FAILURE_KEYS,
   startFailureKey,
+  workspaceFailureParams,
   type WorkspaceFailureReason
 } from '@shared/workspace-failure-keys'
 
@@ -72,13 +73,16 @@ type Failure = Extract<WorkspaceActionResult, { ok: false }>
 function failureText(
   keys: Record<WorkspaceFailureReason, MessageKey | null>,
   failure: Failure,
-  t: (key: MessageKey, params?: { min: number }) => string
+  t: (key: MessageKey, params?: MessageParams) => string,
+  appVersion: string | undefined
 ): string {
   // An own-property read: `reason` comes over IPC, and one naming an inherited member
   // (`toString`, `constructor`) would otherwise resolve to a function and garble the banner.
   const key = Object.hasOwn(keys, failure.reason) ? keys[failure.reason] : null
-  // `{ min }` for create's too-short refusal (#807 A2), the floor main refused with; other keys ignore it.
-  return key === null ? failure.message : t(key, { min: MIN_PASSWORD_LENGTH })
+  // The parameters main fills its own message with: `{ min }` for create's too-short refusal (#807 A2), the floor main
+  // refused with, and (app-update T2.6) this version's number from main's state and the update address for the
+  // newer-workspace copy. Other keys ignore them.
+  return key === null ? failure.message : t(key, workspaceFailureParams(appVersion))
 }
 
 /** The lock screen's banner for each `lockNotice` (#855, #875, #892): what the changes since the last lock were lost
@@ -249,7 +253,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
         if (result.ok) {
           await completeCreate(result.state)
         } else {
-          const refusal = failureText(CREATE_FAILURE_KEYS, result, t)
+          const refusal = failureText(CREATE_FAILURE_KEYS, result, t, state.appVersion)
           setPassword('')
           setConfirm('')
           if (result.reason === 'workspace_exists' && (await switchedToUnlock(refusal))) return
@@ -261,7 +265,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
         if (result.ok) {
           onUnlocked(result.state)
         } else {
-          setError(failureText(UNLOCK_FAILURE_KEYS, result, t))
+          setError(failureText(UNLOCK_FAILURE_KEYS, result, t, state.appVersion))
           setPassword('')
           // SH-12 (#145): without this, focus stays on the now-disabled submit button —
           // combined with a missed announcement the failure was entirely non-obvious to AT.

@@ -74,6 +74,7 @@ import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, t, type MessageKey } from '../../src/shared/i18n'
+import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import {
   CREATE_FAILURE_KEYS,
   UNLOCK_FAILURE_KEYS,
@@ -115,6 +116,9 @@ import { docTaskManager, docTaskRuntime, docTaskWorld, importWords, waitTerminal
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const PW = 'right-password'
+/** The version a row passes the workspace IPC, as `main/index.ts` passes `app.getVersion()` (app-update T2.6): any
+ *  value other than the package's own, so a text that shows the real version by another route cannot pass. */
+const APP_VERSION = '9.8.7'
 
 /** A controller that ran `init()` over `vp`: its state is whatever the disk holds (and, given, the free space the drive
  *  reports, #892). */
@@ -210,7 +214,8 @@ describe('registerWorkspaceIpc', () => {
   })
 
   // #845: a change refused because the descriptor on disk is a newer build's says the change failed and the current
-  // password still works; the gate's "update the app to open it" would be wrong on a workspace that is open.
+  // password still works; the gate's newer-workspace copy ("install the newer version") would be wrong on a workspace
+  // that is open.
   it('change password over a descriptor a newer build rewrote mid-session answers "change failed", the descriptor untouched', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
@@ -394,6 +399,39 @@ describe('registerWorkspaceIpc', () => {
       registerWorkspaceIpc(workspaceIpcCtx(ctrl))
       const { result } = await invoke(handlers, IPC.getWorkspaceState)
       expect(result).toEqual(expected)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  // App-update T2.6: the gate fills the `{version}` of X01 (`main.workspace.newer`) and C01 (`.schemaUnreadable`) from
+  // the state main hands it, so the version must be on a locked workspace's state before any unlock was tried, and on
+  // the state a lock answers (the gate shows that one next). `main/index.ts` passes `app.getVersion()`
+  // (repo-hygiene.test.ts holds the call site).
+  it('answers the app version it was given on a locked workspace, before any unlock attempt (T2.6)', async () => {
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { appVersion: APP_VERSION })
+      const { result } = await invoke(handlers, IPC.getWorkspaceState)
+      expect(result).toEqual({
+        state: 'locked',
+        mode: 'encrypted',
+        plaintextAllowed: false,
+        encryptionRequired: true,
+        appVersion: APP_VERSION
+      })
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  it('a lock answers the locked state with the app version, the state the gate shows next (T2.6)', async () => {
+    const ctrl = unlockedVault()
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { appVersion: APP_VERSION })
+      const { result } = await invoke(handlers, IPC.lockWorkspace)
+      expect(result).toEqual({ ...ctrl.getState(), appVersion: APP_VERSION })
+      expect(ctrl.getState().state).toBe('locked')
     } finally {
       ctrl.shutdown()
     }
@@ -1129,7 +1167,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       const key = TABLES[call][reason]
       expect(key, `${call} sends ${reason}, so its table needs a key`).not.toBeNull()
       const { workspace, args } = provocation.arrange()
-      registerWorkspaceIpc(workspaceIpcCtx(workspace))
+      registerWorkspaceIpc(workspaceIpcCtx(workspace), { appVersion: APP_VERSION })
       // The stand-ins (recovery blocked, the create belt) have no state of their own to keep.
       const stateBefore = workspace instanceof WorkspaceController ? workspace.getState() : null
       const before = mainUiLanguage()
@@ -1139,8 +1177,10 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
           const { result } = await invoke(handlers, CHANNELS[call], ...args)
           expect(result).toMatchObject({ ok: false, reason })
           const { message } = result as Extract<WorkspaceActionResult, { ok: false }>
-          // The gate renders every key with the password floor; keys without `{min}` ignore it.
-          expect(message, code).toBe(tMain(key!, { min: MIN_PASSWORD_LENGTH }))
+          // The gate renders every key with the password floor, this version's number and the update address (T2.6:
+          // X01 and C01 name the last two); a key without one of these placeholders ignores it. Nothing stays unfilled.
+          expect(message, code).toBe(tMain(key!, { min: MIN_PASSWORD_LENGTH, version: APP_VERSION, address: UPDATE_ADDRESS }))
+          expect(message, code).not.toContain('{')
         }
         if (stateBefore !== null) expect(workspace.getState()).toEqual(stateBefore)
       } finally {
@@ -1410,7 +1450,7 @@ describe('an unlock refused for a newer vault format (#845)', () => {
     const descriptor = readFileSync(vp.descriptorPath)
     const audit = vi.fn()
     const workspace = startedOn(vp)
-    registerWorkspaceIpc(workspaceIpcCtx(workspace, { extra: { audit } }))
+    registerWorkspaceIpc(workspaceIpcCtx(workspace, { extra: { audit } }), { appVersion: APP_VERSION })
     const marker = `W-68 marker ${randomUUID()}`
     log.info(marker)
     try {
@@ -1418,7 +1458,7 @@ describe('an unlock refused for a newer vault format (#845)', () => {
       expect(result).toEqual({
         ok: false,
         reason: 'workspace_schema_unreadable',
-        message: tMain('main.workspace.schemaUnreadable')
+        message: tMain('main.workspace.schemaUnreadable', { version: APP_VERSION, address: UPDATE_ADDRESS })
       })
       const all = readLogTail(100_000)
       const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)

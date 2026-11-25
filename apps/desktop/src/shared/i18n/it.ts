@@ -897,8 +897,8 @@ export const it: UiCatalog<'it'> = {
     'ne copre solo l’inizio. Per verificare qualcosa più avanti nel documento, chiedi direttamente ' +
     'di quel dettaglio.',
   'analysis.newerExtractorNote':
-    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
-    'them._',
+    '_Queste cifre sono state lette da una versione più recente di HilbertRaum e sono mostrate così ' +
+    'come le ha lette quella versione._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Transazioni lette nell’intero estratto conto: **{count}**.',
   'skills.bankAnalysis.countPartial':
@@ -1172,8 +1172,8 @@ export const it: UiCatalog<'it'> = {
   'models.newerApp.heading': 'Richiede una versione più recente di HilbertRaum',
   'models.newerApp.badge': 'App da aggiornare',
   'models.newerApp.hint':
-    'Questo modello è per una versione più recente di HilbertRaum. Aggiorna l’app su questo computer ' +
-    'per usarlo.',
+    'Questo modello richiede una versione più recente di HilbertRaum. Per usarlo, installa ' +
+    'l’aggiornamento in Impostazioni → Aggiornamenti.',
   'models.library.memory': 'Memoria minima: {size}',
   'models.library.clear': 'Cancella i filtri',
   'models.library.showVariants': 'Mostra tutte le varianti ({count})',
@@ -1689,14 +1689,14 @@ export const it: UiCatalog<'it'> = {
     '{count} cartelle di skill non sono leggibili e vengono saltate. Ogni cartella deve ' +
     'contenere un file «SKILL.md» valido.',
   'skills.reconcile.needsNewerApp.one':
-    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
-    'it, install the update in Settings → Updates.',
+    '{count} skill su questa unità è stata creata per una versione più recente di HilbertRaum e ' +
+    'viene saltata. Per usarla, installa l’aggiornamento in Impostazioni → Aggiornamenti.',
   'skills.reconcile.needsNewerApp.many':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} di skill su questa unità sono state create per una versione più recente di HilbertRaum ' +
+    'e vengono saltate. Per usarle, installa l’aggiornamento in Impostazioni → Aggiornamenti.',
   'skills.reconcile.needsNewerApp.other':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} skill su questa unità sono state create per una versione più recente di HilbertRaum e ' +
+    'vengono saltate. Per usarle, installa l’aggiornamento in Impostazioni → Aggiornamenti.',
   'skills.empty.title': 'Ancora nessuna skill',
   'skills.empty.line':
     'Le skill insegnano all’assistente a svolgere un compito specifico. Aggiungine una per ' +
@@ -1715,7 +1715,8 @@ export const it: UiCatalog<'it'> = {
   'skills.unavailable.title': 'I file di questa skill non sono più sull’unità.',
   'skills.incompatible.chip': 'App da aggiornare',
   'skills.incompatible.title':
-    'Questa skill richiede una versione più recente dell’app: aggiorna l’app per attivarla.',
+    'Questa skill richiede una versione più recente di HilbertRaum. Per usarla, installa ' +
+    'l’aggiornamento in Impostazioni → Aggiornamenti.',
   'skills.review.chip': 'Controlla',
   'skills.warn.title': 'Controlla cosa può fare questa skill',
   'skills.warn.body':
@@ -1740,8 +1741,8 @@ export const it: UiCatalog<'it'> = {
   'skills.kind.instruction': 'Indicazioni',
   'skills.kind.tool': 'Usa strumenti',
   'skills.tool.note':
-    'Per ora aggiunge solo indicazioni. Gli strumenti che descrive arriveranno in una versione ' +
-    'futura.',
+    'Questa skill aggiunge solo indicazioni. Questa versione di HilbertRaum non esegue gli strumenti ' +
+    'descritti dalla skill.',
   'skills.tool.note.active':
     'Se lo chiedi, questa skill può eseguire strumenti locali approvati su un documento che ' +
     'scegli tu. Gli strumenti di sola lettura possono anche avviarsi automaticamente per ' +
@@ -1832,8 +1833,8 @@ export const it: UiCatalog<'it'> = {
   'skills.import.note.languageInvalid':
     'Il campo «language» non contiene un codice di lingua valido; viene usato «en».',
   'skills.import.note.allowedToolsIgnored':
-    'Gli strumenti dichiarati vengono ignorati per una skill di indicazioni (gli strumenti ' +
-    'arriveranno in una versione futura).',
+    'Gli strumenti dichiarati vengono ignorati per una skill di indicazioni (questa versione di ' +
+    'HilbertRaum non li esegue).',
   'skills.import.note.analysisInvalid':
     'Il campo «analysis» ha un valore sconosciuto e viene ignorato.',
   'skills.import.note.analysisIgnoredForTool':
@@ -2463,7 +2464,8 @@ export const it: UiCatalog<'it'> = {
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
   'common.newerVersionText':
-    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
+    'Questo testo proviene da una versione più recente di HilbertRaum e questa versione non può ' +
+    'mostrarlo.',
   'indicator.offline': 'Locale · Offline',
   'indicator.online': 'Locale · Download consentiti',
   'indicator.offlineDetail':
@@ -2723,12 +2725,13 @@ export const it: UiCatalog<'it'> = {
     'è stato possibile aprirli. Reinserire la password non serve. Non creare una nuova area di ' +
     'lavoro: lascia i file come sono e ripristina la cartella «workspace» da un backup.',
   'main.workspace.schemaUnreadable':
-    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
-    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
-    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
-    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
-    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
-    'drive.',
+    'La tua password è corretta, ma questa versione di HilbertRaum non può leggere l’area di lavoro. ' +
+    'Probabilmente è stata usata l’ultima volta con una versione più recente. La tua area di lavoro ' +
+    'non è stata modificata. Per aprirla, installa la versione più recente: scegli «Installa ' +
+    'aggiornamento da file…». Se non hai un file di aggiornamento per la versione più recente, puoi ' +
+    'scaricarne uno da {address}/from/{version}. Se su questa unità non è mai stata usata una ' +
+    'versione più recente, lascia i file come sono e consulta la guida alla risoluzione dei problemi ' +
+    'nella cartella docs dell’unità.',
   'main.workspace.vaultMissing':
     'La tua password è corretta, ma il file crittografato dell’area di lavoro manca dall’unità e non ' +
     'è rimasta nessuna copia da cui recuperarlo. Non creare una nuova area di lavoro. Rimetti il ' +
@@ -2753,8 +2756,11 @@ export const it: UiCatalog<'it'> = {
     '(antivirus, indicizzazione della ricerca, una finestra aperta sulla cartella «workspace»), ' +
     'attendi un momento e riprova. Non è andato perso nulla.',
   'main.workspace.newer':
-    'Questa area di lavoro è stata scritta da una versione più recente di HilbertRaum: aggiorna ' +
-    'l’app per aprirla. Non è stato modificato nulla.',
+    'Questa area di lavoro è stata usata l’ultima volta con una versione più recente di HilbertRaum, ' +
+    'quindi questa versione non può aprirla. La tua area di lavoro non è stata modificata. Per ' +
+    'aprirla, installa la versione più recente: scegli «Installa aggiornamento da file…». Se non hai ' +
+    'un file di aggiornamento per la versione più recente, puoi scaricarne uno da ' +
+    '{address}/from/{version}.',
   'main.workspace.createFailed': 'Non è stato possibile creare l’area di lavoro.',
   'main.workspace.passwordTooShort': 'La password deve avere almeno {min} caratteri.',
   'main.workspace.exists':
@@ -3175,7 +3181,8 @@ export const it: UiCatalog<'it'> = {
   'main.skills.notPicked':
     'Prima scegli il pacchetto della skill con la finestra di selezione dei file.',
   'main.skills.incompatible':
-    'Questa skill richiede una versione più recente dell’app. Aggiorna l’app per usarla.',
+    'Questa skill richiede una versione più recente di HilbertRaum. Per usarla, installa ' +
+    'l’aggiornamento in Impostazioni → Aggiornamenti.',
   'main.skills.run.unavailable': 'Lo strumento di questa skill non è disponibile al momento.',
   'main.skills.run.noDocument': 'Prima aggiungi un documento a questa chat, poi riprova.',
   'main.skills.run.busy': 'Una skill sta già lavorando. Prima attendi che finisca o annullala.',
@@ -3303,7 +3310,7 @@ export const it: UiCatalog<'it'> = {
   'chat.packs.outcome.file-missing': 'non consultato: file mancante',
   'chat.packs.outcome.identity-mismatch':
     'non consultato: in questa posizione c’è un archivio diverso',
-  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
+  'chat.packs.outcome.newer-format': 'non consultato: formato ZIM più recente',
   'chat.packs.outcome.not-served': 'non consultato: nome in conflitto con un altro pacchetto',
   'chat.packs.outcome.not-searchable': 'non consultato: senza indice di ricerca',
   'chat.packs.outcome.tools-missing': 'non consultato: programmi kiwix-tools non installati',
@@ -3403,8 +3410,9 @@ export const it: UiCatalog<'it'> = {
     'nella cartella «zim/» dell’unità con un nome senza caratteri di questo tipo e aggiungilo di ' +
     'nuovo.',
   'packs.addFailed.newerFormat':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
-    'added. A newer version of HilbertRaum may be able to add it.',
+    'Questo archivio usa un formato ZIM più recente di quello che questa versione di HilbertRaum può ' +
+    'leggere, quindi non è stato aggiunto. Una versione più recente di HilbertRaum potrebbe riuscire ' +
+    'ad aggiungerlo.',
   'packs.addFailed.other': 'Non è stato possibile aggiungere l’archivio.',
   'packs.removedToast': 'Pacchetto di conoscenze rimosso',
   'packs.articleCount.one': '{count} articolo',
@@ -3418,10 +3426,11 @@ export const it: UiCatalog<'it'> = {
   'packs.state.identityMismatchTitle':
     'Il file nella posizione di questo pacchetto è un archivio diverso: rimuovi questo pacchetto ' +
     'e aggiungi di nuovo il file',
-  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormat': 'Formato più recente',
   'packs.state.newerFormatTitle':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
-    'used. A newer version of HilbertRaum may be able to use it.',
+    'Questo archivio usa un formato ZIM più recente di quello che questa versione di HilbertRaum può ' +
+    'leggere, quindi non viene usato. Una versione più recente di HilbertRaum potrebbe riuscire a ' +
+    'usarlo.',
   'packs.state.notSearchable': 'Senza indice di ricerca',
   'packs.state.notSearchableTitle':
     'Questo archivio non ha un indice per la ricerca nel testo completo. Viene saltato quando ' +

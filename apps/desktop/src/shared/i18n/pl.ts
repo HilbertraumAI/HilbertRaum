@@ -926,8 +926,7 @@ export const pl: UiCatalog<'pl'> = {
     'tylko jego początek. Aby sprawdzić coś z dalszej części dokumentu, zapytaj bezpośrednio o ten ' +
     'szczegół.',
   'analysis.newerExtractorNote':
-    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
-    'them._',
+    '_Te liczby odczytano w nowszej wersji HilbertRaum i są pokazane tak, jak je tam odczytano._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Transakcje odczytane z całego wyciągu: **{count}**.',
   'skills.bankAnalysis.countPartial':
@@ -1194,8 +1193,8 @@ export const pl: UiCatalog<'pl'> = {
   'models.newerApp.heading': 'Wymaga nowszej wersji HilbertRaum',
   'models.newerApp.badge': 'Wymaga nowszej aplikacji',
   'models.newerApp.hint':
-    'Ten model jest przeznaczony dla nowszej wersji HilbertRaum. Zaktualizuj aplikację na tym ' +
-    'komputerze, aby go używać.',
+    'Ten model wymaga nowszej wersji HilbertRaum. Aby go używać, zainstaluj aktualizację tutaj: ' +
+    'Ustawienia → Aktualizacje.',
   'models.library.memory': 'Minimalna pamięć: {size}',
   'models.library.clear': 'Wyczyść filtry',
   'models.library.showVariants': 'Pokaż wszystkie warianty ({count})',
@@ -1696,17 +1695,17 @@ export const pl: UiCatalog<'pl'> = {
     'Pominięto {count} folderu umiejętności, którego nie udało się odczytać. Każdy folder wymaga ' +
     'prawidłowego pliku SKILL.md.',
   'skills.reconcile.needsNewerApp.one':
-    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
-    'it, install the update in Settings → Updates.',
+    '{count} umiejętność na tym dysku została utworzona dla nowszej wersji HilbertRaum i jest ' +
+    'pomijana. Aby jej używać, zainstaluj aktualizację tutaj: Ustawienia → Aktualizacje.',
   'skills.reconcile.needsNewerApp.few':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} umiejętności na tym dysku zostały utworzone dla nowszej wersji HilbertRaum i są ' +
+    'pomijane. Aby ich używać, zainstaluj aktualizację tutaj: Ustawienia → Aktualizacje.',
   'skills.reconcile.needsNewerApp.many':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} umiejętności na tym dysku zostało utworzonych dla nowszej wersji HilbertRaum i jest ' +
+    'pomijanych. Aby ich używać, zainstaluj aktualizację tutaj: Ustawienia → Aktualizacje.',
   'skills.reconcile.needsNewerApp.other':
-    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
-    'use them, install the update in Settings → Updates.',
+    '{count} umiejętności na tym dysku zostało utworzone dla nowszej wersji HilbertRaum i jest ' +
+    'pomijane. Aby ich używać, zainstaluj aktualizację tutaj: Ustawienia → Aktualizacje.',
   'skills.empty.title': 'Nie ma jeszcze umiejętności',
   'skills.empty.line':
     'Umiejętności uczą asystenta wykonywania konkretnego zadania. Dodaj umiejętność, aby zacząć.',
@@ -1724,7 +1723,8 @@ export const pl: UiCatalog<'pl'> = {
   'skills.unavailable.title': 'Plików tej umiejętności nie ma już na dysku.',
   'skills.incompatible.chip': 'Wymaga nowszej aplikacji',
   'skills.incompatible.title':
-    'Ta umiejętność wymaga nowszej wersji aplikacji; zaktualizuj aplikację, aby ją włączyć.',
+    'Ta umiejętność wymaga nowszej wersji HilbertRaum. Aby jej używać, zainstaluj aktualizację ' +
+    'tutaj: Ustawienia → Aktualizacje.',
   'skills.review.chip': 'Sprawdź',
   'skills.warn.title': 'Sprawdź, co może ta umiejętność',
   'skills.warn.body':
@@ -1749,8 +1749,8 @@ export const pl: UiCatalog<'pl'> = {
   'skills.kind.instruction': 'Wskazówki',
   'skills.kind.tool': 'Używa narzędzi',
   'skills.tool.note':
-    'Na razie ta umiejętność dodaje tylko wskazówki. Opisane w niej narzędzia pojawią się w ' +
-    'późniejszej wersji.',
+    'Ta umiejętność dodaje tylko wskazówki. Ta wersja HilbertRaum nie uruchamia narzędzi opisanych w ' +
+    'tej umiejętności.',
   'skills.tool.note.active':
     'Na twoją prośbę ta umiejętność może uruchamiać zatwierdzone narzędzia lokalne na wybranym ' +
     'przez ciebie dokumencie. Narzędzia tylko do odczytu mogą też działać automatycznie, aby ' +
@@ -1835,8 +1835,8 @@ export const pl: UiCatalog<'pl'> = {
   'skills.import.note.languageInvalid':
     'Pole „language” nie zawiera prawidłowego kodu języka; używany jest kod „en”.',
   'skills.import.note.allowedToolsIgnored':
-    'Zadeklarowane narzędzia są pomijane w umiejętności typu „Wskazówki” (narzędzia pojawią się ' +
-    'w późniejszej wersji).',
+    'Zadeklarowane narzędzia są pomijane w umiejętności typu „Wskazówki” (ta wersja HilbertRaum ich ' +
+    'nie uruchamia).',
   'skills.import.note.analysisInvalid': 'Pole „analysis” ma nieznaną wartość i jest pomijane.',
   'skills.import.note.analysisIgnoredForTool':
     'Pole „analysis” jest pomijane w umiejętności typu „Używa narzędzi” (sposób analizy całego ' +
@@ -2464,7 +2464,7 @@ export const pl: UiCatalog<'pl'> = {
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
   'common.newerVersionText':
-    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
+    'Ten tekst pochodzi z nowszej wersji HilbertRaum i ta wersja nie może go wyświetlić.',
   'indicator.offline': 'Lokalnie · Offline',
   'indicator.online': 'Lokalnie · Pobieranie dozwolone',
   'indicator.offlineDetail':
@@ -2718,12 +2718,12 @@ export const pl: UiCatalog<'pl'> = {
     'ich otworzyć. Ponowne wpisanie hasła nie pomoże. Nie twórz nowego obszaru roboczego – ' +
     'zostaw pliki bez zmian i przywróć folder obszaru roboczego z kopii zapasowej.',
   'main.workspace.schemaUnreadable':
-    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
-    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
-    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
-    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
-    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
-    'drive.',
+    'Hasło jest prawidłowe, ale ta wersja HilbertRaum nie może odczytać obszaru roboczego. ' +
+    'Prawdopodobnie ostatnio używano go w nowszej wersji. Obszar roboczy pozostał bez zmian. Aby go ' +
+    'otworzyć, zainstaluj nowszą wersję: wybierz „Zainstaluj aktualizację z pliku…”. Jeśli nie masz ' +
+    'pliku aktualizacji do nowszej wersji, możesz go pobrać ze strony {address}/from/{version}. ' +
+    'Jeśli na tym dysku nigdy nie używano nowszej wersji, zostaw pliki bez zmian i zajrzyj do ' +
+    'instrukcji rozwiązywania problemów w folderze docs na dysku.',
   'main.workspace.vaultMissing':
     'Hasło jest prawidłowe, ale na dysku brakuje zaszyfrowanego pliku obszaru roboczego i nie ' +
     'pozostała żadna kopia, z której można by go odzyskać. Nie twórz nowego obszaru roboczego. Odłóż ' +
@@ -2748,8 +2748,10 @@ export const pl: UiCatalog<'pl'> = {
     'indeksowanie wyszukiwania, okno z folderem obszaru roboczego), chwilę zaczekaj i spróbuj ' +
     'ponownie. Nic nie zostało utracone.',
   'main.workspace.newer':
-    'Ten obszar roboczy został zapisany przez nowszą wersję aplikacji HilbertRaum – zaktualizuj ' +
-    'aplikację, aby go otworzyć. Niczego nie zmieniono.',
+    'Ten obszar roboczy był ostatnio używany w nowszej wersji HilbertRaum, dlatego ta wersja nie ' +
+    'może go otworzyć. Obszar roboczy pozostał bez zmian. Aby go otworzyć, zainstaluj nowszą wersję: ' +
+    'wybierz „Zainstaluj aktualizację z pliku…”. Jeśli nie masz pliku aktualizacji do nowszej ' +
+    'wersji, możesz go pobrać ze strony {address}/from/{version}.',
   'main.workspace.createFailed': 'Nie udało się utworzyć obszaru roboczego.',
   'main.workspace.passwordTooShort': 'Hasło musi mieć co najmniej {min} znaków.',
   'main.workspace.exists':
@@ -3147,7 +3149,8 @@ export const pl: UiCatalog<'pl'> = {
     'Obszar roboczy jest zablokowany. Odblokuj go, aby zarządzać umiejętnościami.',
   'main.skills.notPicked': 'Najpierw wybierz pakiet umiejętności w oknie wyboru pliku.',
   'main.skills.incompatible':
-    'Ta umiejętność wymaga nowszej wersji aplikacji. Zaktualizuj aplikację, aby jej używać.',
+    'Ta umiejętność wymaga nowszej wersji HilbertRaum. Aby jej używać, zainstaluj aktualizację ' +
+    'tutaj: Ustawienia → Aktualizacje.',
   'main.skills.run.unavailable': 'Narzędzie tej umiejętności jest teraz niedostępne.',
   'main.skills.run.noDocument': 'Najpierw dodaj dokument do tego czatu, a potem spróbuj ponownie.',
   'main.skills.run.busy': 'Umiejętność już pracuje. Poczekaj, aż skończy, albo najpierw ją anuluj.',
@@ -3279,7 +3282,7 @@ export const pl: UiCatalog<'pl'> = {
   'chat.packs.outcome.disabled': 'nie przeszukano: pakiet wyłączony',
   'chat.packs.outcome.file-missing': 'nie przeszukano: brak pliku',
   'chat.packs.outcome.identity-mismatch': 'nie przeszukano: inne archiwum w tej lokalizacji',
-  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
+  'chat.packs.outcome.newer-format': 'nie przeszukano: nowszy format ZIM',
   'chat.packs.outcome.not-served': 'nie przeszukano: nazwa koliduje z innym pakietem',
   'chat.packs.outcome.not-searchable': 'nie przeszukano: brak indeksu pełnotekstowego',
   'chat.packs.outcome.tools-missing': 'nie przeszukano: nie zainstalowano narzędzi kiwix-tools',
@@ -3381,8 +3384,8 @@ export const pl: UiCatalog<'pl'> = {
     'inny znak spoza ASCII. Skopiuj plik do folderu „zim/” na dysku pod nazwą bez takich znaków ' +
     'i dodaj go ponownie.',
   'packs.addFailed.newerFormat':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
-    'added. A newer version of HilbertRaum may be able to add it.',
+    'To archiwum używa nowszego formatu ZIM, niż potrafi odczytać ta wersja HilbertRaum, więc nie ' +
+    'zostało dodane. Być może nowsza wersja HilbertRaum będzie mogła je dodać.',
   'packs.addFailed.other': 'Nie udało się dodać archiwum.',
   'packs.removedToast': 'Usunięto pakiet wiedzy',
   'packs.articleCount.one': '{count} artykuł',
@@ -3396,10 +3399,10 @@ export const pl: UiCatalog<'pl'> = {
   'packs.state.identityMismatch': 'Inne archiwum',
   'packs.state.identityMismatchTitle':
     'Plik w lokalizacji tego pakietu to inne archiwum – usuń ten pakiet i dodaj plik ponownie',
-  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormat': 'Nowszy format',
   'packs.state.newerFormatTitle':
-    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
-    'used. A newer version of HilbertRaum may be able to use it.',
+    'To archiwum używa nowszego formatu ZIM, niż potrafi odczytać ta wersja HilbertRaum, więc nie ' +
+    'jest używane. Być może nowsza wersja HilbertRaum będzie mogła z niego korzystać.',
   'packs.state.notSearchable': 'Brak indeksu pełnotekstowego',
   'packs.state.notSearchableTitle':
     'To archiwum nie ma indeksu wyszukiwania pełnotekstowego. Jest pomijane przy zadawaniu ' +

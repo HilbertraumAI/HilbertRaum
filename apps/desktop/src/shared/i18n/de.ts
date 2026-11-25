@@ -1259,8 +1259,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.newerApp.heading': 'Neuere HilbertRaum-Version nötig',
   'models.newerApp.badge': 'Neuere App nötig',
   'models.newerApp.hint':
-    'Dieses Modell ist für eine neuere HilbertRaum-Version. Aktualisiere die App auf diesem ' +
-    'Computer, um es zu nutzen.',
+    'Dieses Modell braucht eine neuere Version von HilbertRaum. Um es zu nutzen, installiere das ' +
+    'Update unter Einstellungen → Updates.',
   'models.library.memory': 'Mindestarbeitsspeicher: {size}',
   'models.library.clear': 'Filter zurücksetzen',
   'models.library.showVariants': 'Alle Varianten anzeigen ({count})',
@@ -1758,7 +1758,9 @@ export const de: Record<keyof typeof en, string> = {
   'skills.unavailable.chip': 'Dateien fehlen',
   'skills.unavailable.title': 'Die Dateien dieses Skills sind nicht mehr auf dem Laufwerk.',
   'skills.incompatible.chip': 'Neuere App nötig',
-  'skills.incompatible.title': 'Dieser Skill benötigt eine neuere Version der App; aktualisiere sie, um ihn zu aktivieren.',
+  'skills.incompatible.title':
+    'Dieser Skill braucht eine neuere Version von HilbertRaum. Um ihn zu nutzen, installiere das ' +
+    'Update unter Einstellungen → Updates.',
   'skills.review.chip': 'Prüfen',
   'skills.warn.title': 'Prüfe, was dieser Skill darf',
   'skills.warn.body': 'Von dir erstellt oder importiert. Prüfe, was er darf, bevor du dich darauf verlässt.',
@@ -1780,7 +1782,9 @@ export const de: Record<keyof typeof en, string> = {
   'skills.detail.kind': 'Typ',
   'skills.kind.instruction': 'Anleitung',
   'skills.kind.tool': 'Nutzt Werkzeuge',
-  'skills.tool.note': 'Vorerst ergänzt dies nur Hinweise. Die beschriebenen Werkzeuge kommen in einer späteren Version.',
+  'skills.tool.note':
+    'Dieser Skill ergänzt nur Hinweise. Diese Version von HilbertRaum führt die beschriebenen ' +
+    'Werkzeuge nicht aus.',
   'skills.tool.note.active':
     'Wenn du darum bittest, kann dieser Skill zugelassene lokale Werkzeuge auf einem von dir gewählten Dokument ausführen. Nur-Lese-Werkzeuge können auch automatisch laufen, um deine Frage zu beantworten; alles, was schreibt oder eine Datei exportiert, fragt dich immer zuerst. Und sie sehen dabei jeweils nur dieses eine Dokument.',
   'skills.perm.heading': 'Was dieser Skill darf',
@@ -1841,7 +1845,9 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.note.listItemsTooLong': 'Einige Einträge in "{field}" sind zu lang und werden ignoriert.',
   'skills.import.note.listTruncated': '"{field}" hat mehr Einträge als erlaubt; nur die ersten {max} werden übernommen.',
   'skills.import.note.languageInvalid': 'Das Feld "language" ist kein gültiges Sprachkürzel; "en" wird verwendet.',
-  'skills.import.note.allowedToolsIgnored': 'Die deklarierten Werkzeuge werden bei einem Anleitungs-Skill ignoriert (Werkzeuge kommen mit einer späteren Version).',
+  'skills.import.note.allowedToolsIgnored':
+    'Die deklarierten Werkzeuge werden bei einem Anleitungs-Skill ignoriert (diese Version von ' +
+    'HilbertRaum führt sie nicht aus).',
   'skills.import.note.analysisInvalid': 'Das Feld "analysis" hat einen unbekannten Wert und wird ignoriert.',
   'skills.import.note.analysisIgnoredForTool': 'Das Feld "analysis" wird bei einem Werkzeug-Skill ignoriert (die App bestimmt sein Ganzdokument-Verhalten).',
   'skills.import.note.triggersInvalid': 'Der Block "triggers" ist ungültig und wird ignoriert.',
@@ -2748,8 +2754,10 @@ export const de: Record<keyof typeof en, string> = {
     'gerade prüft (Virenscanner, Suchindex, ein Dateifenster mit dem Ordner „workspace“), ' +
     'warte kurz und versuch es dann noch einmal. Es ist nichts verloren.',
   'main.workspace.newer':
-    'Dieser Arbeitsbereich wurde von einer neueren HilbertRaum-Version geschrieben — ' +
-    'aktualisiere die App, um ihn zu öffnen. Es wurde nichts verändert.',
+    'Dieser Arbeitsbereich wurde zuletzt mit einer neueren Version von HilbertRaum benutzt, deshalb ' +
+    'kann diese Version ihn nicht öffnen. Dein Arbeitsbereich ist unverändert. Um ihn zu öffnen, ' +
+    'installiere die neuere Version: Wähle „Update aus Datei installieren…“. Wenn du keine ' +
+    'Update-Datei dafür hast, kannst du eine unter {address}/from/{version} herunterladen.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.exists':
@@ -3199,7 +3207,9 @@ export const de: Record<keyof typeof en, string> = {
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',
   'main.skills.notPicked': 'Wähle das Skill-Paket zuerst über den Dateidialog aus.',
-  'main.skills.incompatible': 'Dieser Skill benötigt eine neuere Version der App. Aktualisiere sie, um ihn zu nutzen.',
+  'main.skills.incompatible':
+    'Dieser Skill braucht eine neuere Version von HilbertRaum. Um ihn zu nutzen, installiere das ' +
+    'Update unter Einstellungen → Updates.',
   // Tier-2-Tool-Läufe (skills plan §12.2, S11b) – freundlich, ohne Inhalte.
   'main.skills.run.unavailable': 'Das Tool dieses Skills ist gerade nicht verfügbar.',
   'main.skills.run.noDocument': 'Füge diesem Chat zuerst ein Dokument hinzu und versuche es dann erneut.',

@@ -1243,7 +1243,8 @@ export const en = {
   'models.newerApp.heading': 'Needs a newer HilbertRaum',
   'models.newerApp.badge': 'Needs newer app',
   'models.newerApp.hint':
-    'This model is for a newer version of HilbertRaum. Update the app on this computer to use it.',
+    'This model needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   'models.library.memory': 'Minimum memory: {size}',
   'models.library.clear': 'Clear filters',
   'models.library.showVariants': 'Show all variants ({count})',
@@ -1728,7 +1729,9 @@ export const en = {
   'skills.unavailable.chip': 'Files missing',
   'skills.unavailable.title': 'This skill’s files are no longer on the drive.',
   'skills.incompatible.chip': 'Needs newer app',
-  'skills.incompatible.title': 'This skill needs a newer version of the app; update to enable it.',
+  'skills.incompatible.title':
+    'This skill needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   // DS7 — review chip + the calm acknowledge banner in the detail view.
   'skills.review.chip': 'Review',
   'skills.warn.title': 'Review what this skill can do',
@@ -1755,7 +1758,8 @@ export const en = {
   'skills.kind.instruction': 'Guidance',
   'skills.kind.tool': 'Uses tools',
   // §13/§22-D1 — a tool-reserved skill adds guidance only in v1.
-  'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
+  'skills.tool.note':
+    'This skill adds guidance only. This version of HilbertRaum doesn’t run the tools it describes.',
   // S11c — a kind:'tool' skill names its real, app-orchestrated tools. Honest about auto-run (U5 /
   // ux-16): read-only tools may run automatically to answer a question; writes/exports always confirm.
   'skills.tool.note.active':
@@ -1822,7 +1826,9 @@ export const en = {
   'skills.import.note.listItemsTooLong': 'Some entries in "{field}" are too long and are ignored.',
   'skills.import.note.listTruncated': '"{field}" has more entries than allowed; only the first {max} are kept.',
   'skills.import.note.languageInvalid': 'The "language" field is not a valid language tag; "en" is used.',
-  'skills.import.note.allowedToolsIgnored': 'The declared tools are ignored for an instruction skill (tools come with a later version).',
+  'skills.import.note.allowedToolsIgnored':
+    'The declared tools are ignored for an instruction skill (this version of HilbertRaum doesn’t ' +
+    'run them).',
   'skills.import.note.analysisInvalid': 'The "analysis" field has an unknown value and is ignored.',
   'skills.import.note.analysisIgnoredForTool': 'The "analysis" field is ignored for a tool skill (the app decides its whole-document behaviour).',
   'skills.import.note.triggersInvalid': 'The "triggers" block is invalid and is ignored.',
@@ -2795,8 +2801,10 @@ export const en = {
     'a file window on the workspace folder), wait a moment, then try again. Nothing is lost.',
   // #247: the database was written by a newer build (its schema stamp is above this build's).
   'main.workspace.newer':
-    'This workspace was written by a newer HilbertRaum — update the app to open it. Nothing ' +
-    'was changed.',
+    'This workspace was last used with a newer version of HilbertRaum, so this version can’t open ' +
+    'it. Your workspace is unchanged. To open it, install the newer version: choose Install update ' +
+    'from a file… If you don’t have an update file for it, you can download one from ' +
+    '{address}/from/{version}.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   // #807: create's two refusals, each its own `reason`. A workspace appeared on the drive after the lock screen read it
@@ -3212,7 +3220,9 @@ export const en = {
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
   'main.skills.notPicked': 'Choose the skill package with the file picker first.',
-  'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',
+  'main.skills.incompatible':
+    'This skill needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",
   'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',

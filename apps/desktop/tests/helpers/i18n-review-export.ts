@@ -139,7 +139,22 @@ export const SECURITY_TEXT: readonly string[] = [
   'chat.skill.confirm.redactionScope',
   'skills.redactionRouting.scan',
   'skills.info.document-redaction.what',
-  'skills.info.share-safe-review.limits'
+  'skills.info.share-safe-review.limits',
+  // App-update copy deck part 1 (T2.6): the legal-sensitive texts release 1 keeps for ever, what it says about a
+  // workspace, model, skill, pack or stored text a newer version made. Exact keys, so no sibling comes along
+  // (`skills.reconcile.needsNewerApp` is a plural base: its forms only; `skills.tool.note` also covers
+  // `skills.tool.note.active`, the tool-run promise beside it). `main.workspace` above already holds C01 and X01.
+  'common.newerVersionText',
+  'packs.state.newerFormatTitle',
+  'packs.addFailed.newerFormat',
+  'skills.reconcile.needsNewerApp',
+  'analysis.newerExtractorNote',
+  'models.newerApp.hint',
+  'skills.incompatible.title',
+  'main.skills.incompatible',
+  'skills.tool.note',
+  'skills.import.note.allowedToolsIgnored',
+  'chat.packs.outcome.newer-format'
 ]
 
 const isSecurityText = (key: string): boolean =>

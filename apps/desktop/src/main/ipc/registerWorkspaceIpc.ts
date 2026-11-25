@@ -30,6 +30,7 @@ import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import { failureForLog } from '../services/failure-for-log'
+import { workspaceFailureParams } from '../../shared/workspace-failure-keys'
 import { perfMark, perfMs } from '../services/perf'
 import {
   MIN_PASSWORD_LENGTH,
@@ -283,11 +284,21 @@ export interface WorkspaceIpcHooks {
    *  never for one that failed or was refused (a step after the open included), nor for an unlock that found it already
    *  open. `index.ts` binds the quit closure's `onWorkspaceUnlocked`. */
   onUnlocked?: () => void
+  /** App-update T2.6: the running app's version (`index.ts` passes `app.getVersion()`; repo-hygiene.test.ts holds the
+   *  call site). It fills the `{version}` of the newer-workspace copy (X01, C01) in main's message, and rides on the
+   *  states the gate is shown (`WorkspaceStateInfo.appVersion`), so the gate fills the same text before any unlock.
+   *  Left out (the test contexts), the copy shows `{version}` as written, in English, and the states carry none. */
+  appVersion?: string
 }
 
 export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks = {}): void {
   const ipcHandle = guardedHandleFor(ctx)
-  ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
+  // The parameters of every failure key, the gate's too (`shared/workspace-failure-keys.ts`).
+  const failureParams = workspaceFailureParams(hooks.appVersion)
+  /** A state the gate is shown, with this version on it (T2.6). */
+  const forGate = (state: WorkspaceStateInfo): WorkspaceStateInfo =>
+    hooks.appVersion === undefined ? state : { ...state, appVersion: hooks.appVersion }
+  ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => forGate(ctx.workspace.getState()))
 
   ipcHandle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
     // The renderer is the untrusted boundary in Electron (M-S2): args are TS-typed but
@@ -428,7 +439,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         return {
           ok: false,
           reason: 'workspace_schema_unreadable',
-          message: tMain('main.workspace.schemaUnreadable')
+          message: tMain('main.workspace.schemaUnreadable', failureParams)
         }
       }
       // #844: the password verified and SQLite found a database, but opening it could not finish
@@ -526,25 +537,25 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       }
       // #845: the vault's own format (its descriptor, KDF, `.enc` frame or rekey journal) was written
       // by a NEWER build: refused before the password was checked and before anything was written. The
-      // same reason + copy as #247 (update the app; nothing was changed), with a log line naming the
-      // artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
+      // same reason + copy as #247 (install the newer version; the workspace is unchanged), with a log line naming
+      // the artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
       if (isVaultNewerError(err)) {
         log.warn('Workspace unlock refused: the vault format was written by a newer build', {
           what: err.what,
           found: err.found
         })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
-        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
       }
       // #247: the password verified but the database was written by a NEWER build. Its own
-      // reason + copy (update the app); the vault is untouched and nothing was written.
+      // reason + copy (install the newer version); the vault is untouched and nothing was written.
       if (isWorkspaceNewerError(err)) {
         log.warn('Workspace unlock refused: the database was written by a newer build', {
           found: err.found,
           supported: err.supported
         })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
-        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
       }
       // #956: a file error (a roll-forward or a rekey recovery that cannot write) logs its code and system call, never
       // its message, which names the drive's paths; any other error keeps its message (`failureForLog`).
@@ -618,7 +629,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
             found: err.found,
             supported: err.supported
           })
-          return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+          return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
         }
         // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
         // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
@@ -737,7 +748,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         }
         // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
         // longer the one this session unlocked; nothing was written), reads "change failed, your current
-        // password still works": true, and the gate's "update the app to open it" would be wrong on an
+        // password still works": true, and the gate's "install the newer version" would be wrong on an
         // open workspace. #956: a file error (the descriptor's temp, a document sidecar or a stored copy the rekey
         // stages) logs its code and system call, never its message, which names the path; any other error keeps its
         // message (`failureForLog`).
@@ -766,7 +777,8 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
     // invoke RESOLVES, so the refusal is what the user's next click gets either way.
     ctx.workspace.beginLock()
     try {
-      return await runLockTeardown(ctx)
+      // The locked state is the one the gate shows next (T2.6: with this version on it).
+      return forGate(await runLockTeardown(ctx))
     } catch (err) {
       // AUD-02 — the SINGLE disarm point for every failure path out of the teardown, including
       // the CODE-1a failed re-encrypt below and any throw from a teardown boundary. Arming a
