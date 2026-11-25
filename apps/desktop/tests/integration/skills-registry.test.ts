@@ -689,7 +689,8 @@ interface F25Verdict {
 }
 interface F25Data {
   appVersions: string[]
-  skills: Array<F25Verdict & { folder: string; class: string; at?: Record<string, F25Verdict> }>
+  /** `id`: the declared id, where it is not the folder name (round 2). */
+  skills: Array<F25Verdict & { folder: string; id?: string; class: string; at?: Record<string, F25Verdict> }>
   sequences: Array<{
     name: string
     folder: string
@@ -698,6 +699,8 @@ interface F25Data {
       userDisables?: true
       removeFolder?: true
       replaceWith?: string
+      /** Round 2: the row as another build left it (a `disabled_reason` this one does not know). */
+      setRow?: { enabled: boolean; reason: string | null }
       expect: { enabled: boolean; reason: string | null; available: boolean }
     }>
   }>
@@ -767,7 +770,7 @@ describe('F-25 golden skill folders: what release 1 accepts, lists, drops and ig
       const wantRows = Object.fromEntries(
         data.skills.flatMap((s) => {
           const row = at(s, appVersion).row
-          return row ? [[`app:${s.folder}`, { ...row, available: true }]] : []
+          return row ? [[`app:${s.id ?? s.folder}`, { ...row, available: true }]] : []
         })
       )
       expect(rows).toEqual(wantRows)
@@ -787,6 +790,9 @@ describe('F-25 golden skill folders: what release 1 accepts, lists, drops and ig
       if (step.removeFolder) rmSync(join(dirs.appSkillsDir, q.folder), { recursive: true, force: true })
       if (step.replaceWith) copyFileSync(join(SET, 'skills', step.replaceWith, 'SKILL.md'), join(dirs.appSkillsDir, q.folder, 'SKILL.md'))
       if (step.userDisables) expect(setSkillEnabled(db, installId, false)).toBe(true)
+      if (step.setRow) {
+        db.prepare('UPDATE skills SET enabled = ?, disabled_reason = ? WHERE install_id = ?').run(step.setRow.enabled ? 1 : 0, step.setRow.reason, installId)
+      }
       if (step.reconcileAt !== undefined) reconcileSkills(db, { ...dirs, appVersion: step.reconcileAt })
       expect(stateOf(db, installId), `step ${i + 1}`).toEqual(step.expect)
     }

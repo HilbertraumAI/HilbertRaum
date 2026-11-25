@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
@@ -919,6 +920,8 @@ interface F23Data {
   appVersion: string
   appVersions: string[]
   single: { dir: string; files: Array<{ file: string; id?: string; verdict: F23Verdict; at?: Record<string, F23Verdict>; sameAs?: string }> }
+  /** Files whose bytes are no plain LF text (CRLF, a byte-order mark), held as base64 (T2.10 round 2). */
+  escaped: Array<{ file: string; base64: string; id: string; verdict: F23Verdict; at?: Record<string, F23Verdict> }>
   scenarios: Array<{
     dir: string
     usable: Array<{ id: string; file: string }>
@@ -975,6 +978,24 @@ describe('F-23 golden manifests: what release 1 accepts, lists, drops and ignore
       const entry = found.find(([source]) => source === join(dir, f.file))
       if (entry) expect(entry[1], f.file).toBe(f.id)
     }
+  })
+
+  // Round 2: the bytes of a manifest a later release saved on Windows (CRLF) or with a byte-order mark. They go into a temp
+  // copy of the single set, so they are judged in the same walk as every other file.
+  it.each(data.appVersions.map((v) => [JSON.stringify(v), v] as const))('each file held escaped, in a copy of the single set, at app version %s', (_label, appVersion) => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-f23-escaped-'))
+    cpSync(join(SET, data.single.dir), dir, { recursive: true })
+    for (const e of data.escaped) writeFileSync(join(dir, e.file), Buffer.from(e.base64, 'base64'))
+    const res = discoverAt(dir, appVersion)
+    const verdicts = verdictsOf(dir, res)
+    expect(Object.fromEntries(data.escaped.map((e) => [e.file, verdicts[e.file]]))).toEqual(
+      Object.fromEntries(data.escaped.map((e) => [e.file, e.at?.[appVersion] ?? e.verdict]))
+    )
+    const ids = new Map<string, string>([
+      ...res.manifests.map((m): [string, string] => [m.sourceFile, m.manifest.id]),
+      ...res.unsupported.map((u): [string, string] => [u.sourceFile, u.manifest.id])
+    ])
+    for (const e of data.escaped) if (ids.has(join(dir, e.file))) expect(ids.get(join(dir, e.file)), e.file).toBe(e.id)
   })
 
   it('unknown keys change nothing: a file that holds them reads exactly as its twin without them (identity aside)', () => {

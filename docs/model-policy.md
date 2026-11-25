@@ -493,7 +493,11 @@ can never change in the field. So every later release keeps these rules (the rec
   a new role, a new engine requirement, `speculative_decoding` or `disable_prompt_cache` on a role other
   than chat. With the field release 1 lists the manifest under "Needs a newer HilbertRaum"; without
   it, release 1 drops the file with a log line (a role it does not know alone is listed either way).
-- **`min_app_version` is exactly `MAJOR.MINOR.PATCH`.** Release 1 reads any other value as newer.
+- **`min_app_version` is exactly `MAJOR.MINOR.PATCH`.** Release 1 reads any other value as newer (a
+  null or empty value is none).
+- **A newer manifest still passes the safety checks.** Release 1 drops, instead of listing, one without
+  `id` or `display_name`, or one whose declared path leaves the drive. A `role` that is no string (a
+  number, a block) is a bad value, not a new role: release 1 drops the file.
 - **A changed rule for an existing id** ships as a second file with the same id and `min_app_version`,
   beside the manifest release 1 uses: a usable manifest always keeps its id. Never put
   `min_app_version` on the only manifest of an id release 1 runs.
@@ -521,6 +525,9 @@ manifest carries exits 2. `verify-models` judges none of its files, so `--strict
 lists it nowhere in `config/checksums.json` (`--generate`), prints the count, and fails `--kit` on
 any skip: a Kit is built with its own app, so such a manifest is a defect there, and the canonical gate
 says the same. The role list is a second spelling of `shared/manifest.ts`'s (`script-drift.test.ts`).
+The two keys are read at column 0, past CRLF line ends and a leading byte-order mark. The scripts
+cannot tell a `role` that is no string from a new one, so they skip such a file as "needs a newer
+HilbertRaum" where the app drops it as a bad value: neither uses it, and `--kit` fails on it either way.
 
 **The golden set** `apps/desktop/tests/fixtures/readers/f23-manifests/` holds manifests written from
 these rules and what release 1 does with each: accepts, lists, drops or ignores, at its own version, at

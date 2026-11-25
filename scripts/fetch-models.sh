@@ -199,9 +199,12 @@ known_role() {
 # gate_fields MANIFEST — its id, min_app_version and role, read at column 0 only (a key nested in a
 # block never answers), the first of each: "<id>\037<min>\037<role>". min and role are N (absent, or
 # YAML null: no value, ~, null), B (a block below the key: no string) or S and the value (quotes
-# unwrapped; unquoted, cut at " #"). One awk, not `field`'s five processes per key.
+# unwrapped; unquoted, cut at " #"). One awk, not `field`'s five processes per key. Bytes, not
+# characters (LC_ALL=C), so a UTF-8 byte-order mark in front of the first key is read past, as the
+# app's YAML parser does, and a CR at a line end is no part of a value.
 gate_fields() {
-  awk -v sq="'" -v dq='"' '
+  LC_ALL=C awk -v sq="'" -v dq='"' '
+    NR == 1 && substr($0, 1, 3) == "\357\273\277" { $0 = substr($0, 4) }
     function scalar(v,   c, e) {
       sub(/^[ \t]+/, "", v)
       c = substr(v, 1, 1)

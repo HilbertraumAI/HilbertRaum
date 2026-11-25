@@ -95,6 +95,34 @@
       "file": "d8-kiwix-bad-executable.yaml",
       "verdict": "drops",
       "why": "a kiwix_tools executable with an extension refuses the whole file"
+    },
+    {
+      "file": "a7-new-backend.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "as built, backend is any non-empty string: a build with a backend release 1 does not know is accepted, and as the first build listed for its os it is the default a reader picks there"
+    },
+    {
+      "file": "d9-not-yaml.yaml",
+      "verdict": "drops",
+      "why": "text the YAML parser refuses: no file at all"
+    },
+    {
+      "file": "d10-empty.yaml",
+      "verdict": "drops",
+      "why": "an empty file is no mapping"
+    },
+    {
+      "file": "d11-not-a-mapping.yaml",
+      "verdict": "drops",
+      "why": "a YAML list is no mapping"
+    },
+    {
+      "file": "d12-new-os-optional-family.yaml",
+      "verdict": "drops",
+      "why": "a new os value inside an optional family block refuses the whole file, llama_cpp included"
     }
   ]
 }

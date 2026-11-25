@@ -498,9 +498,61 @@
         "file": "i04-backup.yaml.bak",
         "verdict": "ignores",
         "why": "only the last extension counts"
+      },
+      {
+        "file": "a13-new-runtime.yaml",
+        "id": "g23-a13-new-runtime",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a runtime/format pair release 1 does not run is no error: the model is listed in the unsupported state (model-policy \"runtime/format\"); behind min_app_version it would be listed as for a newer HilbertRaum"
+      },
+      {
+        "file": "l17-min-padded.yaml",
+        "id": "g23-l17-min-padded",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a quoted minimum with blanks around it is not exactly MAJOR.MINOR.PATCH: newer (no trimming, unlike role)"
       }
     ]
   },
+  "escaped": [
+    {
+      "file": "e01-crlf.yaml",
+      "base64": "aWQ6IGcyMy1lMDEtY3JsZg0KZGlzcGxheV9uYW1lOiBHb2xkZW4gZzIzLWUwMS1jcmxmDQpmYW1pbHk6IGdvbGRlbg0Kcm9sZTogY2hhdA0KbWluX2FwcF92ZXJzaW9uOiAwLjEuNjYNCmZvcm1hdDogZ2d1Zg0KcnVudGltZTogbGxhbWFfY3BwDQpsaWNlbnNlOiBhcGFjaGUtMi4wDQpzaXplX29uX2Rpc2tfZ2I6IDAuMDAwMDAxDQpyZWNvbW1lbmRlZF9taW5fcmFtX2diOiAxDQpyZWNvbW1lbmRlZF9yYW1fZ2I6IDENCnJlY29tbWVuZGVkX2NvbnRleHRfdG9rZW5zOiAyMDQ4DQpsb2NhbF9wYXRoOiBtb2RlbHMvY2hhdC9nMjMtZTAxLWNybGYuZ2d1Zg0Kc2hhMjU2OiBSRVBMQUNFX1dJVEhfUkVBTF9IQVNIDQpkb3dubG9hZDoNCiAgdXJsOiBodHRwczovL2V4YW1wbGUuaW52YWxpZC9nMjMtZTAxLWNybGYuZ2d1Zg0KICBzaGEyNTY6IFJFUExBQ0VfV0lUSF9SRUFMX0hBU0gNCiAgc2l6ZV9ieXRlczogOQ0KICBsaWNlbnNlX3VybDogaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvTElDRU5TRQ0KbGljZW5zZV9yZXZpZXc6DQogIHN0YXR1czogYXBwcm92ZWQNCiAgcmV2aWV3ZWRfYnk6IGdvbGRlbg0KICByZXZpZXdlZF9hdDogJzIwMjYtMTEtMjUnDQogIG5vdGVzOiBUMi4xMCByZWFkZXIgZ29sZGVuDQo=",
+      "id": "g23-e01-crlf",
+      "verdict": "accepts",
+      "at": {
+        "0.1.66-beta.1": "lists",
+        "": "lists"
+      },
+      "scripts": {
+        "0.1.66": "use",
+        "0.1.66-beta.1": "skip",
+        "": "skip"
+      },
+      "why": "CRLF line ends, as an editor on Windows saves them: read exactly as LF, by the app and by the scripts (a CR after a value is no part of it)"
+    },
+    {
+      "file": "e02-bom-min-above.yaml",
+      "base64": "77u/bWluX2FwcF92ZXJzaW9uOiAwLjIuMAppZDogZzIzLWUwMi1ib20tbWluLWFib3ZlCmRpc3BsYXlfbmFtZTogR29sZGVuIGcyMy1lMDItYm9tLW1pbi1hYm92ZQpmYW1pbHk6IGdvbGRlbgpyb2xlOiBjaGF0CmZvcm1hdDogZ2d1ZgpydW50aW1lOiBsbGFtYV9jcHAKbGljZW5zZTogYXBhY2hlLTIuMApzaXplX29uX2Rpc2tfZ2I6IDAuMDAwMDAxCnJlY29tbWVuZGVkX21pbl9yYW1fZ2I6IDEKcmVjb21tZW5kZWRfcmFtX2diOiAxCnJlY29tbWVuZGVkX2NvbnRleHRfdG9rZW5zOiAyMDQ4CmxvY2FsX3BhdGg6IG1vZGVscy9jaGF0L2cyMy1lMDItYm9tLW1pbi1hYm92ZS5nZ3VmCnNoYTI1NjogUkVQTEFDRV9XSVRIX1JFQUxfSEFTSApkb3dubG9hZDoKICB1cmw6IGh0dHBzOi8vZXhhbXBsZS5pbnZhbGlkL2cyMy1lMDItYm9tLW1pbi1hYm92ZS5nZ3VmCiAgc2hhMjU2OiBSRVBMQUNFX1dJVEhfUkVBTF9IQVNICiAgc2l6ZV9ieXRlczogOQogIGxpY2Vuc2VfdXJsOiBodHRwczovL2V4YW1wbGUuaW52YWxpZC9MSUNFTlNFCmxpY2Vuc2VfcmV2aWV3OgogIHN0YXR1czogYXBwcm92ZWQKICByZXZpZXdlZF9ieTogZ29sZGVuCiAgcmV2aWV3ZWRfYXQ6ICcyMDI2LTExLTI1JwogIG5vdGVzOiBUMi4xMCByZWFkZXIgZ29sZGVuCg==",
+      "id": "g23-e02-bom-min-above",
+      "verdict": "lists",
+      "scripts": {
+        "0.1.66": "skip",
+        "0.1.66-beta.1": "skip",
+        "": "skip"
+      },
+      "why": "a UTF-8 byte-order mark in front of the first key, min_app_version above the app: the mark is no part of the key, for the app and for the scripts"
+    }
+  ],
   "scenarios": [
     {
       "dir": "s1-one-id-space",
@@ -583,15 +635,68 @@
       "pick": {
         "embeddings": "g23-dfr-fallback"
       }
+    },
+    {
+      "dir": "s5-two-flagged",
+      "why": "two usable manifests of one role both set default_for_role: the first in walk order is the model",
+      "usable": [
+        {
+          "id": "g23-flagged-first",
+          "file": "a.yaml"
+        },
+        {
+          "id": "g23-flagged-second",
+          "file": "b.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [],
+      "pick": {
+        "embeddings": "g23-flagged-first"
+      }
+    },
+    {
+      "dir": "s6-usable-first",
+      "why": "the usable manifest of an id comes first in walk order, the newer one after it: the usable one keeps the id, the newer one is logged",
+      "usable": [
+        {
+          "id": "g23-shared-again",
+          "file": "a-usable.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [
+        "b-newer.yaml"
+      ]
     }
   ],
-  "flatRead": {
-    "file": "flat-read/nested-key-first.yaml",
-    "disagree": [
-      "local_path",
-      "sha256",
-      "url"
-    ],
-    "why": "the projector block comes first, so a first-match read at any indentation takes its local_path, sha256 and download url; role and min_app_version are read at column 0 only"
-  }
+  "flatRead": [
+    {
+      "file": "flat-read/nested-key-first.yaml",
+      "disagree": [
+        "local_path",
+        "sha256",
+        "url"
+      ],
+      "why": "the projector block comes first, so a first-match read at any indentation takes its local_path, sha256 and download url; role and min_app_version are read at column 0 only"
+    },
+    {
+      "file": "flat-read/nested-all-first.yaml",
+      "disagree": [
+        "id",
+        "local_path",
+        "sha256",
+        "runtime",
+        "format",
+        "url",
+        "size_bytes",
+        "license",
+        "license_url",
+        "status",
+        "withdrawn",
+        "bundled_on_preconfigured_drive"
+      ],
+      "why": "a block holding every key the scripts read flat comes first: each flat read takes the nested value; the nested role and min_app_version are not read (column 0 only)"
+    }
+  ]
 }

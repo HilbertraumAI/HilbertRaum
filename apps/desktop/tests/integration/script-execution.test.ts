@@ -334,9 +334,11 @@ const F23 = JSON.parse(readFileSync(join(F23_SET, 'verdicts.json'), 'utf8')) as 
   appVersion: string
   appVersions: string[]
   single: { dir: string; files: Array<{ file: string; id?: string; scripts?: Record<string, 'use' | 'skip'> }> }
+  /** Round 2: CRLF and byte-order-mark manifests, held as base64 and written into the drive with the single set. */
+  escaped: Array<{ file: string; base64: string; id: string; scripts: Record<string, 'use' | 'skip'> }>
 }
 /** The files the scripts judge: every manifest of the set with an id and a verdict for them. */
-const F23_JUDGED = F23.single.files.filter((x) => x.id !== undefined && x.scripts !== undefined) as Array<{
+const F23_JUDGED = [...F23.single.files, ...F23.escaped].filter((x) => x.id !== undefined && x.scripts !== undefined) as Array<{
   file: string
   id: string
   scripts: Record<string, 'use' | 'skip'>
@@ -346,6 +348,7 @@ function f23Drive(): string {
   const root = scriptRoot('script-f23-')
   mkdirSync(join(root, 'model-manifests'))
   for (const x of F23.single.files) copyFileSync(join(F23_SET, F23.single.dir, x.file), join(root, 'model-manifests', x.file))
+  for (const x of F23.escaped) writeFileSync(join(root, 'model-manifests', x.file), Buffer.from(x.base64, 'base64'))
   return root
 }
 /** The one line a twin prints for a manifest it skips. */
@@ -1474,14 +1477,15 @@ for (const leg of SCRIPT_LEGS) {
     // the marker of a copy whose files are all there and whose pin it matches, so "skip" means the twin read it as the
     // pinned install and "refetch" that it could not. fetch-runtime itself is not changed (it is release 1's reader).
     describe('fetch-runtime reads the golden install markers as release 1 does (T2.10, W-62)', () => {
-      const { copy, record, vectors } = MARKER_GOLDENS
-      /** A drive pinned to the golden copy (its version, or `pin`), holding the copy's files and `marker`. */
-      const goldenDrive = (marker: Buffer | null, pin = copy.version): { root: string; dir: string } => {
+      const { copy, record, vectors, relations } = MARKER_GOLDENS
+      /** A drive pinned to the golden copy (its version, or `pin`), holding the copy's files and `marker` (or a folder there). */
+      const goldenDrive = (marker: Buffer | null | 'folder', pin = copy.version): { root: string; dir: string } => {
         const root = scratchTarget(REAL_SHA, (y) => y.replace(`  version: ${copy.version}\n`, `  version: ${pin}\n`))
         const dir = join(root, ...copy.extractTo.split('/'))
         mkdirSync(dir, { recursive: true })
         for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(dir, name), bytes)
-        if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
+        if (marker === 'folder') mkdirSync(runtimeMarkerPath(dir))
+        else if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
         return { root, dir }
       }
       const verdictOf = (root: string, mode: 'default' | 'commercial', opts: { env?: NodeJS.ProcessEnv; scriptsDir?: string } = {}): string => {
@@ -1489,13 +1493,26 @@ for (const leg of SCRIPT_LEGS) {
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         if (/skip \(llama-server\.exe already installed/.test(out)) return 'skip'
+        if (/skip \(llama-server\.exe \S+ is newer than this drive's pin/.test(out)) return 'keep'
         return out.includes('llama-server.exe present but') ? 'refetch' : `neither:\n${out}`
       }
 
       it.each(vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
         const env = v.shLocale === 'utf8' && leg.ext === 'sh' ? { LC_ALL: UTF8_LOCALE } : undefined
+        // Round 2: one vector is read differently by the .sh twin, which the data gives under `sh`.
+        const want = leg.ext === 'sh' && v.sh ? v.sh : v.twins
+        const marker = v.absent ? null : v.folder ? 'folder' : markerBytes(v)
         for (const mode of ['default', 'commercial'] as const) {
-          expect(verdictOf(goldenDrive(markerBytes(v), v.pin).root, mode, { env }), mode).toBe(v.twins[mode])
+          expect(verdictOf(goldenDrive(marker, v.pin).root, mode, { env }), mode).toBe(want[mode])
+        }
+      })
+
+      // Round 2 (the Fable QA's M-12): the version relation through this twin; assets.test.ts holds the app to the same rows.
+      it.each(relations.map((r) => [r.name, r] as const))('the version relation: %s', (_name, r) => {
+        for (const mode of ['default', 'commercial'] as const) {
+          const { root, dir } = goldenDrive(null, r.pin)
+          writeRuntimeMarker(dir, { version: r.marker.version, backend: r.marker.backend, os: copy.os, arch: copy.arch, binaries: record.binaries })
+          expect(verdictOf(root, mode), mode).toBe(r.twins[mode])
         }
       })
 

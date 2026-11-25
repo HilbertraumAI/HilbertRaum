@@ -514,7 +514,15 @@ describe('F-24 golden runtime-sources.yaml files: what release 1 accepts and ref
   })
 
   it.each(data.files.map((f) => [f.file, f] as const))('%s', (_file, f) => {
-    const res = validateRuntimeSources(parseYaml(readFileSync(join(SET, f.file), 'utf8')))
+    // A file the YAML parser refuses is refused like an invalid one (round 2): the reader gets no sources from it.
+    let raw: unknown
+    try {
+      raw = parseYaml(readFileSync(join(SET, f.file), 'utf8'))
+    } catch {
+      expect(f.verdict, 'the YAML parser refuses it').toBe('drops')
+      return
+    }
+    const res = validateRuntimeSources(raw)
     if (f.verdict === 'drops') {
       expect(res.ok, 'refused whole').toBe(false)
       expect(res.sources).toBeUndefined()

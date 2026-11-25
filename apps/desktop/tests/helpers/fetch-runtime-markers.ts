@@ -60,23 +60,45 @@ export const MARKER_ROWS: readonly MarkerRow[] = [
 // byte-order mark, a raw control byte) the repo's hygiene nets refuse in a committed text file.
 
 export type MarkerPart = { text: string } | { base64: string } | { repeat: string; times: number }
+export type TwinVerdict = 'skip' | 'keep' | 'refetch'
 export interface MarkerGolden {
   name: string
-  class: 'accepted' | 'damaged' | 'script-only refusal'
+  class: 'accepted' | 'damaged' | 'script-only refusal' | 'absent'
   parts: MarkerPart[]
+  /** No file at the marker path (round 2). */
+  absent?: true
+  /** A folder at the marker path (round 2). */
+  folder?: true
   /** `readRuntimeMarkerState(dir).kind`. */
-  app: 'marker' | 'damaged'
+  app: 'marker' | 'damaged' | 'absent'
   /** The marker's own version and backend, when `app` is `marker`. */
   version?: string
   backend?: string
   /** `verifyBinaryBeforeSpawn` for the program, with verification enforced. */
-  preSpawn: 'ok' | 'skip-legacy' | 'marker-damaged'
+  preSpawn: 'ok' | 'skip-legacy' | 'marker-damaged' | 'missing' | 'mismatch'
   /** What a dry run of each twin does with the present copy: read it as the pinned install, or fetch it again. */
-  twins: { default: 'skip' | 'refetch'; commercial: 'skip' | 'refetch' }
+  twins: { default: TwinVerdict; commercial: TwinVerdict }
+  /** The .sh twin's verdict, where it differs from the .ps1 twin's (round 2). */
+  sh?: { default: TwinVerdict; commercial: TwinVerdict }
   /** The drive's pin for this vector (default: the copy's version). */
   pin?: string
   /** `utf8`: the .sh twin runs under a UTF-8 locale for this vector. */
   shLocale?: 'utf8'
+  why: string
+}
+/** Round 2: the version relation of an installed engine against the pin (F-24). */
+export interface MarkerRelation {
+  name: string
+  marker: { version: string; backend: string }
+  pin: string
+  /** `compareRuntimeVersions(marker.version, pin)`. */
+  order: -1 | 0 | 1 | null
+  /** `runtimeInstallRelation`. */
+  relation: 'older' | 'current' | 'newer' | 'unknown'
+  /** `runtimeInstallCurrent` (the install skip: version and backend equal). */
+  installCurrent: boolean
+  /** The twins on a drive pinned to `pin` (the copy's backend) holding the copy with that marker. */
+  twins: { default: TwinVerdict; commercial: TwinVerdict }
   why: string
 }
 export interface MarkerGoldenSet {
@@ -85,6 +107,7 @@ export interface MarkerGoldenSet {
   /** What every writer records for `copy`. */
   record: { version: string; backend: string; os: string; arch: string; binaries: Record<string, string> }
   vectors: MarkerGolden[]
+  relations: MarkerRelation[]
 }
 
 export const MARKER_GOLDENS: MarkerGoldenSet = JSON.parse(

@@ -243,11 +243,12 @@ describe('committed catalog — rules over every manifest', () => {
     }
   })
 
-  it('the same comparison fails on the golden manifest whose projector block comes first (T2.10)', () => {
-    const set = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f23-manifests')
-    const { flatRead } = JSON.parse(readFileSync(join(set, 'verdicts.json'), 'utf8')) as { flatRead: { file: string; disagree: string[] } }
-    const text = readFileSync(join(set, ...flatRead.file.split('/')), 'utf8')
-    expect(flatReadDisagreements(text, parseYaml(text) as Record<string, unknown>)).toEqual(flatRead.disagree)
+  // T2.10 (round 2 added the second probe, every flat key nested first): the keys each golden makes the scripts misread.
+  const F23_SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f23-manifests')
+  const { flatRead } = JSON.parse(readFileSync(join(F23_SET, 'verdicts.json'), 'utf8')) as { flatRead: Array<{ file: string; disagree: string[] }> }
+  it.each(flatRead.map((p) => [p.file, p] as const))('the same comparison fails on the golden manifest %s, on exactly its nested keys (T2.10)', (_file, probe) => {
+    const text = readFileSync(join(F23_SET, ...probe.file.split('/')), 'utf8')
+    expect(flatReadDisagreements(text, parseYaml(text) as Record<string, unknown>)).toEqual(probe.disagree)
   })
 })
 

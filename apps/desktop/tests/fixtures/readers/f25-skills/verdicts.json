@@ -166,6 +166,63 @@
       "discovery": "ignored",
       "row": null,
       "why": "dot-named folders are never skill packages"
+    },
+    {
+      "folder": "g25-min-suffix",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a minAppVersion with a pre-release suffix is not plain MAJOR.MINOR.PATCH: the skill is invalid, at every app version (no fail-open, no typed verdict)"
+    },
+    {
+      "folder": "g25-min-four-parts",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a four-part minAppVersion is not plain MAJOR.MINOR.PATCH: the skill is invalid"
+    },
+    {
+      "folder": "g25-unknown-keys",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "frontmatter keys release 1 does not know are ignored"
+    },
+    {
+      "folder": "g25-missing-title-min-above",
+      "class": "lists",
+      "discovery": "needsNewerApp",
+      "row": null,
+      "at": {
+        "": {
+          "discovery": "invalidManifest",
+          "row": null
+        }
+      },
+      "why": "W-65's typed case for a failure other than the kind: no title, a well-formed minAppVersion above the app"
+    },
+    {
+      "folder": "g25-kind-unknown-min-malformed",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a new kind with a minimum that is not MAJOR.MINOR.PATCH is invalid everywhere: no typed verdict"
+    },
+    {
+      "folder": "g25-folder-not-id",
+      "class": "accepts",
+      "id": "g25-declared-id",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "the row takes the declared id, not the folder name"
     }
   ],
   "sequences": [
@@ -279,6 +336,39 @@
             "enabled": true,
             "reason": null,
             "available": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "a disabled_reason release 1 does not know is left alone: the row stays off",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "setRow": {
+            "enabled": false,
+            "reason": "from-a-newer-build"
+          },
+          "expect": {
+            "enabled": false,
+            "reason": "from-a-newer-build",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "9.0.0",
+          "expect": {
+            "enabled": false,
+            "reason": "from-a-newer-build",
+            "available": true
           }
         }
       ]
