@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, constants, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import {
@@ -225,6 +225,30 @@ describe('probeDatabaseFile (#876)', () => {
     expect(probeDatabaseFile(path)).toEqual(verdict)
     expect(sha(path)).toBe(before)
     expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
+  })
+
+  // App-update F-27 ("three header fields no stamp excuses", T2.11 S-2): the magic, the page size and the schema format
+  // number are judged BEFORE the stamp. A file stamped above this build that breaks one of them is "no database" or
+  // damaged, never newer, so no stamp makes release 1 keep noise as a newer version's copy, or refuse a workspace over
+  // it. The first row, the stamp alone over an intact header, shows that the stamp this row writes is read.
+  it.each<[string, (header: Buffer) => void, object]>([
+    ['nothing else broken', () => {}, { verdict: 'newer', found: SCHEMA_VERSION + 1 }],
+    ['the SQLite magic broken', (header) => void (header[0] = 0x73), { verdict: 'not-database' }],
+    ['a page size that is no power of two (1,000)', (header) => void header.writeUInt16BE(1000, 16), { verdict: 'damaged' }],
+    ['a schema format number above 4', (header) => void (header[47] = 9), { verdict: 'damaged' }]
+  ])('a file stamped above this build with %s: the header is judged before the stamp (F-27)', (_what, spoil, verdict) => {
+    const { path } = appDatabase()
+    const fd = openSync(path, 'r+')
+    try {
+      const header = Buffer.alloc(100)
+      expect(readSync(fd, header, 0, header.length, 0)).toBe(header.length)
+      header.writeInt32BE(SCHEMA_VERSION + 1, 60) // the stamp (`PRAGMA user_version`)
+      spoil(header)
+      writeSync(fd, header, 0, header.length, 0)
+    } finally {
+      closeSync(fd)
+    }
+    expect(probeDatabaseFile(path)).toEqual(verdict)
   })
 })
 

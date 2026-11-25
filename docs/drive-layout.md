@@ -211,6 +211,11 @@ drive is the same flow as building it, run again from a machine with the repo:
    An engine that the app updated past the drive's pin is kept as it is (#873); `--allow-downgrade`
    replaces it with the drive's pin.
    On a Kit, `fetch-models --bundled`: plain `fetch-models` would preload the whole catalog (#766).
+   A manifest the checkout's app cannot use (a `role` it does not know, or a `min_app_version` above
+   the version in `apps/desktop/package.json`) is skipped with one line,
+   `SKIP   <id>: needs a newer HilbertRaum (<why>)`, and counted in the summary line
+   (`| for a newer HilbertRaum <n>`); `--only` naming a model only such a manifest carries exits 2
+   (app-update W-62 (b), [`app-updates.md`](app-updates.md) §6.11).
 3. **Delete every prior app artifact** at the drive root — `HilbertRaum-<old>-portable.exe`,
    `HilbertRaum-<old>.AppImage`, `HilbertRaum-<old>-mac-arm64.app.zip` — and any extracted
    `HilbertRaum.app`, and only then copy the new build (and launchers) in. Two app versions on
@@ -218,14 +223,20 @@ drive is the same flow as building it, run again from a machine with the repo:
    launchers refuse to start while more than one is present and name what to delete (#235).
    Start the app and verify the version shown under Settings → Diagnostics ("App version").
 4. `verify-models --target <drive> --strict` confirms every weight still verifies; on a Kit,
-   `--kit` checks what it ships and leaves the in-app catalog alone (#766).
+   `--kit` checks what it ships and leaves the in-app catalog alone (#766). A manifest for a newer
+   HilbertRaum is skipped the same way (no file of it is judged, so `--strict` ignores its weight),
+   and `--kit` fails on any such skip: a Kit ships only manifests its own app can use.
 
 An update does not edit your `workspace/` files itself. The first time a newer version opens the
 workspace it may upgrade the database inside it (new columns, indexes and search tables) and
 records the schema version it wrote. Versions 0.1.60 and later refuse to open a workspace whose
 schema version is newer than their own, so after an update that raises it, an older version can no
 longer open that workspace; 0.1.59 and older do not check. No release so far has raised it: it has
-been 1 since 0.1.60.
+been 1 since 0.1.60. From the first release sold on a Kit on, every open also writes which version
+opened the workspace last (`last_writer` in the database's `schema_meta` table, a hint for support
+and for later versions, `app-updates.md` §7.4), and a version that finds a workspace's vault files in
+a newer version's format, or a database it cannot read the layout of, refuses it and changes nothing
+(`app-updates.md` §7.2, §7.6).
 
 ## Preparing a drive (scripts)
 
@@ -247,6 +258,9 @@ scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM
 scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --with-assets --accept-license
 scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
+
+`--generate` writes `config/checksums.json` for the manifests the checkout's app can use: a manifest
+for a newer HilbertRaum (above) is skipped with its `SKIP` line and listed nowhere in it.
 
 `prepare-drive` creates the directory tree, copies the committed manifests + user docs onto the
 drive, copies the three **root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`,
@@ -432,7 +446,8 @@ history). What still matters:
   `weightPath`/`resolveWithinRoot` normalize (`prefix = base.endsWith(sep) ? base : base + sep`);
   regression-tested with a real root (`parse(process.cwd()).root`).
 - **Hash promotion is durable only in the REPO manifests:** `verify-models --generate` writes
-  `config/checksums.json`, never the manifest `sha256`, and any `prepare-drive` re-run
+  `config/checksums.json` (never for a manifest it skips as needing a newer HilbertRaum), never the
+  manifest `sha256`, and any `prepare-drive` re-run
   overwrites drive-local manifest edits. Promote real hashes into the repo manifest, then
   re-sync to the drive.
 - **Broken upstream sources found by the fetch:** `qwen3-1.7b-instruct-q4` → 404 (the official

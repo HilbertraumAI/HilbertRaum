@@ -226,6 +226,23 @@ describe('changePassword — migration vs O(1) re-wrap', () => {
     expect(readEncryptedDoc(ctl, enc)).toBe('untouched content')
     ctl.lock()
   })
+
+  // App-update F-27 (d) (T2.11 S-3): a password change builds the version-2 descriptor anew from its six fields, so a
+  // field this version does not know is gone after one. A later version therefore never adds a field that matters under
+  // descriptor version 2: it raises the version, which release 1 refuses as newer.
+  it('a descriptor field this version does not know is gone after a password change (F-27 (d))', () => {
+    const vp = lockedVault('pwchange', 'pw-one')
+    const fields = (): string[] => Object.keys(JSON.parse(readFileSync(vp.descriptorPath, 'utf8')) as object).sort()
+    const written = JSON.parse(readFileSync(vp.descriptorPath, 'utf8')) as Record<string, unknown>
+    writeFileSync(vp.descriptorPath, JSON.stringify({ ...written, laterField: { kept: true } }), 'utf8')
+    const ctl = unlockedController(vp, 'pw-one')
+    expect(fields(), 'the unlock reads the descriptor and leaves it as written').toContain('laterField')
+    ctl.changePassword('pw-one', 'pw-two', FAST_ARGON)
+    expect(fields()).toEqual(['dataKey', 'kdf', 'mode', 'saltB64', 'verifier', 'version'])
+    ctl.lock()
+    expect(ctl.unlock('pw-two').state).toBe('unlocked')
+    ctl.lock()
+  })
 })
 
 // ---- the import/re-index ↔ password-change race guard -----------------------------
@@ -1101,6 +1118,22 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
     expect(readEncryptedDoc(next, f.doc)).toBe('DOCUMENT-SURVIVES')
     expect(JSON.parse(readFileSync(f.journalPath, 'utf8'))).toEqual({ version: 1, staged: [stagedOutside], remove: [] })
     next.lock()
+  })
+
+  // App-update F-27 (d) (T2.11 S-3): the rewrite above builds a version-1 journal anew from its three fields (`version`,
+  // `staged`, `remove`), so a field this version does not know is gone after it. A later version never adds a field that
+  // matters under journal version 1: it raises the version, which release 1 refuses as newer.
+  it('a journal it rewrites keeps only its three fields: one this version does not know is gone (F-27 (d))', async () => {
+    const f = await committedStage((root) => join(root, 'legacy-store'))
+    const stagedOutside = `${f.outside}${REKEY_SUFFIX}`
+    linkSync(stagedOutside, join(f.root, 'backup-of-stage.bin')) // the outside stage waits, so the journal is rewritten
+    const written = JSON.parse(readFileSync(f.journalPath, 'utf8')) as Record<string, unknown>
+    writeFileSync(f.journalPath, JSON.stringify({ ...written, laterField: { kept: true } }), 'utf8')
+    const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    ctl.unlock('new-password')
+    ctl.lock()
+    expect(JSON.parse(readFileSync(f.journalPath, 'utf8'))).toEqual({ version: 1, staged: [stagedOutside], remove: [] })
   })
 
   // A Kit that comes back under another drive letter or mount point carries a journal whose every entry names the old

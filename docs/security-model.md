@@ -1162,6 +1162,21 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
   `keyLen = 32` (~0.5 s/unlock — a deliberate one-time cost); legacy scrypt `N = 32768 (2^15)`, `r = 8`,
   `p = 1`. Because the params are stored alongside the salt, unlock derives **exactly** the same key —
   derivation is deterministic. The params are tunable without changing the on-disk format.
+- **Bounds (app-update P2 security round, owner 2026-11-25).** A descriptor's parameters are read
+  before the password is checked, so they are bounded: key length 32; scrypt `N` a power of two from
+  1,024 to 2^22, `r` 1 to 32, `p` 1 to 16 (`maxmem` 256 MiB); argon2id `m` 8 to 2^20 KiB (1 GiB), `t` 1
+  to 8, `p` 1 to 16 (`KDF_UPPER_BOUNDS`, `validateKdfBounds`, `crypto.ts`). A parameter above an upper
+  bound reads as a newer version's format (`workspace_newer`, refused before anything is written); one
+  below a lower bound, of another type, or another key length fails the unlock, and its error names the
+  type only, never a value from the file. The argon2id upper bounds were lowered from `m` 2^21 KiB and `t`
+  64 so that a descriptor inside them cannot keep an unlock attempt busy for many minutes: the worst
+  case inside them measured about 55 s of main-thread work on the reviewer's computer (longer on a
+  slower one), while the default above costs well under a second. Every descriptor a published release
+  wrote is far inside them; a later version that needs more raises the descriptor version
+  (`app-updates.md` §7.7).
+- **Key material is wiped after use.** `deriveKey` zeroes the derived bytes it copied out of the hash
+  library, and `decrypt` zeroes the pieces it joined into the result, also when the final step throws;
+  the KEK is zeroed once the data key is unwrapped, and the data key at the lock.
 
 **Accepted residual — offline password guessing on a lost/stolen drive (full-audit-2026-06-29 SEC-1, Low).**
 The unlock IPC path (`unlockWorkspace`) has **no attempt counter, escalating delay, or lockout**, and the
@@ -1627,8 +1642,9 @@ password. Four guards close this:
   "Updating a drive", #235). A second floor sits in the database itself (#247, owner decision
   #225, PR #289): the workspace database carries `PRAGMA user_version` = `SCHEMA_VERSION`,
   read before any write, so a build that finds a HIGHER stamp refuses the workspace with
-  "This workspace was written by a newer HilbertRaum — update the app to open it." and changes
-  nothing — an old artifact
+  "This workspace was last used with a newer version of HilbertRaum, so this version can’t open it.
+  Your workspace is unchanged. …" (X01, the app-update copy; it names the update address and this
+  version) and changes nothing — an old artifact
   started directly can no longer open a newer workspace half-understood. Builds ≤ 0.1.59 never
   read the stamp, so that floor holds only when the older build is newer than PR #289 (see
   `data-contracts.md` "Schema stamp"). Dev builds get their
@@ -1669,8 +1685,13 @@ password. Four guards close this:
   in the header (`user_version`, offset 60, signed): above this build's `SCHEMA_VERSION` the file is
   `newer` (#985), which no site discards (see "Vault format versions" below), because a newer
   build's schema can hold text this SQLite cannot parse, which fails every schema read with CORRUPT
-  although the file is intact. It reads the schema with `trusted_schema` OFF (on by default
-  in `node:sqlite`), since it may parse a file found on the drive before any unlock. On Windows it
+  although the file is intact. The magic, the page size and the schema format number are judged before
+  the stamp, so no stamp makes a file that breaks one of them "newer" (`db-probe.test.ts`). It reads the
+  schema with `trusted_schema` OFF (on by default in `node:sqlite`), since it may parse a file found on
+  the drive before any unlock; since the app-update P2 security round it also opens the file in
+  `defensive` mode and turns on `cell_size_check`, as the #911 replay's connection does, SQLite's own
+  advice for a database file from an untrusted source (a cell that does not fit its page is CORRUPT,
+  read as damage). On Windows it
   opens the file in the `\\?\` long-path form, which SQLite needs for a path of 260 characters or
   more (a `.recovery` beside a 251-character working file). A
   real database that fails it (one damaged page on a path the probe reads) is treated like
@@ -1800,7 +1821,8 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   or a numeric string), an unknown `kdf.algo`, an `.enc` or any staged `*.enc.new` a recovery
   would swap in framed `HRAUMEN` + an ASCII digit `2`–`9`, or any numeric rekey
   journal `version` above 1 → `VaultNewerError`, reported as `workspace_newer` with the
-  same "written by a newer HilbertRaum — update the app. Nothing was changed." copy. Nothing is
+  same copy ("This workspace was last used with a newer version of HilbertRaum, so this version
+  can’t open it. Your workspace is unchanged. …"). Nothing is
   written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
   stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
   so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
@@ -1819,7 +1841,7 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   Right after the password verified, before the staged-file check (#973), the roll-forward or any
   shred, the unlock refuses a `.recovery` judged `newer` that may hold the freshest data (`.enc`
   missing or not judged, or the copy at least as new) with the #247 error (`WorkspaceNewerError` →
-  `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
+  `workspace_newer`, the same X01 copy); the newer build's own
   unlock rolls it forward. One older than a present `.enc` is a spent leftover: this unlock keeps it
   as it is (neither rolled forward nor shredded), opens the workspace at `.enc`, and logs one
   content-free line. That copy is the workspace's data, not encrypted, and it stays on the drive
@@ -1843,8 +1865,9 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   anything but a digit `2`–`9` (a damaged version byte), stays an "unrecognised header"; a
   descriptor that lost its `version` but kept `dataKey` reads as unreadable (restore the
   descriptor), not as damaged data; and every descriptor a published release wrote reads as
-  current (golden descriptors written by the v0.1.50 and v0.1.65 code,
-  `apps/desktop/tests/fixtures/vault-golden/`).
+  current (golden descriptors written by the code of every published tag from v0.1.50 to v0.1.66,
+  sixteen in all, v0.1.51 never published: `apps/desktop/tests/fixtures/vault-golden/`, locked by
+  `tests/fixtures/golden-fixtures.sha256`).
 - **Residual.** A newer verdict also skips the startup crash sweep, so a newer build's own crash
   leftovers (its plaintext working database and `-wal`/`-shm`, its transient decrypted copies)
   stay on the drive until a newer build starts and sweeps them. Shredding them could destroy
@@ -1853,6 +1876,62 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
 - **Residual.** Builds released before this fix keep the old reading, so a future format must
   still be designed for them; the frozen constraints are in `data-contracts.md` "Vault format
   versions".
+
+### File handling on a drive the app did not prepare (app-update P2 security round)
+
+Release 1 also meets drives it did not prepare: a drive a person formatted NTFS, APFS or ext4 and
+copied the app onto, a restored backup, a drive after "Go back". Such a drive can hold links (a Kit's
+exFAT cannot) and files under the app's own names that the app did not write. An independent review of
+the vault and its start path (T2.7) led to these rules, as built in `workspace-vault.ts` unless named:
+
+- **No write through a link at a temp's name.** Every write temp of the vault (the decrypted working
+  file's, the encrypted file's, the descriptor's) and the encrypted log's is created anew: whatever is
+  at the name is removed by that name first (a link as the link, never followed), then the temp is
+  created exclusively (`openWriteTemp`; `logging.ts`). A folder at the name makes the write fail. The
+  unlock's decrypt checks, just before its rename, that the name still holds the one regular file it
+  wrote.
+- **A new workspace adopts nothing it finds.** The create refuses to open a database name
+  (`hilbertraum.sqlite`, `-wal`, `-shm`) that is a link or has a second name (`createMayOpenDatabase`).
+  On a build that allows no plaintext workspace it opens no database it finds: a leftover working file
+  with its `-wal` and `-shm` is moved aside together, to the first of `hilbertraum.sqlite.quarantine`,
+  `….quarantine-1` … `-64` free for all three, and a leftover `.recovery` to the first free
+  `hilbertraum.sqlite.recovery.quarantine[-<n>]` (`setLeftoversAside`). Nothing set aside is ever
+  overwritten, and with no free name the create fails and writes nothing. A create that fails after its
+  open removes the fresh database it made itself, and only when none of the three names held anything
+  before. The set-aside files are not encrypted; nothing reads, sweeps or vouches for them, and a
+  person deletes them (owner decision; `troubleshooting.md`, `known-limitations.md`). Errors of the
+  create's open are logged as the unlock's are, content-free (`VaultOpenFailedError`).
+- **Deletes shred only inside the store.** Deleting a document, the encrypted re-index's upgrade of a
+  plaintext copy, deleting an image session and clearing the image history shred a file only when it
+  lies in `documents/` or `images/`, judged from the workspace folder with no link on the way
+  (`storeHoldsFile`; image rows also need a bare file name, `storedImageToShred` in `vision/history.ts`);
+  otherwise only the row goes. Behind a `documents/` or `images/` that is a link to a folder elsewhere
+  nothing is shredded, so a store a user keeps behind a link of their own keeps a deleted item's
+  encrypted copy. In an encrypted workspace the re-index treats a plaintext copy outside the store as
+  no stored copy (it imports the original again, or reports the source missing), and the shared import
+  and re-index step refuses a document id that is not a bare name before it builds any store path (it
+  fails as its source missing, and writes nothing) (`ingestion/index.ts` `prepareDocument`,
+  `deleteDocument`).
+- **No marker write behind a linked `config/`.** The start, the unlock and the create neither write nor
+  remove the #875 marker when `config/` is a link to a folder elsewhere, and the start's log line names
+  the folder kind (`configFolderLinked`, `linkedStartFolders`), as for a linked workspace or `logs/`
+  folder (T2.16).
+- **A journal entry is a full path or nothing.** An entry that is not a full path on this system (on
+  Windows a drive letter or `\\`) is judged as one outside the workspace: it never vouches for a stage
+  at the start (`fullPathEntry`, `planRekeyJournal`).
+- **Log lines carry no text from the drive.** The key-derivation errors name the parameter's type only,
+  and the create's open errors carry SQLite's code and fixed description, never its message.
+- **The pre-password checks of a database file are strict:** the probe opens the file read-only in
+  `defensive` mode with `cell_size_check` on and `trusted_schema` off, and the #911 replay's connection
+  turns `cell_size_check` on too (`db.ts`; "Vault-overwrite guards" above).
+
+**Residuals** (`known-limitations.md`, "App updates: …"; the follow-up candidates FU-P2-n are P2's): a
+readable `.recovery` with a later file time than `.enc`, beside an existing workspace, is still rolled
+forward at the next unlock, since the app cannot tell it from a failed lock's own copy (it replaces the
+whole workspace visibly, and the store guard bounds what its rows can delete); start-time reads can
+follow a link at a fixed name or a linked folder to a network path before any password (FU-P2-2); the
+preview, export and text-recognition temps are named after the document's id (FU-P2-8); the key
+derivation's worst case inside the bounds is about 55 s ("Key derivation" above).
 
 ### Encrypted document cache (spec §3.5: "database AND document cache")
 Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted
@@ -1897,7 +1976,10 @@ every imported document readable on a lost drive.
   survive).
 - **Legacy migration:** a document imported before this existed (or in plaintext mode) keeps its
   plaintext stored copy until **re-indexed**, which upgrades it to `.enc` in place and shreds the
-  plaintext.
+  plaintext. Since the app-update P2 security round only a plaintext copy inside the store folder is
+  upgraded this way: one the row places outside the store counts as no stored copy, so the re-index
+  imports the original into the store again, or fails as its source missing, and writes or removes
+  nothing outside the store (see "File handling on a drive the app did not prepare" below).
 - The wiring: ingestion receives a `DocumentCipher` from `WorkspaceController.documentCipher()` —
   non-null only for an unlocked encrypted workspace (`plaintext_dev` keeps plaintext copies, as
   labelled).
@@ -2148,9 +2230,12 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   pending change is still under the retired key), deletes it otherwise, and leaves it for the next
   unlock when it or its stored copy cannot be read, or it cannot be swapped in. A stage the journal lists rolls
   forward at the start, as before; "lists" means an entry the containment below admits (#1014 round 4). With
-  `documents/` itself a junction elsewhere, the scan still finds the stages behind it, but the entries through
-  the link are not admitted, so those stages are doubts: the start leaves them, and the unlock swaps in only one
-  that authenticates. The scan does not skip a linked store, so a user's own junctioned store loses nothing.
+  `documents/` or `images/` itself a link to a folder elsewhere (any junction or symbolic link), the
+  entries through the link are not admitted, and since the app-update P2 review (T2.9 R2-3, owner) the scan
+  and the start's sweep skip such a folder too: nothing behind it is shredded, renamed or deleted. The cost
+  falls on a user who keeps a store behind a link of their own: its transients are not swept, and a
+  password change's stages there are not recovered (only the one-time v1 → v2 change writes stages there,
+  no published release wrote a v1 descriptor, and that change's own swap no longer finds them).
   **What a journal entry may name (#1014).** The journal is plain JSON in the workspace folder,
   read at every start before any password, and its entries are absolute paths: nothing proves
   this app wrote them, or wrote them for this folder (a journal copied or restored onto another

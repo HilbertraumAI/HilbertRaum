@@ -30,9 +30,12 @@ also CLA §7 for submissions on behalf of third parties.
 - No cloud dependencies, hosted AI APIs, telemetry, or analytics.
 - Keep the app fully usable offline.
 - Never commit model weights, user data, embeddings, logs, or generated files.
-  The one exception is the golden fixtures under `apps/desktop/tests/fixtures/` (`vault-golden/`, `readers/` and
-  every folder `golden-fixtures.sha256` names): generated from released tags on purpose and locked by that manifest
-  (`repo-hygiene.test.ts`). `.gitignore` drops some names without a word, so a fixture's name avoids `*.log`, `*.db`,
+  The one exception is the golden fixtures under `apps/desktop/tests/fixtures/` (`vault-golden/`, `readers/`,
+  `display-map/`, `schema-meta/` and every other path `golden-fixtures.sha256` names): written from released tags
+  or from a frozen contract on purpose, committed as reviewable evidence (as `eval/results/` is), and locked by that
+  manifest (`repo-hygiene.test.ts`). They are not "generated files" in this rule's sense. A change to one is a
+  reviewed event: a golden verdict never changes (a later release adds files and lines only), and the file's line in
+  `golden-fixtures.sha256` changes in the same commit. `.gitignore` drops some names without a word, so a fixture's name avoids `*.log`, `*.db`,
   `*.sqlite*`, `*.bin`, `*.gguf`, `*.onnx`, `*.safetensors`, `*.key`, `*.cer`, `*.pfx`, `*.p12`, `.env*` and the
   folders `models/`, `workspace/`, `logs/`, `dist/`, `out/`, `coverage/` and `screenshots/` (the full list is
   `.gitignore`). Check every new file with `git status --short --ignored`: none may show as `!!`.

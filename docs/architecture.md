@@ -9428,7 +9428,10 @@ mixed-currency / missing-figure case — so a drift in **either** the body or th
   `bank_statements.extractor_version`); every extraction stamps it with `INVOICE_EXTRACTOR_VERSION`
   (`tools/invoice.ts`). The handler resolves `latestInvoiceId(db, docId)` and **REUSES** it when present
   and **not stale**; it re-extracts only when none exists OR `isInvoiceStale` (stored version NULL/legacy
-  or `<` current). A re-extract passes `replaceExisting: true`, so `runInvoiceExtraction` calls the shared
+  or `<` current; app-update G-34 (a), T2.13: an equal version is current, and any other value, higher,
+  a real or text, is a newer version's reading, served as stored with C08 and never re-extracted or
+  replaced: `extractorVerdict`, `holdsNewerExtraction`, `skills/run.ts`; SKA-26's `!==` rule is
+  reversed). A re-extract passes `replaceExisting: true`, so `runInvoiceExtraction` calls the shared
   `deleteInvoicesForDocument` (the SAME ordered FK delete `purgeSkillDataForDocument` uses — invoice line
   items, then invoices) **inside** the persist `BEGIN/COMMIT` before the INSERT (atomic swap; a failure
   rolls back to the old). The old `totals_reconciled` flag goes with the replaced row (the validate seam
@@ -10026,7 +10029,10 @@ figure verification is needed. The constraints that DO hold:
 - **Stale-statement re-extraction (A9; Phase 31–33 follow-up).** Reuse is gated on FRESHNESS:
   `bank_statements.extractor_version` is stamped with `BANK_EXTRACTOR_VERSION` (in `tools/bank-statement.ts`)
   on every extraction; a statement whose stored version is NULL (legacy) or `<` current is STALE
-  (`isBankStatementStale`). Both reuse paths — the analysis read-back AND the `categorize` doctask —
+  (`isBankStatementStale`); an equal one is current, and any other value (higher, a real, text) is a newer
+  version's statement, served as stored with C08 and never re-extracted, replaced or deleted by an extract
+  or categorize path (app-update G-34 (a), T2.13: `extractorVerdict`, `isBankExtractionNewer`,
+  `skills/run.ts`; SKA-26's `!==` rule is reversed). Both reuse paths — the analysis read-back AND the `categorize` doctask —
   re-extract a stale statement with `replaceExisting`, which DELETES the document's prior statements (+ their
   transactions/corrections, FK order) in the SAME persist transaction before inserting the fresh one. So a
   since-fixed parser bug never keeps serving mis-signed / lost-payee rows (the silent-stale risk is sharpest

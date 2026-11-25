@@ -762,6 +762,69 @@ describe('repo hygiene — the app passes its version to the workspace IPC (app-
   })
 })
 
+// App-update W-65 (T2.14 S-2): a skill folder made for a newer version is not one that "could not be read". The Skills
+// tab counts the two apart (`reconcileStatus()`: `errorCount` and `needsNewerAppCount`), and so must the start's log
+// lines, which support reads after a "Go back": a count of unreadable folders that includes the newer ones blames the
+// user's files. `main/index.ts` is composition with no harness, so the lines are read from the syntax tree: inside the
+// function that runs the start's `skills.reconcile()`, the "could not be read" line takes its count and codes from
+// `skills.reconcileStatus()`, and a second line takes `needsNewerAppCount` from it.
+describe('repo hygiene — the start logs skills made for a newer version apart from unreadable ones (app-update W-65)', () => {
+  it("main/index.ts's skill lines count from skills.reconcileStatus(): errorCount apart from needsNewerAppCount", () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const isCallOf = (n: ts.Node, object: string, method: string): n is ts.CallExpression =>
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === object &&
+      n.expression.name.text === method
+    const reconciles: ts.CallExpression[] = []
+    const findReconcile = (n: ts.Node): void => {
+      if (isCallOf(n, 'skills', 'reconcile') && n.arguments.length === 0) reconciles.push(n)
+      ts.forEachChild(n, findReconcile)
+    }
+    findReconcile(source)
+    expect(reconciles, "exactly one skills.reconcile() in main/index.ts (the start's)").toHaveLength(1)
+    let scope: ts.Node = reconciles[0]!
+    while (!ts.isFunctionLike(scope) && scope.parent !== undefined) scope = scope.parent
+    // The names bound to `skills.reconcileStatus()` in that function, and every `log.<level>(text, { … })` in it.
+    const statusNames = new Set<string>()
+    const lines: Array<{ text: string; fields: Map<string, string> }> = []
+    const walk = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && isCallOf(n.initializer, 'skills', 'reconcileStatus')) {
+        statusNames.add(n.name.text)
+      }
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        ts.isIdentifier(n.expression.expression) &&
+        n.expression.expression.text === 'log' &&
+        n.arguments.length === 2 &&
+        ts.isStringLiteralLike(n.arguments[0]!) &&
+        ts.isObjectLiteralExpression(n.arguments[1]!)
+      ) {
+        const fields = new Map<string, string>()
+        for (const p of (n.arguments[1] as ts.ObjectLiteralExpression).properties) {
+          if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) fields.set(p.name.text, p.initializer.getText(source))
+        }
+        lines.push({ text: (n.arguments[0] as ts.StringLiteralLike).text, fields })
+      }
+      ts.forEachChild(n, walk)
+    }
+    walk(scope)
+    expect(statusNames.size, 'the function binds skills.reconcileStatus() to a name').toBeGreaterThan(0)
+    const fromStatus = (expr: string | undefined, member: string): boolean =>
+      expr !== undefined && [...statusNames].some((name) => expr.replace(/\s+/g, '').includes(`${name}.${member}`))
+    const unreadable = lines.filter((l) => l.text === 'Some skill folders could not be read')
+    expect(unreadable, 'one "could not be read" line').toHaveLength(1)
+    expect(fromStatus(unreadable[0]!.fields.get('count'), 'errorCount'), 'its count is the status errorCount').toBe(true)
+    expect(fromStatus(unreadable[0]!.fields.get('codes'), 'errorCodes'), 'its codes are the status errorCodes').toBe(true)
+    const newer = lines.filter((l) => fromStatus(l.fields.get('count'), 'needsNewerAppCount'))
+    expect(newer, 'one line counts the folders made for a newer version').toHaveLength(1)
+    expect(newer[0]!.text).toMatch(/newer version/)
+  })
+})
+
 // App-update T2.6 (O15): the update address the copy names (`{address}` in X01 and C01; later F-2's refusals, F-21 and
 // the support notices of P4, P6 and P7) is one constant, `UPDATE_ADDRESS` in `shared/update-address.ts`, which main and
 // the renderer import: no other file under src/ writes it. Until P11c types the real address it is a placeholder on
@@ -1447,6 +1510,8 @@ describe('repo hygiene — no stored copy takes a name the start sweep shreds (a
   const liveTests = (): NameTest[] =>
     sweepNameTests(readFileSync(join(DESKTOP_ROOT, 'src', 'main', 'services', 'workspace-vault.ts'), 'utf8'))
 
+  // This pin is release 1's frozen pair. A later version that changes its own sweep never edits it: it adds a row for its
+  // own pair, and keeps release 1's pair as an input of the extension check below (T2.11 Opus re-check, m-16).
   it('the sweep shreds a name that holds `.parse` or ends `.tmp`, and nothing else (frozen: release 1 runs it for ever)', () => {
     expect(liveTests()).toEqual([
       { method: 'includes', text: '.parse' },

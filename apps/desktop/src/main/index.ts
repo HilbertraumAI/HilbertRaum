@@ -328,12 +328,16 @@ function initBackend(): void {
       { refused: journalRefusals }
     )
   }
-  // T2.16 (R2 B2): the workspace folder or the logs folder is a link to a folder elsewhere, so the start acted through
-  // neither (no sweep or rekey recovery behind the first, no removal of the rotated log behind the second). The folder
-  // kinds only (`workspace`, `logs`), never a path.
+  // T2.16 (R2 B2): the workspace folder, the logs folder or (T2.7 security L-2) the config folder is a link to a folder
+  // elsewhere, so the start skipped its clean-up there: no sweep or rekey recovery behind the first, no removal of the
+  // rotated log behind the second, no write or removal of the #875 marker behind the third. Two steps still run behind a
+  // linked workspace folder (T2.15 R2 N-1, T2.7 security note): the salvage (it can rename a working file to
+  // `.recovery`, shredding an older one) and the ZIM transient sweep above (it removes only the app's own
+  // `library.<n>.xml` and `meta-<n>/` names).
+  // The folder kinds only (`workspace`, `logs`, `config`), never a path.
   const linkedFolders = workspace.linkedStartFolders()
   if (linkedFolders.length > 0) {
-    log.warn('Workspace start: a folder is a link to a folder elsewhere; the start acted through none of it', {
+    log.warn('Workspace start: a folder is a link to a folder elsewhere; the start skipped its clean-up steps there', {
       folders: [...linkedFolders]
     })
   }
@@ -345,15 +349,15 @@ function initBackend(): void {
   }
   if (workspace.isNewerWorkspace()) {
     // #247: the plaintext database on disk was written by a newer build — left closed and
-    // untouched; the gate reports `workspace_newer` (update the app).
-    log.warn('Workspace not opened: its database was written by a newer build (update the app)')
+    // untouched; the gate reports `workspace_newer` (the newer version opens it).
+    log.warn('Workspace not opened: its database was last written by a newer version')
   }
   const newerVaultFormat = workspace.newerVaultFormat()
   if (newerVaultFormat) {
     // #845: a vault artifact (descriptor, KDF, `.enc` frame, rekey journal) is in a newer build's
     // format — startup wrote nothing (no salvage, sweep or rekey recovery); every unlock reports
     // `workspace_newer`. Buffered like every pre-unlock line: this build never unlocks this vault.
-    log.warn('Workspace not opened: its vault format was written by a newer build (update the app)', newerVaultFormat)
+    log.warn('Workspace not opened: its vault format was written by a newer version', newerVaultFormat)
   }
 
   // Settings are readable right away on a plaintext workspace — resolve the UI language
@@ -932,21 +936,28 @@ function initBackend(): void {
   // after unlock reconciles instead.
   try {
     const result = skills.reconcile()
+    // App-update W-65 (T2.14 S-2): the folders made for a newer version are counted apart from the unreadable ones, as
+    // the Skills tab counts them (the status this reconcile just refreshed): they are no fault of the user's files.
+    const status = skills.reconcileStatus()
     log.info('Skill registry reconciled', {
       present: result.present,
       inserted: result.inserted,
       updated: result.updated,
       markedUnavailable: result.markedUnavailable,
-      errorCount: result.errors.length
+      errorCount: status.errorCount,
+      needsNewerAppCount: status.needsNewerAppCount ?? 0
     })
     // SKA-32 (skills audit 2026-07-03, U7): discovery errors used to be silently dropped here.
     // COUNT + structural reason codes ONLY — never the human-readable lines, which can carry a
     // (validated) folder path, and never arbitrary folder names/content (§22-M1).
-    if (result.errors.length > 0) {
+    if (status.errorCount > 0) {
       log.warn('Some skill folders could not be read', {
-        count: result.errors.length,
-        codes: [...new Set(result.errorCodes)]
+        count: status.errorCount,
+        codes: [...status.errorCodes]
       })
+    }
+    if (status.needsNewerAppCount !== undefined) {
+      log.warn('Some skill folders were made for a newer version of HilbertRaum', { count: status.needsNewerAppCount })
     }
   } catch {
     /* workspace locked — reconcile deferred to a post-unlock pass in a later phase */

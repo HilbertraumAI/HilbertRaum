@@ -351,12 +351,12 @@ manual release acceptance, one phase on its branch (22), one drafted phase (30).
    changing one (each change is synced into the branch).** Under `apps/desktop/src/main/`:
    `services/{workspace-vault,db,policy,drive,commercial-drive,workspace,models,resolve-model,assets,runtime-download}.ts`,
    `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log}.ts`,
-   `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,ingestion/index}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
+   `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,zim/packs,ingestion/index,chat}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
    `services/skills/{run,invoice-run,registry,loader,installer}.ts`, `{index,backend-start,shutdown,close-guard}.ts`,
    `tools/assert-commercial-drive.ts`, `ipc/{registerEngineIpc,engine-recheck,registerSkillsIpc,registerStartFailureIpc}.ts`,
-   `ipc/{registerCoreIpc,registerWorkspaceIpc,log-copy}.ts`. Under `apps/desktop/src/`: `shared/{manifest,app-version,skill-manifest}.ts`,
+   `ipc/{registerCoreIpc,registerWorkspaceIpc,log-copy}.ts`. Under `apps/desktop/src/`: `shared/{manifest,app-version,skill-manifest,persisted-messages}.ts`,
    `shared/i18n/{en,de,es,fr,it,nl,pl,ru,tr,uk}.ts`, `renderer/lib/displayMap.ts`, `renderer/screens/WorkspaceGate.tsx`, `preload/index.ts`.
-   Elsewhere: `apps/desktop/electron-builder.yml`, `apps/desktop/tests/fixtures/vault-golden/`, `launchers/*`, `model-manifests/**`,
+   Elsewhere: `apps/desktop/electron-builder.yml`, `apps/desktop/tests/fixtures/{vault-golden,readers,display-map,schema-meta}/` (+ `golden-fixtures.sha256`), `launchers/*`, `model-manifests/**`,
    `app-skills/**`, `scripts/{prepare-drive,build-commercial-drive,fetch-runtime,fetch-models,verify-models}.*`,
    `.github/workflows/{ci,release}.yml`, `.gitattributes`.
 4. **Embedder swap (ex-Phase-30 Track B) — deferred post-MVP; write a fresh short plan when it

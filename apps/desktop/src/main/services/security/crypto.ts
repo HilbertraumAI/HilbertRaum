@@ -303,7 +303,7 @@ export function classifyFrameMagic(head: Buffer): 'current' | 'newer' | 'foreign
   if (head.subarray(0, MAGIC.length).equals(MAGIC)) return 'current'
   if (!head.subarray(0, MAGIC_FAMILY_BYTES).equals(MAGIC.subarray(0, MAGIC_FAMILY_BYTES))) return 'foreign'
   // Only the ASCII digits 2–9 are later frame versions. Any other byte here (`0`, a letter, a control byte) is one
-  // flipped bit or so away from `1`: damage, which must not read as "update the app" forever (W2 review 2).
+  // flipped bit or so away from `1`: damage, which must not read as "written by a newer version" forever (W2 review 2).
   const v = head[MAGIC_FAMILY_BYTES]
   return v >= 0x32 && v <= 0x39 ? 'newer' : 'foreign'
 }
