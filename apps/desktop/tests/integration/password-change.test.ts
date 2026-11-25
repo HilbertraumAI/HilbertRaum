@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, existsSync, linkSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, existsSync, linkSync, lstatSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { basename, dirname, join, relative } from 'node:path'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
@@ -693,6 +693,95 @@ describe('rekey journal — aliases, unreachable entries, corruption (#241)', ()
     expect(existsSync(`${f.outside}${REKEY_SUFFIX}`)).toBe(true)
     expect(existsSync(f.outside)).toBe(true)
     ctl.lock()
+  })
+
+  // T2.16 fix round (R2 A1 = R1 B-6): the quarantine removed whatever was at `.corrupt` first, with `rmSync`. A folder
+  // there threw (`ERR_FS_EISDIR`, a file error), so every start and every unlock answered "try again" for good (review 2's
+  // probe P1), and a link there was removed. A folder, a junction or a link at that name is now never removed: the
+  // journal is set aside under the next free name, `.corrupt-<n>`, and the in-store classes roll forward as above. (Here
+  // the staged database is a #973 doubt, as no journal lists it, so the start leaves the set and the unlock settles it.)
+  const makeDirLink = (kind: 'junction' | 'dir') => (at: string, root: string): void => {
+    const target = join(root, `corrupt-target-${kind}`)
+    mkdirSync(target)
+    writeFileSync(join(target, 'held'), 'x')
+    symlinkSync(target, at, kind)
+  }
+  const canDirLink = (kind: 'junction' | 'dir'): boolean => {
+    const root = tempRoot('rekey-corrupt-can')
+    try {
+      makeDirLink(kind)(join(root, 'link'), root)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const IN_THE_WAY: Array<[string, (at: string, root: string) => void, boolean, string]> = [
+    [
+      'a folder',
+      (at) => {
+        mkdirSync(at)
+        writeFileSync(join(at, 'held'), 'x')
+      },
+      true,
+      '.corrupt-1'
+    ],
+    [
+      'a folder, and another at `.corrupt-1`',
+      (at) => {
+        for (const name of [at, `${at}-1`]) {
+          mkdirSync(name)
+          writeFileSync(join(name, 'held'), 'x')
+        }
+      },
+      true,
+      '.corrupt-2'
+    ],
+    ...(process.platform === 'win32'
+      ? [['a junction to a folder elsewhere', makeDirLink('junction'), true, '.corrupt-1'] as [string, (at: string, root: string) => void, boolean, string]]
+      : []),
+    ['a symbolic link to a folder elsewhere', makeDirLink('dir'), canDirLink('dir'), '.corrupt-1']
+  ]
+  for (const [what, plantAt, can, asideName] of IN_THE_WAY) {
+    it.skipIf(!can)(`a journal that cannot be parsed beside ${what} at its .corrupt name: the start goes on, the journal is set aside as ${asideName}, the thing in the way stays`, async () => {
+      const f = await committedStage()
+      writeFileSync(f.journalPath, '{ not json', 'utf8')
+      const corrupt = `${f.journalPath}.corrupt`
+      plantAt(corrupt, f.root)
+      const inTheWay = (): unknown => [lstatSync(corrupt).isSymbolicLink(), readdirSync(corrupt), readFileSync(join(corrupt, 'held'), 'utf8')]
+      const before = inTheWay()
+
+      const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.isRecoveryBlocked()).toBe(false)
+      expect(ctl.unlock('new-password').state).toBe('unlocked')
+      expect(existsSync(f.journalPath)).toBe(false)
+      expect(readFileSync(`${f.journalPath}${asideName}`, 'utf8')).toBe('{ not json')
+      expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+      expect(await readImage(ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+      expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+      expect(inTheWay(), 'the thing at .corrupt, after the unlock').toEqual(before)
+      ctl.lock()
+    })
+  }
+
+  // Review 2's probe P1 as it was run: no stage at all, so the start itself settles the journal. Before, three starts and
+  // three unlocks with the right password each answered blocked (`ERR_FS_EISDIR`), the journal still there.
+  it('a journal that cannot be parsed beside a folder at its .corrupt name, nothing staged: no start is blocked, and the right password opens', () => {
+    const vp = lockedVault('rekey-corrupt-p1', 'pw')
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL)
+    writeFileSync(journal, '{ not json', 'utf8')
+    mkdirSync(`${journal}.corrupt`)
+    writeFileSync(join(`${journal}.corrupt`, 'held'), 'x')
+    for (let start = 0; start < 2; start++) {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.isRecoveryBlocked(), `start ${start + 1}`).toBe(false)
+      expect(existsSync(journal)).toBe(false)
+      expect(readFileSync(`${journal}.corrupt-1`, 'utf8')).toBe('{ not json')
+      expect(readdirSync(`${journal}.corrupt`)).toEqual(['held'])
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+      ctl.lock()
+    }
   })
 })
 

@@ -1427,6 +1427,9 @@ function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNot
   // existence, and the sweep then shredded the working file, the only copy of the workspace.
   if (isFileAt(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) return 'not-needed'
   if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
+    // T2.16 fix round (R1 B-2): the replay writes whatever the three names lead to ({@link replayMayWrite}); where it may
+    // not, it is not made, and the start blocks with all three files left, as for a replay that cannot finish.
+    if (!replayMayWrite(vaultPaths)) return 'failed'
     checkpointLeftoverWal(vaultPaths.dbPath)
     // T2.9 (R1-3 = R2-1): re-checked whatever the replay answered, `damaged` included (see above).
     if (walAwaitsCheckpoint(vaultPaths.dbPath)) return 'failed'
@@ -1444,6 +1447,23 @@ function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNot
   shredFile(recoveryPath)
   renameSync(vaultPaths.dbPath, recoveryPath)
   return 'kept-only-copy'
+}
+
+/**
+ * T2.16 fix round (R1 B-2): may the #911 replay ({@link checkpointLeftoverWal}) write here? It opens the working file
+ * with SQLite before any password, and SQLite writes through whatever the names lead to: review 1's probe had a second
+ * hard link of a text file elsewhere at the working file's name overwritten with the pages of a `-wal` planted beside
+ * it, and on Windows SQLite opens the `-wal` and the `-shm` by their names too (a TRUNCATE checkpoint empties the one,
+ * the WAL index is written into the other). So: the working file and its `-wal` are regular files no other name shares
+ * (`lstat`, never followed: a symbolic link, a junction or a second hard link is not), the `-shm` is one or is not
+ * there, and the workspace folder itself is no link to a folder elsewhere ({@link folderAtItsName}; a stat that proves
+ * nothing there is read as before, #1014's `unknown` rule). The app never makes a link, so its own files always pass.
+ */
+function replayMayWrite(vaultPaths: VaultPaths): boolean {
+  if (folderAtItsName(workspaceDirOf(vaultPaths)) === 'outside') return false
+  const plain = (path: string): boolean => shredNameOf(lstatOrNull(path)).kind === 'file'
+  const shm = `${vaultPaths.dbPath}-shm`
+  return plain(vaultPaths.dbPath) && plain(`${vaultPaths.dbPath}-wal`) && (lstatOrNull(shm) === null || plain(shm))
 }
 
 // ---- #875: the record of a lock that finished at the last snapshot ----------------
@@ -1549,7 +1569,12 @@ function readWorkingCopyLostMarker(vaultPaths: VaultPaths): WorkingCopyLostMarke
 
 /** Write the marker for the `.enc` that is there now (temp + fsync + rename, so it is whole or absent; a temp a failed
  *  write leaves behind is removed). Throws on an I/O failure; nothing is written when `.enc` has no readable frame (no
- *  snapshot to name). `enc`: that frame's IV when the caller has just read it (`init()`), else read here. */
+ *  snapshot to name). `enc`: that frame's IV when the caller has just read it (`init()`), else read here.
+ *  T2.16 fix round (R1 B-3): never through a link at the temp's name, as the rekey journal's own temp since #1014 round 6
+ *  ({@link writeRekeyJournal}): 'w' followed one, so a hard or symbolic link there had the file it reaches truncated and
+ *  given the marker's bytes, at a start before any password. Whatever is at that name is removed by its name first
+ *  ({@link removeTempName}) and the temp is created anew ('wx'); a folder there (or one planted in between) fails the
+ *  write, which is best-effort. */
 function writeWorkingCopyLostMarker(
   vaultPaths: VaultPaths,
   cause: MarkedLossCause,
@@ -1559,7 +1584,8 @@ function writeWorkingCopyLostMarker(
   const path = workingCopyLostPath(vaultPaths)
   const tmp = `${path}.tmp`
   try {
-    const fd = openSync(tmp, 'w')
+    removeTempName(tmp)
+    const fd = openSync(tmp, 'wx')
     try {
       writeSync(fd, Buffer.from(JSON.stringify({ v: WORKING_COPY_LOST_VERSION, enc, cause }), 'utf8'))
       fsyncSync(fd)
@@ -1820,16 +1846,42 @@ function writeRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournal): void 
 }
 
 /** Remove the journal — or, when it could not be parsed, quarantine it as `.corrupt` beside
- *  the vault so the out-of-store paths it may name are never destroyed with it. */
+ *  the vault so the out-of-store paths it may name are never destroyed with it.
+ *  T2.16 fix round (R2 A1 = R1 B-6): only a regular file at `.corrupt` (an earlier quarantine) is replaced, as before. A
+ *  folder there made the `rmSync` throw (a file error), so every start and unlock answered "try again" for good, and a
+ *  link there was removed: anything but a file at that name is now left as it is, judged by `lstat` (never followed), and
+ *  the journal goes to the next free name instead ({@link quarantineName}). With none free it stays where it is: a
+ *  journal that does not parse lists nothing a pass could act on, so nothing is lost and nothing blocks. */
 function clearRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | null): void {
   const path = rekeyJournalPath(vaultPaths)
   removeTempName(`${path}.tmp`)
   if (journal?.corrupt && existsSync(path)) {
-    rmSync(`${path}.corrupt`, { force: true })
-    renameSync(path, `${path}.corrupt`)
+    const aside = quarantineName(path)
+    if (aside === null) return
+    if (aside === `${path}.corrupt`) rmSync(aside, { force: true })
+    renameSync(path, aside)
     return
   }
   rmSync(path, { force: true })
+}
+
+/** T2.16: at most this many `.corrupt-<n>` names are tried before a quarantine gives up (and leaves the journal). */
+const QUARANTINE_NAMES = 64
+
+/** T2.16 (R2 A1): where {@link clearRekeyJournal} sets a journal that does not parse aside: `.corrupt` while nothing is
+ *  there or a regular file is (`lstat`, as before), else the first `.corrupt-<n>` (n from 1) that an `lstat` proves free
+ *  (ENOENT); null when none of those is. */
+function quarantineName(path: string): string | null {
+  const named = lstatOrNull(`${path}.corrupt`)
+  if (named === null || named.isFile()) return `${path}.corrupt`
+  for (let n = 1; n <= QUARANTINE_NAMES; n++) {
+    try {
+      lstatSync(`${path}.corrupt-${n}`)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return `${path}.corrupt-${n}`
+    }
+  }
+  return null
 }
 
 /**
@@ -1851,11 +1903,13 @@ function settleRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | 
   }
   if (journal === null || journal.corrupt) return // nothing it lists can be judged: kept (or quarantined) as it is
   const logsPath = vaultPaths.logsPath
+  // T2.16 fix round (R2 B2): behind a logs folder that is a link the log is neither removed nor stat'ed (the stat reached
+  // the folder elsewhere, a network path included), so the flag stays: it may still be there.
   const logStays =
     logsPath !== undefined &&
     logsPath !== '' &&
     journal.remove.some(namesRotatedLog) &&
-    !statSaysAbsent(join(logsPath, ROTATED_ENCRYPTED_LOG_NAME))
+    (folderAtItsName(logsPath) === 'outside' || !statSaysAbsent(join(logsPath, ROTATED_ENCRYPTED_LOG_NAME)))
   const remove = logStays ? [ROTATED_ENCRYPTED_LOG_NAME] : []
   const keys = (list: readonly string[]): string => [...new Set(list.map(pathKey))].sort().join('\n')
   const sameRemove = journal.remove.length === remove.length && journal.remove.every((entry, i) => entry === remove[i])
@@ -1887,10 +1941,10 @@ function removeTempName(path: string): boolean {
 type Containment = 'inside' | 'outside' | 'unknown'
 
 /** #1014 round 5 (review V7-3): what one plan has learned of the disk, so the entries of one folder (most share
- *  `documents/`) cost one walk and one `realpath` between them: the workspace folder's realpath (null: it failed), and
- *  each entry folder's answer, keyed by its folded path. */
+ *  `documents/`) cost one walk and one `realpath` between them: the base folder's realpath (the workspace folder for a
+ *  journal entry; null: it failed), and each entry folder's answer, keyed by its folded path. */
 interface ContainmentMemo {
-  realWs?: string | null
+  realBase?: string | null
   folders: Map<string, Containment>
 }
 
@@ -1906,9 +1960,8 @@ interface ContainmentMemo {
  * Round 5: everything after the text test depends on the entry's folder alone, so `memo` answers each folder once.
  */
 function insideWorkspace(ws: string, entry: string, memo: ContainmentMemo): Containment {
-  const full = resolve(entry)
-  if (!isInsideDir(ws, full)) return 'outside'
-  const folder = dirname(full)
+  if (outsideByText(ws, entry)) return 'outside'
+  const folder = dirname(resolve(entry))
   let found = memo.folders.get(pathKey(folder))
   if (found === undefined) {
     found = folderContainment(ws, folder, memo)
@@ -1917,10 +1970,36 @@ function insideWorkspace(ws: string, entry: string, memo: ContainmentMemo): Cont
   return found
 }
 
-/** {@link insideWorkspace}'s answer for an entry folder that lies inside `ws` by its text. */
-function folderContainment(ws: string, folder: string, memo: ContainmentMemo): Containment {
-  const rel = relative(ws, folder)
-  let dir = ws
+/** #1014: an entry that lies outside the workspace folder `ws` by its text alone (no file-system call). T2.16 fix round
+ *  (R1 B-4 = R2 B1): such an entry is never touched on disk at all, not even by a stat, so one that names a network path
+ *  (`\\host\share\…`) can never make the start open a connection ({@link applyPendingRekey}). */
+function outsideByText(ws: string, entry: string): boolean {
+  return !isInsideDir(ws, resolve(entry))
+}
+
+/**
+ * {@link insideWorkspace}'s answer for an entry folder that lies inside `ws` by its text; and (T2.16 fix round) the one
+ * test every caller applies to a folder the start would act in: a store folder ({@link storeFolderInside}), the
+ * workspace folder and the logs folder themselves ({@link folderAtItsName}), the working file's folder before the #911
+ * replay ({@link replayMayWrite}). `folder` is `base` or lies below it by its text, and it is `inside` only when it is,
+ * on the disk, where its path says: no folder below `base` on the way is a link (`lstat`, which never follows one), and
+ * the OS's own resolution of `folder` is `base`'s resolution with the same names below it. `outside` is anything else
+ * there (a link, a junction, a file at a folder's name, a folder that resolves elsewhere); `unknown` a stat that failed
+ * for a reason that proves nothing (#1014 round 4: never acted on as a journal entry; T2.9: a store folder is read as
+ * before). The three answers mean the same for every caller.
+ * T2.16 fix round (R1 B-1): Node's `lstat` reports a Windows junction as a link only when its target is a `\??\X:\…`
+ * path; a junction to a volume GUID path (`\\?\Volume{…}\…`) or to a device path (`\\?\GLOBALROOT\Device\
+ * HarddiskVolumeN\…`) reads as a plain folder to it and to the JS `realpathSync`, which then resolves nothing, so the
+ * old test (`realpathSync`, "inside the workspace's realpath") answered `inside` for an entry or a store folder behind
+ * one. `realpathSync.native` asks the OS, which resolves every reparse point, so such a junction resolves elsewhere and
+ * answers `outside`; and the resolution must be exactly the expected path (folded as {@link pathKey} folds it), not
+ * merely inside `base`, so a link that leads elsewhere inside the workspace answers `outside` too. Both sides go through
+ * the same resolution, so a link or a short (8.3) name above `base`, a `subst` drive or a network drive letter changes
+ * nothing.
+ */
+function folderContainment(base: string, folder: string, memo: ContainmentMemo): Containment {
+  const rel = relative(base, folder)
+  let dir = base
   for (const part of rel === '' ? [] : rel.split(sep)) {
     dir = join(dir, part)
     let named: Stats
@@ -1929,22 +2008,28 @@ function folderContainment(ws: string, folder: string, memo: ContainmentMemo): C
     } catch (err) {
       return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'inside' : 'unknown'
     }
-    if (!named.isDirectory()) return 'outside' // a link (a junction too), or a file at a folder's name
+    if (!named.isDirectory()) return 'outside' // a link (a `\??\X:\` junction too), or a file at a folder's name
   }
-  if (memo.realWs === undefined) {
+  if (memo.realBase === undefined) {
     try {
-      memo.realWs = realpathSync(ws)
+      memo.realBase = realpathSync.native(base)
     } catch {
-      memo.realWs = null
+      memo.realBase = null
     }
   }
-  if (memo.realWs === null) return 'unknown'
+  if (memo.realBase === null) return 'unknown'
   try {
-    const realDir = realpathSync(folder)
-    return pathKey(realDir) === pathKey(memo.realWs) || isInsideDir(memo.realWs, realDir) ? 'inside' : 'outside'
+    return pathKey(realpathSync.native(folder)) === pathKey(join(memo.realBase, rel)) ? 'inside' : 'outside'
   } catch {
     return 'unknown'
   }
+}
+
+/** T2.16 fix round (R2 B2, owner 2026-11-24: fix): is `dir` (the workspace folder, the logs folder) on the disk where its
+ *  path says, judged from its parent by {@link folderContainment}? `outside` when it is a link to a folder elsewhere (any
+ *  junction, a symbolic link), or no folder; `unknown` when a stat proves nothing. */
+function folderAtItsName(dir: string): Containment {
+  return folderContainment(dirname(dir), dir, { folders: new Map() })
 }
 
 /** #1014 round 3: the staged database's or an in-store stage's entry (`documents/`, `images/`), which the start settles:
@@ -2042,9 +2127,11 @@ function namesRotatedLog(entry: string): boolean {
   return fold(win32.basename(entry)) === fold(ROTATED_ENCRYPTED_LOG_NAME)
 }
 
-/** #1014: the rotated diagnostics log, at the path the app computes for it (best-effort, idempotent: nothing reads it). */
+/** #1014: the rotated diagnostics log, at the path the app computes for it (best-effort, idempotent: nothing reads it).
+ *  T2.16 fix round (R1 B-5 = R2 B2): not behind a logs folder that is a link ({@link folderAtItsName}): the file of that
+ *  name in the folder it reaches was deleted. That log then stays under the retired key, which nothing reads. */
 function removeRotatedLog(vaultPaths: VaultPaths): void {
-  if (!vaultPaths.logsPath) return
+  if (!vaultPaths.logsPath || folderAtItsName(vaultPaths.logsPath) === 'outside') return
   try {
     rmSync(join(vaultPaths.logsPath, ROTATED_ENCRYPTED_LOG_NAME), { force: true })
   } catch {
@@ -2076,10 +2163,21 @@ function stagedRekeyFiles(
   for (const staged of scannedSidecarStages(vaultPaths)) add(staged)
   // #1001 (review round 2): a journal entry counts only when it names a file, as the scan does. `existsSync` is true for
   // a folder too, and a folder at a listed name was renamed over its stored copy, which was shredded first.
+  // T2.16 fix round (R2 B4): a regular file no other name shares, judged by `lstat` ({@link linkedStage}), as the unlock
+  // judges an outside stage. A stat follows a link, so a symbolic link or a second hard link at a listed name counted, and
+  // the swap shredded the stored copy and renamed the link onto its name. Such an entry is no stage of this pass, however
+  // the scan or the staged database's name found it: it is left as it is, with its journal ({@link applyPendingRekey}).
+  const linked = new Set<string>()
   for (const staged of [...admitted, ...outOfStore]) {
-    if (isFileAt(staged)) add(staged)
+    if (linkedStage(staged)) linked.add(pathKey(staged))
+    else if (isFileAt(staged)) add(staged)
   }
-  return [...out.values()]
+  return [...out.entries()].filter(([key]) => !linked.has(key)).map(([, staged]) => staged)
+}
+
+/** T2.16 (R2 B4): is the name `staged` a link to a file, or a file another name shares (`lstat`: `name-only`)? */
+function linkedStage(staged: string): boolean {
+  return shredNameOf(lstatOrNull(staged)).kind === 'name-only'
 }
 
 /** #1014: the deferred out-of-store stages whose stored copy the open database lists ({@link outOfStoreTargets}). */
@@ -2331,6 +2429,7 @@ export function applyPendingRekey(
   const accepted = [...plan.staged, ...listed]
   for (const staged of accepted) {
     if (pathKey(staged) !== stagedDb && removeTempName(`${staged}.tmp`)) left += 1
+    if (linkedStage(staged)) left += 1 // T2.16 (R2 B4): a link at the stage's name is left, and still waits (kept)
   }
   const swapOne = (staged: string): void => {
     // Already swapped (or listed under two spellings): shredding the target now would
@@ -2364,10 +2463,19 @@ export function applyPendingRekey(
   // #1014: the entries this pass admitted; a stage still waiting for the database keeps it too. Round 3: and the journal
   // is rewritten to list only those ({@link stillWaiting}), so it vouches for nothing this pass settled. Round 4: and the
   // entries a failed stat left unjudged, for the next pass. Round 6: those and the deferred ones only while their stage
-  // may still be there ({@link notAdmittedStillWaits}).
+  // may still be there ({@link notAdmittedStillWaits}). T2.16 fix round (R1 B-4 = R2 B1): except a deferred entry outside
+  // the workspace folder by its text, which is kept as it is with no file-system call at all: the stat that judged it
+  // reached any path a journal names (a network path made every start, before any password, open a connection to a host
+  // the drive chose). Round 6's reason for the stat (an entry kept after its stage was swapped in, which a later pass
+  // judging it inside read as listing a stray stage) cannot hold for it: no pass ever judges it inside, and the unlock
+  // acts on it only when the open database lists its stored copy ({@link finishOutOfStoreStages}), and drops it otherwise.
+  const ws = workspaceDirOf(vaultPaths)
   const waiting = [
     ...accepted.filter((staged) => stillWaiting(vaultPaths, staged)),
-    ...[...plan.unknown, ...(outOfStore ? [] : plan.deferred)].filter((staged) => notAdmittedStillWaits(vaultPaths, staged))
+    ...plan.unknown.filter((staged) => notAdmittedStillWaits(vaultPaths, staged)),
+    ...(outOfStore ? [] : plan.deferred).filter(
+      (staged) => outsideByText(ws, staged) || notAdmittedStillWaits(vaultPaths, staged)
+    )
   ]
   // Anything still unswapped (a persistently locked file) is left staged for recoverPendingRekey
   // on the next unlock; surface the failure so the caller logs it (the swap is old-or-new per
@@ -3786,6 +3894,8 @@ export class WorkspaceController {
   /** #911: this start found the only copy with `.enc` missing and its structure damaged, and swept it
    *  ({@link discardedOnlyCopy}). */
   private _discardedOnlyCopy = false
+  /** T2.16 (R2 B2): the folders the last {@link init} found to be links to a folder elsewhere ({@link linkedStartFolders}). */
+  private _linkedStartFolders: Array<'workspace' | 'logs'> = []
   /** #985 (review round 3 F3): the last successful unlock left a spent `.recovery` a newer build stamped in place, for the
    *  IPC to log once ({@link takeNewerRecoveryLeft}). */
   private _newerRecoveryLeft = false
@@ -4018,8 +4128,22 @@ export class WorkspaceController {
     this._newerWorkspace = false
     this._encMissingKept = false
     this._discardedOnlyCopy = false
+    this._linkedStartFolders = []
     if (this.readFormat()) return
     if (this.descriptor?.mode === 'encrypted') {
+      // T2.16 fix round (R2 B2, owner 2026-11-24: fix): the workspace folder itself, or the logs folder, a link to a
+      // folder elsewhere (any junction, a symbolic link: {@link folderAtItsName}). Every test below measured from the
+      // folder behind such a link, so all of it read as "inside": the sweep shredded `*.tmp` and `*.parse*` files there,
+      // the stage scan and the rekey journal had files there shredded and replaced, and the rotated log of that name was
+      // deleted. Behind a linked workspace folder the start now runs no sweep and no rekey recovery (which holds the
+      // stage scan and the rotated log's removal); behind a linked logs folder the log is not removed
+      // ({@link removeRotatedLog}). Both are noted for the log ({@link linkedStartFolders}). The salvage still runs (it
+      // keeps a failed lock's newer copy from the unlock, which reads and writes through the link as before), but its
+      // #911 replay does not ({@link replayMayWrite}). A stat that proves nothing reads as before (#1014's rule).
+      const linkedWorkspace = folderAtItsName(workspaceDirOf(this.vaultPaths)) === 'outside'
+      const logsPath = this.vaultPaths.logsPath
+      if (linkedWorkspace) this._linkedStartFolders.push('workspace')
+      if (logsPath && folderAtItsName(logsPath) === 'outside') this._linkedStartFolders.push('logs')
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
       // If a previous run was killed before lock-on-quit ran, shred the leftover so the
       // decrypted database (+ WAL/SHM) never lingers on disk. Safe (see shredStalePlaintext)
@@ -4035,8 +4159,14 @@ export class WorkspaceController {
       // (unlock runs it once admitted).
       const salvage = preserveNewerPlaintext(this.vaultPaths, this.noteProbeFallback)
       this._recoveryBlocked = salvage === 'failed'
-      this._discardedOnlyCopy = salvage === 'discarded-only-copy'
+      this._discardedOnlyCopy = salvage === 'discarded-only-copy' && !linkedWorkspace
       if (this._recoveryBlocked) return // locked AND blocked; unlock() re-runs this salvage
+      if (linkedWorkspace) {
+        // T2.16 (R2 B2): no sweep, so no loss to record; the reads below are the unlock's own (`.enc`, the marker).
+        this._encMissingKept = this.encMissingKeptOnDisk()
+        this.adoptWorkingCopyLostMarker(frameIvOf(this.vaultPaths.encPath))
+        return // locked; await unlock
+      }
       // #892: the app ended without locking, and the sweep below shreds that session. Was the drive too full for a
       // lock (the quit #876 refuses)? Read before the sweep frees the working copy's room, while the drive is as the
       // app left it; and the snapshot the working copy was judged against, for after the rekey recovery.
@@ -4131,6 +4261,13 @@ export class WorkspaceController {
    *  no marker, no notice (there is no snapshot to name), and the unlock says the file is missing. */
   discardedOnlyCopy(): boolean {
     return this._discardedOnlyCopy
+  }
+
+  /** T2.16 fix round (R2 B2): the folders this start found to be links to a folder elsewhere, and acted through none of:
+   *  `workspace` (no sweep, no rekey recovery), `logs` (the rotated log not removed). For `main/index.ts`'s one
+   *  content-free log line: the folder's role only, never a path. */
+  linkedStartFolders(): ReadonlyArray<'workspace' | 'logs'> {
+    return this._linkedStartFolders
   }
 
   /**

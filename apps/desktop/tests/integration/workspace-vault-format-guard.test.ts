@@ -1714,6 +1714,50 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
     }
   })
 
+  // T2.16 fix round (R2 B4): nor for a link at the name. A journal entry inside the workspace counted when a stat (which
+  // follows a link) found a file there, so a symbolic link or a second hard link at a listed staged name had the start
+  // shred the stored copy and rename the link onto its name: that document was lost, and its name then led to a file
+  // elsewhere. A stage is now a regular file no other name shares (`lstat`, as the unlock judges an outside stage): the
+  // start leaves the stage, the stored copy and the file the link leads to byte for byte, the journal keeps the entry,
+  // and the pass counts it.
+  const linkedStage = (kind: 'hard' | 'symbolic') => (elsewhere: string, staged: string): void =>
+    kind === 'hard' ? linkSync(elsewhere, staged) : symlinkSync(elsewhere, staged, 'file')
+  const canFileLink = (kind: 'hard' | 'symbolic'): boolean => {
+    const root = tempRoot('fmtguard-b4-link')
+    writeFileSync(join(root, 'target'), 'x')
+    try {
+      linkedStage(kind)(join(root, 'target'), join(root, 'link'))
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const kind of ['hard', 'symbolic'] as const) {
+    it.skipIf(!canFileLink(kind))(`a journal that lists a ${kind} link at the staged name of a stored document copy: the start leaves the stage, the stored copy and the file it leads to, and keeps the entry`, async () => {
+      const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+      const elsewhere = plant(join(vp.root, 'elsewhere.bin'), 'a file outside the workspace folder')
+      const staged = `${copies.documents}${REKEY_SUFFIX}`
+      linkedStage(kind)(elsewhere, staged)
+      const journal = rekeyJournal(vp, 1, [staged])
+      const before = { stored: sha(copies.documents), elsewhere: sha(elsewhere) }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(sha(copies.documents), 'the stored copy').toBe(before.stored)
+        expect(sha(elsewhere), 'the file the link leads to').toBe(before.elsewhere)
+        expect(lstatSync(staged).isFile() && lstatSync(staged).nlink === 1, 'the link at the staged name').toBe(false)
+        expect(JSON.parse(readFileSync(journal, 'utf8')).staged, 'the journal keeps the entry').toEqual([staged])
+        expect(ctl.takeJournalRefusals()).toBe(1)
+        ctl.unlock(PW)
+        expect(sha(copies.documents)).toBe(before.stored)
+        expect(sha(elsewhere)).toBe(before.elsewhere)
+        expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      } finally {
+        ctl.shutdown()
+      }
+    })
+  }
+
   // A journal vouches for a stage only by its full path (#973 review round 3 F1): one that cannot be read lists nothing,
   // and one written under another drive root lists other paths. Either leaves the stage in doubt.
   it.each<[string, (vp: FreshVaultPaths, staged: string) => void]>([
