@@ -670,6 +670,57 @@ describe('repo hygiene — every read-write node:sqlite connection under src/mai
   })
 })
 
+// App-update plan T2.2 fix round (review 1, R1-1): an open writes the `last_writer` stamp only once the app version is
+// set (`setStampAppVersion`); unset, it writes none. Every row sets the version itself, so a release whose start lost
+// the call, or moved it below the first open (the plaintext workspace opens inside `initBackend`'s `workspace.init()`),
+// would pass the whole suite and never stamp: the one thing no later version can add to Kits already sold (G-9). Read
+// from the syntax tree: `main/index.ts` makes the call once, unconditionally at module scope, with `app.getVersion()`,
+// before the statement that starts the backend; and no `WorkspaceController` is built at module scope.
+describe('repo hygiene — the app sets the stamp version before it opens a database (app-update T2.2)', () => {
+  it('main/index.ts calls setStampAppVersion(app.getVersion()) once, at module scope, before the backend can start', () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const calls: ts.CallExpression[] = []
+    const moduleLevelControllers: ts.Node[] = []
+    const insideFunction = (n: ts.Node): boolean => {
+      for (let p = n.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p)) return true
+      return false
+    }
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'setStampAppVersion') calls.push(n)
+      if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'WorkspaceController' && !insideFunction(n)) {
+        moduleLevelControllers.push(n)
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(calls, 'exactly one setStampAppVersion(...) call in main/index.ts').toHaveLength(1)
+    const call = calls[0]!
+    // Unconditional, at module scope: the call is a statement of the file itself, not inside a function or a block.
+    const statement = call.parent
+    expect(ts.isExpressionStatement(statement) && statement.parent === source).toBe(true)
+    const [arg, ...rest] = call.arguments
+    expect(rest).toEqual([])
+    expect(
+      arg !== undefined &&
+        ts.isCallExpression(arg) &&
+        arg.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(arg.expression) &&
+        ts.isIdentifier(arg.expression.expression) &&
+        arg.expression.expression.text === 'app' &&
+        arg.expression.name.text === 'getVersion'
+    ).toBe(true)
+    // Before the first module-level statement that names `initBackend` (other than its own declaration): the start.
+    const namesInitBackend = (n: ts.Node): boolean =>
+      (ts.isIdentifier(n) && n.text === 'initBackend' && !(ts.isFunctionDeclaration(n.parent) && n.parent.name === n)) ||
+      (ts.forEachChild(n, (c) => (namesInitBackend(c) ? true : undefined)) ?? false)
+    const start = source.statements.findIndex((s) => namesInitBackend(s))
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(source.statements.indexOf(statement as ts.Statement)).toBeLessThan(start)
+    expect(moduleLevelControllers).toEqual([])
+  })
+})
+
 // #188 wave — the bundler tripwire. `electron-vite`'s `esmShimPlugin` decides where to inject its
 // CommonJS shim by finding the LAST match of a loose "static import" regex over the whole rendered
 // chunk. That regex matches the bare word `import` (preceded by whitespace/`;`/start) followed

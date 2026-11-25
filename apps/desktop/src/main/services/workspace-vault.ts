@@ -36,8 +36,10 @@ import {
   openDatabase,
   probeDatabaseFile,
   sqliteJudgedDamaged,
+  stampLastWriter,
   walAwaitsCheckpoint,
   SCHEMA_VERSION,
+  STAMP_NO_APP_VERSION,
   WorkspaceNewerError,
   type DatabaseFileProbe,
   type WalCheckpointRetry
@@ -3920,8 +3922,24 @@ export class WorkspaceController {
   /** T2.2 (W-9): the content-free codes of the `last_writer` stamps an open could not write, for the log
    *  ({@link takeStampFailures}). Bounded. */
   private _stampFailures: string[] = []
+  /** T2.2 fix round (review 2, major 1): this session's open could not write the stamp for a reason a retry may get past
+   *  (not an unset version), so the lock tries once more ({@link retryStampOnce}). Cleared when a session opens. */
+  private _stampPending = false
   private readonly noteStampFailed = (code: string): void => {
     if (this._stampFailures.length < 20) this._stampFailures.push(code)
+    if (code !== STAMP_NO_APP_VERSION) this._stampPending = true
+  }
+  /**
+   * T2.2 fix round (review 2, major 1): a stamp the open could not write leaves the last writer's value standing while
+   * this session writes, and a later build would read it as "no older version wrote since". So, once, before the lock
+   * re-encrypts (Lock now and the exit lock) and before the exit closes a plaintext workspace, the stamp is tried again on
+   * the open handle. Best effort like the open's: a retry that fails too is one more code for the log, never a failed lock.
+   */
+  private retryStampOnce(): void {
+    if (!this._stampPending || this._db === null) return
+    this._stampPending = false
+    stampLastWriter(this._db, { onStampFailed: this.noteStampFailed })
+    this._stampPending = false // once per open: a retry that failed again is logged, not repeated
   }
   /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
@@ -4002,7 +4020,8 @@ export class WorkspaceController {
   }
 
   /** T2.2 (W-9): the codes of the `last_writer` stamps the opens since the last call could not write (SQLite's result
-   *  code and fixed description, a Node error code, or `no-app-version`; never a message, a path or a value). The open
+   *  code and fixed description, a Node error code, `no-app-version` or `stamp-ignored`; never a message, a path or a
+   *  value). The lock's one retry adds its own code when it fails too. The open
    *  went on each time (the stamp is best effort). Returns them once, for one log line each. */
   takeStampFailures(): string[] {
     const notes = this._stampFailures
@@ -4100,6 +4119,7 @@ export class WorkspaceController {
   }
 
   private openPlaintext(): void {
+    this._stampPending = false // T2.2: this open decides whether the exit retries the stamp
     const db = openDatabase(this.vaultPaths.dbPath, { onStampFailed: this.noteStampFailed })
     seedSettings(db)
     updateSettings(db, { workspaceMode: 'plaintext_dev' })
@@ -4464,6 +4484,7 @@ export class WorkspaceController {
     }
     let unlocked: UnlockedVault
     this._stageLeftByUnlock = false
+    this._stampPending = false // T2.2: this session's open decides whether the lock retries the stamp
     try {
       unlocked = unlockEncryptedVault(
         this.vaultPaths,
@@ -4557,6 +4578,7 @@ export class WorkspaceController {
       this.openPlaintext()
     } else {
       createEncryptedVaultOnDisk(this.vaultPaths, password, DEFAULT_KDF, { onStampFailed: this.noteStampFailed })
+      this._stampPending = false // T2.2: the unlock's open below decides whether the lock retries the stamp
       const { db, key, descriptor } = unlockEncryptedVault(
         this.vaultPaths,
         password,
@@ -4768,6 +4790,8 @@ export class WorkspaceController {
       // shred that `.enc` and roll the stage over it. Dropped first, the stage either rolls forward at a start because `.enc` is still missing
       // (it is then the newest snapshot on the drive) or is judged under the key at the unlock.
       this.retireStaleDatabaseStage(false)
+      // T2.2: a stamp the open could not write, tried once more before `.enc` is written from this file.
+      this.retryStampOnce()
       try {
         lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl, this.noteProbeFallback, opts.budget)
       } catch (err) {
@@ -4976,7 +5000,8 @@ export class WorkspaceController {
     }
     if (this._db) {
       // plaintext_dev: flush the WAL into the main file, then close — SQLite removes the
-      // -wal/-shm sidecars on the last clean connection close.
+      // -wal/-shm sidecars on the last clean connection close. T2.2: first, a stamp the open could not write, once more.
+      this.retryStampOnce()
       try {
         this._db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
       } catch {

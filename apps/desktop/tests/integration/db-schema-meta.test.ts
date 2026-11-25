@@ -17,7 +17,14 @@ import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { WorkspaceController, lockEncryptedVault, unlockEncryptedVault } from '../../src/main/services/workspace-vault'
 import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
-import { ENCRYPTION_REQUIRED, freshVaultPaths, lockedVault, thrownBy, unlockedController } from '../helpers/vault-fixtures'
+import {
+  ENCRYPTION_REQUIRED,
+  freshVaultPaths,
+  lockedVault,
+  thrownBy,
+  unlockedController,
+  type FreshVaultPaths
+} from '../helpers/vault-fixtures'
 
 // App-update plan T2.2, W-9, frozen contract F-10 (Appendix B). Release 1 is the oldest version ever sold on a Kit, and
 // whatever it does to a workspace a later version wrote can never be fixed in the field. So on EVERY successful open it
@@ -29,10 +36,47 @@ import { ENCRYPTION_REQUIRED, freshVaultPaths, lockedVault, thrownBy, unlockedCo
 // database): reader-snapshots.test.ts (N9); the changed "a second open is a no-op" row: db-user-version.test.ts (N4);
 // "no read-write connection without `defensive`": repo-hygiene.test.ts (N12). Rows are named after the T2.2 sheet.
 
+/** A value of `length` characters: `prefix`, then `fill` repeated (a vector too long to write out in the fixture). */
+interface BuiltValue {
+  prefix: string
+  fill: string
+  length: number
+}
+
+/**
+ * F-10's writer-side golden vectors (C14): written by hand from the plan's text, not from db.ts, and locked by
+ * tests/fixtures/golden-fixtures.sha256, so the code and its expectation cannot change in one edit unseen.
+ */
+interface F10Vectors {
+  table: {
+    name: string
+    storedSql: string
+    columns: unknown[]
+    tableList: unknown
+    indexes: unknown[]
+    triggers: unknown[]
+  }
+  rows: Array<{ key: string; value: string }>
+  appVersion: { usable: string[]; unusable: Array<{ case: string; value: unknown }> }
+  reader: {
+    maxLength: number
+    readable: Array<{ case: string; value?: string; build?: BuiltValue; appVersion: string; appliedThrough?: string; appliedThroughLength?: number }>
+    unreadable: Array<{ case: string; value?: unknown; build?: BuiltValue }>
+  }
+}
+const F10 = JSON.parse(
+  readFileSync(join(DESKTOP_ROOT, 'tests', 'fixtures', 'schema-meta', 'f10-writer-vectors.json'), 'utf8')
+) as F10Vectors
+const built = (b: BuiltValue): string => b.prefix + b.fill.repeat(b.length - b.prefix.length)
+
 /** The app version `main/index.ts` hands the stamp (`app.getVersion()` reads this file), independent of the code under test. */
 const PACKAGE_VERSION = (JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+/** The rows release 1 leaves in `schema_meta` (F-10): the fixture's, with its value template filled in for this build. */
+const fill = (template: string, version: string): string =>
+  template.replace('<app version>', version).replace('<applied_through>', LAST_WRITER_APPLIED_THROUGH)
+const ROWS = F10.rows.map((r) => ({ key: r.key, value: fill(r.value, PACKAGE_VERSION) }))
 /** What release 1 writes into `last_writer` (F-10): the version, one `;`, then the applied-through token. */
-const STAMP = `${PACKAGE_VERSION};${LAST_WRITER_APPLIED_THROUGH}`
+const STAMP = ROWS[0]!.value
 /** A quoted text a planted trigger aborts with: the failure code must not carry it (`failureCode`, never `err.message`). */
 const SECRET = "it's the quoted text of a planted trigger"
 
@@ -79,26 +123,23 @@ describe('schema_meta and the last_writer stamp (app-update T2.2, F-10)', () => 
   it('N1: a fresh open leaves schema_meta in exactly the frozen shape, no trigger, one row: last_writer; so does a create', () => {
     const p = freshPath('schema-meta-n1')
     openDatabase(p).close()
+    // Every expected value comes from the golden fixture (F10), written from the plan's text.
+    const name = F10.table.name
     readOnly(p, (db) => {
       expect(
-        db.prepare("SELECT name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo('schema_meta') ORDER BY cid").all()
-      ).toEqual([
-        { name: 'key', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },
-        { name: 'value', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0, hidden: 0 }
-      ])
+        db.prepare('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid').all(name)
+      ).toEqual(F10.table.columns)
       // A plain rowid table, not STRICT, not WITHOUT ROWID; its only index is the primary key's own.
-      expect(db.prepare("SELECT type, ncol, wr, strict FROM pragma_table_list WHERE schema = 'main' AND name = 'schema_meta'").all()).toEqual([
-        { type: 'table', ncol: 2, wr: 0, strict: 0 }
+      expect(db.prepare("SELECT type, ncol, wr, strict FROM pragma_table_list WHERE schema = 'main' AND name = ?").all(name)).toEqual([
+        F10.table.tableList
       ])
-      expect(db.prepare("SELECT name, \"unique\", origin, partial FROM pragma_index_list('schema_meta')").all()).toEqual([
-        { name: 'sqlite_autoindex_schema_meta_1', unique: 1, origin: 'pk', partial: 0 }
-      ])
+      expect(db.prepare('SELECT name, "unique", origin, partial FROM pragma_index_list(?)').all(name)).toEqual(F10.table.indexes)
       // One `CREATE TABLE` text, so a fresh and a migrated database hold the same (the all-paths test, T10.7).
-      expect(db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta'").get()).toEqual({
-        sql: 'CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+      expect(db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(name)).toEqual({
+        sql: F10.table.storedSql
       })
-      expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'schema_meta'").all()).toEqual([])
-      expect(metaRows(db).map((r) => r.key)).toEqual(['last_writer'])
+      expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?").all(name)).toEqual(F10.table.triggers)
+      expect(metaRows(db)).toEqual(ROWS)
     })
 
     // A1: the first `.enc` of a new workspace carries it (a controller create, read on the unlocked new vault).
@@ -263,29 +304,138 @@ describe('schema_meta and the last_writer stamp (app-update T2.2, F-10)', () => 
       expect(metaRows(db)).toEqual([{ key: 'last_writer', value: STAMP }])
     })
   })
+
+  // T2.2 fix round (review 2, minor): SQLite reports an upsert a trigger skipped with RAISE(IGNORE) as done, and COMMIT
+  // succeeds; only a read-back tells. Such a stamp is no stamp: the open says so with its own code.
+  it('a trigger that skips the write (RAISE(IGNORE)) is no stamp: `stamp-ignored`, the old value kept, the open goes on', () => {
+    const p = freshPath('schema-meta-ignored')
+    openDatabase(p).close()
+    rawExec(
+      p,
+      "UPDATE schema_meta SET value = '9.9.9;later' WHERE key = 'last_writer';" +
+        'CREATE TRIGGER skip_stamp BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(IGNORE); END;'
+    )
+    const codes: string[] = []
+    const { db, stamp } = openDatabaseWithStamp(p, { onStampFailed: (code) => codes.push(code) })
+    try {
+      expect(stamp).toEqual({ written: false, previous: '9.9.9;later', code: 'stamp-ignored' })
+      expect(codes).toEqual(['stamp-ignored'])
+      expect(metaRows(db)).toEqual([{ key: 'last_writer', value: '9.9.9;later' }])
+      expect(db.isTransaction).toBe(false)
+    } finally {
+      db.close()
+    }
+  })
+
+  // T2.2 fix round (review 2, minor): the setter takes only a version the stamp's grammar allows. Anything else (no value,
+  // not a string, a `;`, a space, a control or non-ASCII character) leaves the version unset: no stamp, `no-app-version`.
+  it.each([...F10.appVersion.unusable.map((v) => [v.case, v.value] as const), ['undefined', undefined] as const])(
+    'setStampAppVersion refuses %s: the open writes no stamp and reports no-app-version',
+    (_case, version) => {
+      setStampAppVersion(version as never)
+      const codes: string[] = []
+      const { db, stamp } = openDatabaseWithStamp(freshPath('schema-meta-version'), { onStampFailed: (code) => codes.push(code) })
+      try {
+        expect(stamp).toEqual({ written: false, previous: null, code: 'no-app-version' })
+        expect(codes).toEqual(['no-app-version'])
+        expect(schemaObjects(db, 'schema_meta')).toEqual([])
+      } finally {
+        db.close()
+      }
+    }
+  )
+
+  it.each(F10.appVersion.usable)('setStampAppVersion takes %s: the stamp names it', (version) => {
+    setStampAppVersion(version)
+    const db = openDatabase(freshPath('schema-meta-version-ok'))
+    try {
+      expect(metaRows(db)).toEqual(F10.rows.map((r) => ({ key: r.key, value: fill(r.value, version) })))
+    } finally {
+      db.close()
+    }
+  })
+})
+
+// T2.2 fix round (review 2, major 1): a stamp that failed at the open leaves a later build's value standing while this
+// session writes, and the later build would read it as "no older version wrote since". So the lock tries the stamp once
+// more, before the re-encryption: Lock now and the exit lock alike, and the plaintext workspace's close at exit. Best
+// effort like the open's: a retry that fails too is one more log code, and the lock goes on.
+describe('a stamp that failed at the open is retried once at lock (app-update T2.2)', () => {
+  /** A later build's value, which the open's stamp must replace, and a trigger that blocks that stamp. */
+  const BLOCK =
+    "UPDATE schema_meta SET value = '9.9.9;later' WHERE key = 'last_writer';" +
+    "CREATE TRIGGER block_stamp BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(ABORT, 'blocked'); END;"
+
+  /** The `last_writer` the locked `.enc` holds: read through an unlock with the version unset, which stamps nothing. */
+  function lockedRows(vp: FreshVaultPaths): Array<{ key: string; value: string }> {
+    setStampAppVersion('')
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    try {
+      return metaRows(db)
+    } finally {
+      lockEncryptedVault(vp, db, key)
+    }
+  }
+
+  it.each([
+    ['Lock now', (ctl: WorkspaceController) => ctl.lock()],
+    ['the exit lock', (ctl: WorkspaceController) => ctl.shutdown()]
+  ] as const)("%s: the obstacle gone, the locked file holds this build's value", (_leg, lock) => {
+    const vp = lockedVault('schema-meta-retry', 'pw')
+    const planted = unlockEncryptedVault(vp, 'pw')
+    planted.db.exec(BLOCK)
+    lockEncryptedVault(vp, planted.db, planted.key)
+    const ctl = unlockedController(vp, 'pw')
+    expect(ctl.takeStampFailures()).toHaveLength(1) // the open's stamp failed
+    ctl.requireDb().exec('DROP TRIGGER block_stamp') // what blocked it is gone (a drive with room again)
+    lock(ctl)
+    expect(ctl.isUnlocked()).toBe(false)
+    expect(ctl.takeStampFailures()).toEqual([]) // the retry went through: nothing more to log
+    expect(lockedRows(vp)).toEqual(ROWS)
+  })
+
+  it('Lock now with the obstacle still there: one more code for the log, the lock goes on, the old value stays', () => {
+    const vp = lockedVault('schema-meta-retry-blocked', 'pw')
+    const planted = unlockEncryptedVault(vp, 'pw')
+    planted.db.exec(BLOCK)
+    lockEncryptedVault(vp, planted.db, planted.key)
+    const ctl = unlockedController(vp, 'pw')
+    expect(ctl.takeStampFailures()).toHaveLength(1)
+    ctl.lock()
+    expect(ctl.isUnlocked()).toBe(false)
+    const codes = ctl.takeStampFailures()
+    expect(codes).toHaveLength(1)
+    expect(codes[0]).toMatch(/^sqlite \d+: [A-Za-z ]+$/)
+    expect(lockedRows(vp)).toEqual([{ key: 'last_writer', value: '9.9.9;later' }])
+  })
+
+  it("the plaintext workspace's close at exit: the obstacle gone, the file holds this build's value", () => {
+    const vp = freshVaultPaths('schema-meta-retry-plaintext')
+    openDatabase(vp.dbPath).close()
+    rawExec(vp.dbPath, BLOCK)
+    const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    ctl.init()
+    expect(ctl.getState().mode).toBe('plaintext_dev')
+    expect(ctl.takeStampFailures()).toHaveLength(1)
+    ctl.requireDb().exec('DROP TRIGGER block_stamp')
+    ctl.shutdown()
+    expect(ctl.takeStampFailures()).toEqual([])
+    expect(readOnly(vp.dbPath, metaRows)).toEqual(ROWS)
+  })
 })
 
 describe('reading a last_writer value (app-update T2.2, F-10: split at the first `;`, unparseable is never an error)', () => {
-  it.each([
-    ["a stamp as release 1 writes it", '0.1.66;interim', { appVersion: '0.1.66', appliedThrough: 'interim' }],
-    ["a later writer's richer value: split at the FIRST `;`", '9.9.9;later;extra', { appVersion: '9.9.9', appliedThrough: 'later;extra' }],
-    ['a value of exactly 256 characters', `1.0.0;${'a'.repeat(250)}`, { appVersion: '1.0.0', appliedThrough: 'a'.repeat(250) }]
-  ])('N10: %s reads', (_case, value, expected) => {
-    expect(parseLastWriter(value)).toEqual(expected)
+  // The vectors are the golden fixture's (F10.reader), written from the plan's grammar.
+  it.each(F10.reader.readable.map((v) => [v.case, v] as const))('N10: %s reads', (_case, v) => {
+    const value = v.build ? built(v.build) : v.value!
+    if (v.build) expect(value).toHaveLength(v.build.length)
+    const appliedThrough = v.appliedThrough ?? (v.build ? v.build.fill.repeat(v.appliedThroughLength!) : undefined)
+    expect(parseLastWriter(value)).toEqual({ appVersion: v.appVersion, appliedThrough })
   })
 
-  it.each([
-    ['no value (no table, no row)', null],
-    ['an empty value', ''],
-    ['a value without `;`', '0.1.66'],
-    ['an empty version', ';interim'],
-    ['an empty rest', '0.1.66;'],
-    ['a value of 257 characters', `1.0.0;${'a'.repeat(251)}`],
-    ['non-ASCII text', '0.1.66;über'],
-    ['a control character', '0.1.66;interim\nforged line'],
-    ['a space', '0.1.66 beta;interim'],
-    ['a value that is not text', 42]
-  ])('N10: %s is unreadable, never an error', (_case, value) => {
+  it.each(F10.reader.unreadable.map((v) => [v.case, v] as const))('N10: %s is unreadable, never an error', (_case, v) => {
+    const value = v.build ? built(v.build) : v.value
+    if (v.build) expect(value).toHaveLength(v.build.length)
     expect(parseLastWriter(value)).toBe('unreadable')
   })
 

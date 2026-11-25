@@ -92,6 +92,12 @@ describe('PRAGMA user_version (#247)', () => {
     })
     again.close()
     expect(readFileSync(p).subarray(0, 100).equals(header)).toBe(true)
+    // T2.2 fix round (review 2, minor): what the old hash held still holds where it can. A same-version open of the
+    // up-to-date file whose stamp already holds this build's value changes no byte at all: the migrations write nothing,
+    // and SQLite stores an unchanged value without writing a page (measured, T2.2 S1).
+    const settled = sha(p)
+    openDatabase(p).close()
+    expect(sha(p)).toBe(settled)
   })
 
   it('a database stamped by a NEWER build is refused with WorkspaceNewerError — closed, no writes', () => {

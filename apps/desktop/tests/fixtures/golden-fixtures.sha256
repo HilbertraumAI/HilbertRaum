@@ -1,5 +1,6 @@
 8595e29829b81ccb7bf5d8a7c63796acfca14967b718ad588bf25277b28343ec  readers/v0.1.60/open-database.cjs
 9965663bcf3c4eec8eefe941d2c86c8a445852c118c723fe1e8ad98bf94d8fba  readers/v0.1.60/open-database.provenance.json
+b2a3cf89ba74cd81e19aaaea30740e19c466fe9298fa0b10c4b95d6c2ac085cb  schema-meta/f10-writer-vectors.json
 1d5cdaa46a1736aae319f311567a9b35ced8715744f08dbc0682c3fc4b04af13  vault-golden/PROVENANCE.md
 1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c  vault-golden/v0.1.50-workspace.json
 6b65f30f2335da9fff59580d95fe686a105eb1975927ebe35b252a844f458aa7  vault-golden/v0.1.52-workspace.json

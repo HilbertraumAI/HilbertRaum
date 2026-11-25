@@ -1475,8 +1475,11 @@ const LAST_WRITER_MAX_LENGTH = 256
 const STAMP_FIELD = /^[\x21-\x3a\x3c-\x7e]+$/
 /** The rest of a value after its first `;`: printable ASCII without a space (a later writer may use `;` in it). */
 const STAMP_REST = /^[\x21-\x7e]+$/
-/** The failure code of an open that wrote no stamp because no usable app version was set ({@link setStampAppVersion}). */
-const STAMP_NO_APP_VERSION = 'no-app-version'
+/** The failure code of an open that wrote no stamp because no usable app version was set ({@link setStampAppVersion}). A
+ *  retry cannot help such a stamp. */
+export const STAMP_NO_APP_VERSION = 'no-app-version'
+/** The failure code of a stamp SQLite reported as done that did not store the value (a trigger's `RAISE(IGNORE)`). */
+const STAMP_IGNORED = 'stamp-ignored'
 
 /** The app version the stamp names ({@link setStampAppVersion}); empty until it is set. */
 let stampAppVersion = ''
@@ -1485,11 +1488,12 @@ let stampAppVersion = ''
  * Set the app version the `last_writer` stamp names: `app.getVersion()` (the app's `package.json` version, SemVer), set by
  * `main/index.ts` at the very start of the main process, before any database is opened (the plaintext open runs inside
  * `workspace.init()`). One module value instead of a parameter on every open (the #847 `setManifestAppVersion` pattern).
- * Until it is set, or when it is no token the stamp's grammar allows, an open writes no stamp and reports
- * `no-app-version`: never a made-up version.
+ * Anything but a string (`undefined` from a caller that lost its value, a number) leaves it unset. Until it is set, or
+ * when it is no token the stamp's grammar allows, an open writes no stamp and reports `no-app-version`: never a made-up
+ * version.
  */
-export function setStampAppVersion(version: string): void {
-  stampAppVersion = version
+export function setStampAppVersion(version: unknown): void {
+  stampAppVersion = typeof version === 'string' ? version : ''
 }
 
 /** A `last_writer` value read back ({@link parseLastWriter}): its two fields, or `'unreadable'`. */
@@ -1525,7 +1529,7 @@ function storedLastWriter(db: Db): string | null {
 
 /**
  * What an open did with the `last_writer` stamp: written, or not (with a content-free code: SQLite's result code and fixed
- * description, a Node error code, or `no-app-version`). `previous` is the value found BEFORE the overwrite (null when
+ * description, a Node error code, `no-app-version` or `stamp-ignored`). `previous` is the value found BEFORE the overwrite (null when
  * there was none), for the unlock line (P3) and the migration framework (P10): after the open the stored value is always
  * this build's own.
  */
@@ -1539,13 +1543,15 @@ export type LastWriterStamp =
  * and no other table, deletes nothing, and never sets `application_id`. Best effort: one transaction of its own after
  * the refusal check and the migrations; whatever stops it (a later shape change, a foreign object under the name, a full
  * or read-only drive) is rolled back, reported through `onStampFailed`, and the open goes on with the handle outside any
- * transaction. Never throws.
+ * transaction. The value is read back before the commit: a write a trigger skipped (`RAISE(IGNORE)`, which SQLite reports
+ * as done) is `stamp-ignored`, not a stamp. Never throws. Also the lock's one retry of a stamp the open could not write
+ * (`WorkspaceController`, T2.2 fix round), on the session's open handle.
  */
-function stampLastWriter(db: Db, onStampFailed?: (code: string) => void): LastWriterStamp {
+export function stampLastWriter(db: Db, options: OpenDatabaseOptions = {}): LastWriterStamp {
   const previous = storedLastWriter(db)
   const failed = (code: string): LastWriterStamp => {
     try {
-      onStampFailed?.(code)
+      options.onStampFailed?.(code)
     } catch {
       /* a note that throws must not fail the open either */
     }
@@ -1553,6 +1559,7 @@ function stampLastWriter(db: Db, onStampFailed?: (code: string) => void): LastWr
   }
   const value = `${stampAppVersion};${LAST_WRITER_APPLIED_THROUGH}`
   if (!STAMP_FIELD.test(stampAppVersion) || value.length > LAST_WRITER_MAX_LENGTH) return failed(STAMP_NO_APP_VERSION)
+  let ignored = false
   try {
     db.exec('BEGIN')
     db.exec(SCHEMA_META_DDL)
@@ -1560,6 +1567,10 @@ function stampLastWriter(db: Db, onStampFailed?: (code: string) => void): LastWr
       LAST_WRITER_KEY,
       value
     )
+    if (storedLastWriter(db) !== value) {
+      ignored = true
+      throw new Error(STAMP_IGNORED)
+    }
     db.exec('COMMIT')
     return { written: true, previous }
   } catch (err) {
@@ -1568,7 +1579,7 @@ function stampLastWriter(db: Db, onStampFailed?: (code: string) => void): LastWr
     } catch {
       /* no transaction is left open: the failed statement ended it, or BEGIN itself failed */
     }
-    return failed(failureCode(err))
+    return failed(ignored ? STAMP_IGNORED : failureCode(err))
   }
 }
 
@@ -1604,7 +1615,7 @@ export function openDatabaseWithStamp(path: string, options: OpenDatabaseOptions
     throw err
   }
   // T2.2 (F-10): only now, after the refusal check (a refused file is never stamped) and the migrations.
-  return { db, stamp: stampLastWriter(db, options.onStampFailed) }
+  return { db, stamp: stampLastWriter(db, options) }
 }
 
 /** Open (or create) the database at `path`, run migrations and write the `last_writer` stamp (best effort). */
