@@ -2827,13 +2827,13 @@ export const fr: UiCatalog<'fr'> = {
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
   'main.workspace.schemaUnreadable':
     'Votre mot de passe est correct, mais cette version de HilbertRaum ne peut pas lire l’espace de ' +
-    'travail. Il a probablement été utilisé pour la dernière fois avec une version plus récente. ' +
-    'Votre espace de travail n’a pas été modifié. Pour l’ouvrir, installez la version plus ' +
-    'récente\u00A0: choisissez «\u00A0Installer une mise à jour depuis un fichier…\u00A0». Si vous ' +
-    'n’avez pas de fichier de mise à jour pour la version plus récente, vous pouvez en télécharger ' +
-    'un à l’adresse {address}/from/{version}. Si aucune version plus récente n’a jamais été utilisée ' +
-    'sur ce disque, laissez les fichiers tels quels et consultez le guide de dépannage dans le ' +
-    'dossier docs du disque.',
+    'travail. Cet espace de travail a probablement été utilisé pour la dernière fois avec une ' +
+    'version plus récente. Votre espace de travail n’a pas été modifié. Pour l’ouvrir, installez la ' +
+    'version plus récente\u00A0: choisissez «\u00A0Installer une mise à jour depuis un ' +
+    'fichier…\u00A0». Si vous n’avez pas de fichier de mise à jour pour la version plus récente, ' +
+    'vous pouvez en télécharger un à l’adresse {address}/from/{version}. Si aucune version plus ' +
+    'récente n’a jamais été utilisée sur ce disque, laissez les fichiers tels quels et consultez le ' +
+    'guide de dépannage dans le dossier docs du disque.',
   'main.workspace.vaultMissing':
     'Votre mot de passe est correct, mais le fichier chiffré de l’espace de travail est absent du ' +
     'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
