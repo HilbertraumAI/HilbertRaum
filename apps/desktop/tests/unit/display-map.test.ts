@@ -368,7 +368,7 @@ function coded(key: string, params: MessageParams = {}): string {
   return query ? `hr:${key}?${query}` : `hr:${key}`
 }
 
-describe('the English a message was ever stored as never stops reading as its key (F-26)', () => {
+describe('every English a message was ever stored as still reads as its key (F-26)', () => {
   it('the history lists exactly the display-mapped keys', () => {
     expect(
       Object.keys(valuesFixture.messages).sort(),

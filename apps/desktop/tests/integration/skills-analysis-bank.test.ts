@@ -20,6 +20,8 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 import { makeAnalysisCtx } from '../helpers/skill-contexts'
 import { countPrepares } from '../helpers/db-spy'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import { runBankExtraction } from '../../src/main/services/skills/run'
 
 // full-doc-skills plan §3.1, Phase 2 — the analysis-handler seam + bank handler, driven DIRECTLY (no
@@ -39,6 +41,18 @@ const seedDoc = (db: Db, text: string, o: { fullyChunked?: boolean; title?: stri
 
 const ctxFor = (db: Db, scope: RetrievalScope, question: string) =>
   makeAnalysisCtx(db, scope, question, { skillInstallId: BANK_STATEMENT_INSTALL_ID })
+
+/** The categorizer's reply with the USER's labels: the Grocery row → Lebensmittel, every other row → Sonstiges. */
+const userLabelsReply = ({ messages }: ScriptedCall): string =>
+  JSON.stringify({
+    assignments: messages[1].content
+      .split('\n')
+      .filter((l) => /^\d+\t/.test(l))
+      .map((l) => {
+        const [idx, , ...rest] = l.split('\t')
+        return { index: Number(idx), category: rest.join('\t').includes('Grocery') ? 'Lebensmittel' : 'Sonstiges' }
+      })
+  })
 
 // A clean 2-row statement: Grocery -45.90 (out), Salary +2500.00 (in); the running balances reconcile.
 // NOTE: it prints NO opening/closing balance, so under the D56 completeness gate it cannot PROVE it
@@ -716,25 +730,8 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
     // A scripted runtime replying with the USER's labels: Grocery → Lebensmittel, Salary → Sonstiges.
-    const calls: Array<{ messages: { role: string; content: string }[] }> = []
-    const runtime = {
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(messages: { role: string; content: string }[]) {
-        calls.push({ messages })
-        const user = messages[1].content
-        const assignments = user
-          .split('\n')
-          .filter((l) => /^\d+\t/.test(l))
-          .map((l) => {
-            const [idx, , ...rest] = l.split('\t')
-            return { index: Number(idx), category: rest.join('\t').includes('Grocery') ? 'Lebensmittel' : 'Sonstiges' }
-          })
-        yield JSON.stringify({ assignments })
-      }
-    } as never
+    const calls: ScriptedCall[] = []
+    const runtime = scriptedRuntime(userLabelsReply, calls, { tokens: 'whole' })
     const ctx = { ...ctxFor(db, { documentIds: [id] }, 'Kategorisiere in Lebensmittel, Sonstiges als CSV'), runtime }
     const res = await bankStatementAnalysisHandler.run!(ctx)
     expect(calls.length).toBeGreaterThan(0) // the model WAS consulted (no prefilter veto on a custom set)
@@ -761,25 +758,8 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     seedDoc(db, 'Kategorie;Stichworte\nLebensmittel;REWE, Supermarkt, Grocery\nSonstiges;alles andere', {
       title: 'taxonomie.csv'
     })
-    const calls: Array<{ messages: { role: string; content: string }[] }> = []
-    const runtime = {
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(messages: { role: string; content: string }[]) {
-        calls.push({ messages })
-        const user = messages[1].content
-        const assignments = user
-          .split('\n')
-          .filter((l) => /^\d+\t/.test(l))
-          .map((l) => {
-            const [idx, , ...rest] = l.split('\t')
-            return { index: Number(idx), category: rest.join('\t').includes('Grocery') ? 'Lebensmittel' : 'Sonstiges' }
-          })
-        yield JSON.stringify({ assignments })
-      }
-    } as never
+    const calls: ScriptedCall[] = []
+    const runtime = scriptedRuntime(userLabelsReply, calls, { tokens: 'whole' })
     const ctx = {
       ...ctxFor(db, { documentIds: [id] }, 'Kategorisiere nach den Kategorien in taxonomie.csv und gib alles als CSV aus'),
       runtime
@@ -816,41 +796,33 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
   it('derived columns (Phase 3): "as CSV with a payee column" parses the request, enriches every row, and notes the model fill', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
-    const calls: Array<{ name?: string }> = []
+    const calls: ScriptedCall[] = []
     // One scripted runtime serving BOTH grammar surfaces, keyed by responseSchemaName.
-    const runtime = {
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(
-        messages: { role: string; content: string }[],
-        options?: { responseSchemaName?: string }
-      ) {
-        calls.push({ name: options?.responseSchemaName })
-        if (options?.responseSchemaName === 'table_request') {
-          yield JSON.stringify({ derivedColumns: [{ name: 'Payee', description: 'who received the money' }] })
-          return
-        }
-        const assignments = messages[1].content
-          .split('\n')
-          .filter((l) => /^\d+\t/.test(l))
-          .map((l) => {
-            const [idx, , ...rest] = l.split('\t')
-            return {
-              index: Number(idx),
-              values: { Payee: rest.join('\t').includes('Grocery') ? 'REWE' : 'unknown' }
-            }
-          })
-        yield JSON.stringify({ assignments })
-      }
-    } as never
+    const runtime = scriptedRuntime(
+      ({ messages, options }) =>
+        options?.responseSchemaName === 'table_request'
+          ? JSON.stringify({ derivedColumns: [{ name: 'Payee', description: 'who received the money' }] })
+          : JSON.stringify({
+              assignments: messages[1].content
+                .split('\n')
+                .filter((l) => /^\d+\t/.test(l))
+                .map((l) => {
+                  const [idx, , ...rest] = l.split('\t')
+                  return {
+                    index: Number(idx),
+                    values: { Payee: rest.join('\t').includes('Grocery') ? 'REWE' : 'unknown' }
+                  }
+                })
+            }),
+      calls,
+      { tokens: 'whole' }
+    )
     const ctx = {
       ...ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV with a payee column'),
       runtime
     }
     const res = await bankStatementAnalysisHandler.run!(ctx)
-    expect(calls.map((c) => c.name)).toEqual(['table_request', 'table_enrichment'])
+    expect(calls.map((c) => c.options?.responseSchemaName)).toEqual(['table_request', 'table_enrichment'])
     expect(res.answer).toContain('```csv')
     expect(res.answer).toContain('date,valueDate,description,amount,currency,balanceAfter,sourcePage,Payee')
     expect(res.answer).toMatch(/Grocery,-45\.90,EUR,1954\.10,\d*,REWE/)
@@ -863,17 +835,8 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
   it('derived columns (Phase 3): the pre-gate keeps a PLAIN format ask 0-model, and no runtime falls back to the plain table', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
-    const calls: unknown[] = []
-    const runtime = {
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream() {
-        calls.push(1)
-        yield '{}'
-      }
-    } as never
+    const calls: ScriptedCall[] = []
+    const runtime = scriptedRuntime('{}', calls, { tokens: 'whole' })
     // Plain "as CSV" with a runtime present: the pre-gate must not pay ANY model call.
     const plain = await bankStatementAnalysisHandler.run!(
       { ...ctxFor(db, { documentIds: [id] }, 'show me the statement as CSV'), runtime }
@@ -1142,24 +1105,20 @@ describe('bank analysis — a newer version’s statement is served as stored, C
   }
 
   /** The derived-column ask's two grammar surfaces (a Payee column), as the Phase 3 row above scripts them. */
-  const payeeRuntime = (): never =>
-    ({
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(messages: { role: string; content: string }[], options?: { responseSchemaName?: string }) {
-        if (options?.responseSchemaName === 'table_request') {
-          yield JSON.stringify({ derivedColumns: [{ name: 'Payee', description: 'who received the money' }] })
-          return
-        }
-        const assignments = messages[1].content
-          .split('\n')
-          .filter((l) => /^\d+\t/.test(l))
-          .map((l) => ({ index: Number(l.split('\t')[0]), values: { Payee: 'unknown' } }))
-        yield JSON.stringify({ assignments })
-      }
-    }) as never
+  const payeeRuntime = (): ModelRuntime =>
+    scriptedRuntime(
+      ({ messages, options }) =>
+        options?.responseSchemaName === 'table_request'
+          ? JSON.stringify({ derivedColumns: [{ name: 'Payee', description: 'who received the money' }] })
+          : JSON.stringify({
+              assignments: messages[1].content
+                .split('\n')
+                .filter((l) => /^\d+\t/.test(l))
+                .map((l) => ({ index: Number(l.split('\t')[0]), values: { Payee: 'unknown' } }))
+            }),
+      [],
+      { tokens: 'whole' }
+    )
 
   // The four bank shapes that show the stored figures (D-3): template, format, the derived-column CSV and
   // grounded-data (whose deterministic postscript is folded under the model answer).

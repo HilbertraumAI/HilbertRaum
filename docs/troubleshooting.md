@@ -771,6 +771,30 @@ yet set aside the copy your last session left (see "The encrypted workspace file
 the drive" above), usually because the drive is full or another program is reading the workspace:
 free some space or close that program, then unlock again.
 
+**If it comes back at every unlock, however long you wait,** and your `workspace` folder is a link
+(a junction or a symbolic link) to a folder somewhere else, no program is holding anything. With
+the encrypted file missing and a last session that ended without a lock, the app first has to fold
+that session's last changes (the `hilbertraum.sqlite-wal` file) into the copy it keeps, and it
+never writes through a link before you have typed your password. It keeps all your files as they
+are and refuses to open, at every start and every unlock, until `workspace` is a real folder again
+(see `docs/known-limitations.md`). Your data is safe. To get out of it without changing any file:
+
+1. Quit HilbertRaum.
+2. Copy the folder the link leads to, whole and as it is, to a new folder at the drive's root, for
+   example `workspace-copy`: every file in it (`hilbertraum.sqlite`, `hilbertraum.sqlite-wal`,
+   `hilbertraum.sqlite-shm` and the rest) and its `documents` and `images` folders. Don't open or
+   change any of the files. The drive needs room for the copy.
+3. Remove only the link itself, never the folder it leads to. On Windows, `rmdir workspace` in a
+   Command Prompt at the drive's root removes a junction or a folder link and leaves the folder it
+   leads to alone. On macOS and Linux, `rm workspace` (no slash at the end, no `-r`) removes a
+   symbolic link.
+4. Rename `workspace-copy` to `workspace`, start HilbertRaum and unlock with your usual password.
+   The app keeps the copy and encrypts it again, as "The encrypted workspace file was missing from
+   the drive" above describes.
+5. Leave the folder the link led to as it is until the workspace has opened and you have locked it
+   once. After that it holds an old state of the workspace, **not encrypted**: delete it once you
+   no longer need it.
+
 ---
 
 ## "The model is busy" — one job at a time

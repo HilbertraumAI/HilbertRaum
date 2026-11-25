@@ -1391,8 +1391,11 @@ explicitly:
   snapshot of any kind is on the drive** (a stat of `.enc` says ENOENT, and no staged `.enc.new`
   waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
   an unclean end the session's last commits sit there), probes the file, and moves a database to
-  `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
-  dropped by the sweep, so a copy kept then lacks the session's last commits. A copy a newer build
+  `<db>.recovery`. A replay that SQLite answers as corrupt (as it answers for a newer build's copy
+  whose schema it cannot parse) is checked like any other (app-update T2.9 R1-3 = R2-1): while the
+  `-wal` still holds frames the start blocks with all three files kept, as for a `-wal` the replay
+  cannot empty (below); once SQLite has copied the `-wal` in (its close usually does), the file is
+  probed as usual. A copy a newer build
   stamped is kept the same way (#985), with no notice; this build's unlock then refuses it as newer
   (see "Vault format versions" below). The next unlock with
   the right password rolls it forward over the missing `.enc`

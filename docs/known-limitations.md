@@ -337,8 +337,11 @@ password recovery — are documented in
   - The probe reads only part of a large file, so a partly damaged copy can be kept and adopted,
     and the damage shows when the app reads those pages. With no snapshot left, that still beats
     losing everything.
-  - A `-wal` that SQLite cannot replay (it reports the database as corrupt) is dropped, so a copy
-    kept then lacks the session's last commits.
+  - A `-wal` whose replay SQLite answers as corrupt (as it does for a newer build's copy whose
+    schema it cannot parse) blocks the start while it still holds frames, every file kept, as for a
+    `-wal` the replay cannot empty (below; app-update T2.9 R1-3). Once SQLite has copied the `-wal`
+    into the working file anyway (its close usually does), the copy is probed and kept as usual,
+    with the session's last commits in it.
   - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
     missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
     right password shreds it (a wrong one touches nothing), and the notice goes.
@@ -352,6 +355,16 @@ password recovery — are documented in
     the start: nothing is moved or shredded, and the unlock shows the "another program is holding a
     recovery file" message, whose words name only the holding program (owner decision D4: no copy
     change; `troubleshooting.md` says what else it can mean).
+  - Behind a workspace folder that is a link (a junction or a symbolic link) to a folder elsewhere,
+    the start never replays a `-wal`: SQLite would write wherever the link leads, before any
+    password (app-update T2.16 R1 B-2; the same holds when the working file, its `-wal` or its
+    `-shm` is itself a link or has a second hard link, which the app never makes). So when `.enc` is
+    missing and an unclean end left a `-wal` that holds commits, the start blocks with all three
+    files kept, and it does so at every start and every unlock: each correct password gets the
+    "another program is holding a recovery file … try again" message, and waiting or retrying never
+    helps (P2 exit code review CR-2). The way out keeps every file as it is: quit, copy the folder
+    the link leads to whole, remove only the link, put the copy at the `workspace` name, then start
+    and unlock (`troubleshooting.md`, under that message).
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not

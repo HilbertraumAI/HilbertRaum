@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import * as ts from 'typescript'
+import { transformWithEsbuild } from 'vite'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
@@ -867,7 +869,9 @@ describe('repo hygiene — the update address is one constant, and its placehold
 //
 // It cost this wave a full debug cycle: `npm run typecheck` and the entire test suite pass, and
 // only `npm run build` fails — which is exactly why the phase gate is typecheck → build → test in
-// that order. Comments are stripped before the plugin runs, so only STRING LITERALS are the hazard.
+// that order. esbuild strips the comments BETWEEN statements before the plugin runs, so this row
+// reads string literals; the comments it keeps (inside an expression or a class body) are the next
+// row's (P2 exit).
 describe('repo hygiene — no string literal ends with the bare word "import" (#188 bundler trap)', () => {
   const walk = (dir: string): string[] => filesUnder(dir, /\.(ts|tsx)$/)
   // A quote closing immediately after ` import`, with the line NOT being a real import statement.
@@ -886,6 +890,87 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
     }
     // If this fires: reword the string so it does not END on "import" (e.g. "…was imported").
     expect(offenders).toEqual([])
+  })
+})
+
+// App-update P2 exit: the #188 trap, in comments. Vite hands each module to esbuild before Rollup joins them, and
+// esbuild drops a comment between statements but KEEPS one inside an expression or a class body (an array element's, an
+// object property's, a class member's JSDoc, an argument's: measured on esbuild 0.25.12). The plugin's regex takes such a
+// comment for an import as it takes a string: the word `import`, then a quote (`an audio import's row; the engines'`),
+// or words, `from` and a quote. The shim then lands after the last such match. Inside an array literal the build fails
+// (`Expected "(" but found "__cjs_mod__"`: T2.12's persisted-messages.ts). Inside a comment or a string the build passes
+// with the shim commented out, so main has no `require` and `tesseract.ts`'s `require.resolve` of the OCR worker script
+// throws into its fallback (the integration base's bundle: a class-member JSDoc of transcriber/cli.ts). So the row reads
+// what the plugin reads: every module the main bundle takes in (src/main/index.ts and every relative value import under
+// it), as esbuild hands it on, against the plugin's own regex from the installed electron-vite. The only matches
+// allowed are the module's own import and export-from declarations (Rollup drops or hoists them to the chunk's head).
+describe('repo hygiene — in the main bundle, only import declarations match the esm shim regex (#188, P2 exit)', () => {
+  /** `ESMStaticImportRe` from the installed electron-vite, sticky: a dependency update that drops or renames it fails. */
+  const shimRegex = (): RegExp => {
+    const chunks = join(dirname(createRequire(join(DESKTOP_ROOT, 'package.json')).resolve('electron-vite')), 'chunks')
+    for (const name of readdirSync(chunks)) {
+      const m = /^const ESMStaticImportRe = \/(.+)\/([a-z]*);$/m.exec(readFileSync(join(chunks, name), 'utf8'))
+      if (m) return new RegExp(m[1]!, m[2]!.replace('g', '') + 'y')
+    }
+    throw new Error(`no ESMStaticImportRe in ${chunks}: re-check where electron-vite's esm shim lands in out/main/index.mjs`)
+  }
+
+  /** The modules the main bundle takes in: src/main/index.ts and every relative value import, re-export and import(). */
+  const mainModules = (): string[] => {
+    const seen = new Set<string>()
+    const unresolved: string[] = []
+    const queue = [join(DESKTOP_ROOT, 'src', 'main', 'index.ts')]
+    while (queue.length > 0) {
+      const file = queue.pop()!
+      if (seen.has(file)) continue
+      seen.add(file)
+      const visit = (n: ts.Node): void => {
+        const spec =
+          ts.isImportDeclaration(n) && !n.importClause?.isTypeOnly
+            ? n.moduleSpecifier
+            : ts.isExportDeclaration(n) && !n.isTypeOnly
+              ? n.moduleSpecifier
+              : ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword
+                ? n.arguments[0]
+                : undefined
+        if (spec !== undefined && ts.isStringLiteral(spec) && spec.text.startsWith('.')) {
+          const base = resolve(dirname(file), spec.text.replace(/\?.*$/, ''))
+          const hit = [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')].find((c) => existsSync(c) && statSync(c).isFile())
+          if (hit === undefined) unresolved.push(`${relative(DESKTOP_ROOT, file)}: ${spec.text}`)
+          else queue.push(hit)
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true))
+    }
+    expect(unresolved, 'every relative import of a main module resolves to a file').toEqual([])
+    return [...seen]
+  }
+
+  it("no comment esbuild keeps and no string of a main module matches electron-vite's ESMStaticImportRe", async () => {
+    const shim = shimRegex()
+    const modules = mainModules()
+    expect(modules.length, 'the walk follows main’s imports (303 modules at P2’s exit)').toBeGreaterThan(100)
+    const offenders: string[] = []
+    for (const file of modules) {
+      const { code } = await transformWithEsbuild(readFileSync(file, 'utf8'), file)
+      const out = ts.createSourceFile(`${file}.js`, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+      const declarations = out.statements.filter(
+        (s) => ts.isImportDeclaration(s) || (ts.isExportDeclaration(s) && s.moduleSpecifier !== undefined)
+      )
+      for (const word of code.matchAll(/(?<=\s|^|;)import/gmu)) {
+        const at = word.index
+        shim.lastIndex = at
+        if (!shim.test(code)) continue
+        if (declarations.some((d) => at >= d.getStart(out) && at < d.end)) continue
+        const line = code.slice(code.lastIndexOf('\n', at) + 1).split('\n', 1)[0]!.trim()
+        offenders.push(`${relative(DESKTOP_ROOT, file).split('\\').join('/')}: ${line}`)
+      }
+    }
+    expect(
+      offenders,
+      'reword each so the word "import" is not followed by a quote, or by words, "from" and a quote (e.g. "a row of an audio import")'
+    ).toEqual([])
   })
 })
 

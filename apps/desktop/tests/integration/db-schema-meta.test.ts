@@ -357,7 +357,7 @@ describe('schema_meta and the last_writer stamp (app-update T2.2, F-10)', () => 
   it.each([...F10.appVersion.unusable.map((v) => [v.case, v.value] as const), ['undefined', undefined] as const])(
     'setStampAppVersion refuses %s: the open writes no stamp and reports no-app-version',
     (_case, version) => {
-      setStampAppVersion(version as never)
+      setStampAppVersion(version)
       const codes: string[] = []
       const { db, stamp } = openDatabaseWithStamp(freshPath('schema-meta-version'), { onStampFailed: (code) => codes.push(code) })
       try {

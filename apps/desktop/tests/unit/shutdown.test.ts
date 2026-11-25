@@ -1258,7 +1258,8 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(indexSrc.indexOf(beforeQuit), 'at module scope').toBeGreaterThan(
       indexSrc.indexOf('const lifecycle = createAppLifecycleHandlers(')
     )
-    expect(indexSrc).toContain('registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked })')
+    // The unlock hook in the one registration's hooks object, beside its other hooks (`appVersion`: repo-hygiene's T2.6 row).
+    expect(indexSrc).toMatch(/registerWorkspaceIpc\(ctx, \{[^}]*\bonUnlocked: lifecycle\.onWorkspaceUnlocked\b[^}]*\}\)/)
     // The Dock click's window only onto an encrypted workspace's unlock screen.
     expect(indexSrc).toContain("workspaceLocked: () => ctx?.workspace.getState().state === 'locked'")
     expect(indexSrc.split('registerWorkspaceIpc(').length - 1, 'one registration').toBe(1)

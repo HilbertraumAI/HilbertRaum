@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { openRawDb } from '../helpers/db-fixtures'
@@ -9,6 +9,7 @@ import {
   decryptFile,
   encryptFile,
   WorkspaceController,
+  QUARANTINE_SUFFIX,
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
@@ -122,6 +123,9 @@ const failures = vi.hoisted(() => ({
   renameThrowsPlainErrorOnStagedSidecar: false,
   /** #1015 round 3: renameSync throws EBUSY for exactly this staged file while set: one stuck file among several. */
   renameThrowForStage: null as string | null,
+  /** P2 exit (CR-1): renameSync throws this error code when it moves exactly this path away while set: a file another
+   *  program holds without delete sharing. Counted in `hits.renameThrowFor`. */
+  renameThrowFor: null as { path: string; code: string } | null,
   /** #1001 review round 2: renameSync throws this error code for a stored copy the unlock moved aside (`….enc.tmp` under
    *  `documents/` or `images/`) moved back onto its own name while set: the move back after a failed swap fails too. */
   renameThrowOnAsideRestore: null as string | null,
@@ -193,7 +197,8 @@ const failures = vi.hoisted(() => ({
     statThrow: 0,
     openThrowFor: 0,
     journalHeld: 0,
-    encHeld: 0
+    encHeld: 0,
+    renameThrowFor: 0
   }
 }))
 
@@ -269,6 +274,11 @@ vi.mock('node:fs', async (importOriginal) => {
       if (heldStage !== null && isStagedSidecar(from) && String(to) === String(from).slice(0, -'.new'.length)) {
         failures.hits.renameStagedSidecar += 1
         throw errnoError(heldStage, `${heldStage}: rename (a held staged document copy)`)
+      }
+      const heldFrom = failures.renameThrowFor
+      if (heldFrom !== null && String(from) === heldFrom.path) {
+        failures.hits.renameThrowFor += 1
+        throw errnoError(heldFrom.code, `${heldFrom.code}: rename (a held file)`)
       }
       if (failures.renameThrowForStage !== null && String(from) === failures.renameThrowForStage) {
         failures.hits.renameStagedSidecar += 1
@@ -510,6 +520,7 @@ beforeEach(() => {
   failures.renameThrowOnStagedSidecar = null
   failures.renameThrowsPlainErrorOnStagedSidecar = false
   failures.renameThrowForStage = null
+  failures.renameThrowFor = null
   failures.renameThrowOnAsideRestore = null
   failures.statReportsNoInode = false
   failures.openThrowOnSidecarTarget = null
@@ -548,7 +559,8 @@ beforeEach(() => {
     statThrow: 0,
     openThrowFor: 0,
     journalHeld: 0,
-    encHeld: 0
+    encHeld: 0,
+    renameThrowFor: 0
   }
   ipcState.handlers.clear()
 })
@@ -776,7 +788,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       statThrow: 0,
       openThrowFor: 0,
       journalHeld: 0,
-      encHeld: 0
+      encHeld: 0,
+      renameThrowFor: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -1307,6 +1320,45 @@ describe('a file error while a workspace is created (#807)', () => {
     expect(ctl.getState().state).toBe('locked')
     ctl.shutdown()
   })
+})
+
+// App-update P2 exit (code review CR-1): on a build that allows no plaintext workspace, a create sets a leftover working
+// file aside with its `-wal`, `-shm` and `-journal`, as one set under one name (`setLeftoversAside`). A move that another
+// program held failed the create halfway: the working file was at `.quarantine` with its held `-wal` still beside the
+// working name, so the retry, finding `.quarantine` taken, moved the `-wal` to `.quarantine-1-wal`, away from the file
+// whose last commits it holds. Now the side files move first and the working file last, and a failed move first puts
+// back what moved: the set waits whole at its names, and the retry, once the hold is gone, moves it under one name.
+describe('a held file while a create sets a leftover workspace aside (P2 exit, CR-1)', () => {
+  it.each([['-wal'], ['-shm'], ['']])(
+    'the move of hilbertraum.sqlite%s is held: the create fails with every file at its own name, and the retry sets the whole set aside under one name',
+    (held) => {
+      const vp = freshVaultPaths('recovery-guards-aside')
+      const raw = openRawDb(vp.dbPath)
+      raw.exec("PRAGMA journal_mode = WAL; CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('the last commit');")
+      leaveAsKilled(vp, raw) // the working file, a -wal holding its commit, and the -shm
+      const tails = ['', '-wal', '-shm']
+      const before = tails.map((tail) => readFileSync(`${vp.dbPath}${tail}`))
+      const leftovers = (): string[] =>
+        readdirSync(dirname(vp.dbPath))
+          .filter((name) => name.startsWith(basename(vp.dbPath)))
+          .sort()
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        failures.renameThrowFor = { path: `${vp.dbPath}${held}`, code: 'EBUSY' }
+        expect(() => ctl.create('long-enough-pw', 'encrypted')).toThrow(/EBUSY/)
+        expect(failures.hits.renameThrowFor, 'the hold was reached').toBe(1)
+        expect(leftovers(), 'every file of the set at its own name').toEqual(tails.map((tail) => `${basename(vp.dbPath)}${tail}`).sort())
+        failures.renameThrowFor = null // the other program let go
+        expect(ctl.create('long-enough-pw', 'encrypted').state).toBe('unlocked')
+        const aside = `${vp.dbPath}${QUARANTINE_SUFFIX}`
+        expect(tails.map((tail) => readFileSync(`${aside}${tail}`)), 'the whole set, byte for byte, under one name').toEqual(before)
+        expect(leftovers().filter((name) => name.includes(`${QUARANTINE_SUFFIX}-1`)), 'nothing under a second name').toEqual([])
+      } finally {
+        ctl.shutdown()
+      }
+    }
+  )
 })
 
 // #973: the unlock judges a staged `.enc.new` that no journal lists (a create's leftover beside a workspace put back

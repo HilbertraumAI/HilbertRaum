@@ -3395,7 +3395,8 @@ export const QUARANTINE_SUFFIX = '.quarantine'
  * over one set aside before. The working file with its `-wal`, `-shm` and `-journal` goes to the first suffix (`.quarantine`,
  * then `.quarantine-1` … `-64`, as {@link quarantineName} names the journal's) that is free for all four, and `.recovery` to
  * the first free `.recovery.quarantine[-<n>]`; free means an `lstat` that says ENOENT. With none free, or a move that
- * fails (a hold), it throws, and the create fails with nothing of its own written. A newer build's copy never gets here:
+ * fails (a hold; the set's files moved before it are moved back first), it throws, and the create fails with nothing of
+ * its own written. A newer build's copy never gets here:
  * the create refuses it first (#985).
  */
 function setLeftoversAside(vaultPaths: VaultPaths): void {
@@ -3414,8 +3415,26 @@ function setLeftoversAside(vaultPaths: VaultPaths): void {
   const sqliteTails = ['', '-wal', '-shm', '-journal']
   if (sqliteTails.some((tail) => present(`${db}${tail}`))) {
     const aside = freeAside(db, sqliteTails)
-    for (const tail of sqliteTails) {
-      if (present(`${db}${tail}`)) renameSync(`${db}${tail}`, `${aside}${tail}`)
+    // P2 exit (CR-1): the side files first and the working file last, and a move that fails (a hold) first moves back
+    // what this call moved, so the set is never split. It was: the working file at `.quarantine`, a held `-wal` left
+    // behind, and the retry, finding `.quarantine` taken, moved that `-wal` to `.quarantine-1-wal`. A move back that
+    // fails too leaves that file aside (kept, never removed); the hold's error is thrown either way.
+    const moved: string[] = []
+    try {
+      for (const tail of ['-wal', '-shm', '-journal', '']) {
+        if (!present(`${db}${tail}`)) continue
+        renameSync(`${db}${tail}`, `${aside}${tail}`)
+        moved.push(tail)
+      }
+    } catch (err) {
+      for (const tail of moved.reverse()) {
+        try {
+          if (!present(`${db}${tail}`)) renameSync(`${aside}${tail}`, `${db}${tail}`)
+        } catch {
+          // Left aside, never removed.
+        }
+      }
+      throw err
     }
   }
   const recovery = `${db}${RECOVERY_SUFFIX}`

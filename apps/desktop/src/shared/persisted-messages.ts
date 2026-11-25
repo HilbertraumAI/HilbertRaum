@@ -35,7 +35,7 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.voiceEngineCannotRun',
   // #869: the voice engine cannot read the speech model's file name on Windows (no path in it).
   'main.ingest.voiceModelPathUnsupported',
-  // #1012: a file of the voice engine could not be read just now (an audio import's row; the engines'
+  // #1012: a file of the voice engine could not be read just now (a row of an audio import; the engines'
   // own notice text, so its English value is persist-canonical too).
   'main.engine.filesUnreadable',
   // #634: the search model timed out, could not start, or failed (chosen by kind, never its text).
