@@ -61,7 +61,7 @@ import {
   type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
-import { archiveMembers, extractedArchiveBytes, isMacMetadataName } from './archive-size'
+import { archiveMemberSizes, archiveMembers, extractedArchiveBytes, isMacMetadataName } from './archive-size'
 import { freeBytes } from './disk-space'
 import { removeRetry, renameMayClear, renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
@@ -1978,18 +1978,19 @@ const TAR_GZ_NAME = /\.(tar\.gz|tgz)$/i
 /** The most a link listing may print (#1045): a release lists some hundred members, this room tens of thousands. */
 const LINK_LISTING_MAX_BYTES = 8 * 1024 * 1024
 
-/** One symbolic link an archive lists: its name and its target, as the archive writes them. */
+/** One link an archive lists: its name and its target, as the archive writes them; `hard` for a hard link. */
 interface ArchiveLink {
   name: string
   target: string
+  hard: boolean
 }
 
 /**
- * #1045: the symbolic links the tar.gz at `archivePath` lists, read with the OS's tar (`tar -tvzf -`) as
- * fetch-runtime.sh reads them: the archive goes in on stdin, so no path is on the command line (#767, #856) and
- * the child holds no file on the drive. GNU tar and bsdtar print a link as `l… <name> -> <target>`; a name or a
- * target holding white space is not read (as the script's `sed`). Null when the listing fails, is cancelled, runs
- * past the extractor's deadline or prints more than `LINK_LISTING_MAX_BYTES`.
+ * #1045: the links the tar.gz at `archivePath` lists, read with the OS's tar (`tar -tvzf -`) as fetch-runtime.sh
+ * reads them: the archive goes in on stdin, so no path is on the command line (#767, #856) and the child holds no
+ * file on the drive. GNU tar and bsdtar print a symbolic link as `l… <name> -> <target>` and a hard link as
+ * `h… <name> link to <target>`; a name or a target holding white space is not read (as the script's `sed`). Null
+ * when the listing fails, is cancelled, runs past the extractor's deadline or prints more than `LINK_LISTING_MAX_BYTES`.
  */
 function listArchiveLinks(archivePath: string, cwd: string, signal?: AbortSignal): Promise<ArchiveLink[] | null> {
   return new Promise((resolvePromise) => {
@@ -2038,7 +2039,9 @@ function listArchiveLinks(archivePath: string, cwd: string, signal?: AbortSignal
       const links: ArchiveLink[] = []
       for (const line of Buffer.concat(chunks).toString('utf8').split(/\r?\n/)) {
         const m = /^l.*\s(\S+)\s->\s(\S+)$/.exec(line)
-        if (m) links.push({ name: m[1], target: m[2] })
+        const h = m ? null : /^h.*\s(\S+)\slink to\s(\S+)$/.exec(line)
+        if (m) links.push({ name: m[1], target: m[2], hard: false })
+        else if (h) links.push({ name: h[1], target: h[2], hard: true })
       }
       finish(links)
     })
@@ -2067,17 +2070,30 @@ function linkLeavesFolder(dir: string, link: ArchiveLink): boolean {
   return recordedFilePath(dir, link.name) === null || recordedFilePath(dir, target) === null
 }
 
+/** A failed tar `mendTarFailure` mended: what `judgeMendedTar` needs for its verdict, after the flatten. */
+interface MendedTar {
+  failure: TarExitError
+  /** The log lines' content-free fields: the pinned archive's name and tar's exit code. */
+  at: { archive: string; exitCode: number }
+  /** Each regular member's size in the archive (`archiveMemberSizes`). */
+  sizes: Map<string, number>
+  /** The members tar's own listing calls links (symbolic or hard). */
+  links: Set<string>
+  /** How many link copies were made. */
+  copies: number
+}
+
 /**
  * #1045: mend a tar that ran to its end and failed (`TarExitError`) on a tar.gz, as fetch-runtime.sh does after its
  * extraction. The macOS and Linux release archives carry version links (`libllama.so` → `libllama.so.0` → …), and a
  * drive that holds no links (exFAT, the Kit's file system) makes tar fail each one; the loader needs only the names.
- * So every link the archive lists (`listArchiveLinks`) that is missing in `dir` becomes a copy of its target, in up to
- * four passes (links chain, listed before what they name). A link whose name or target leaves `dir`
- * (`linkLeavesFolder`) refuses the install: it throws, and the stage's caller deletes `dir`. Then the failure is real
- * (false) when a member the archive lists (`members`, read in-process) is still not on the disk, or when either
- * listing is missing. True: every member is there, and the stage goes on. Runs before the flatten, so the names are
- * the archive's; never writes through a link tar did make (the SEC-2 sweep runs first). Logs what it found or did,
- * content-free (the pinned archive's name, tar's exit code, the archive's own member names).
+ * So every symbolic link the archive lists (`listArchiveLinks`) that is missing in `dir` becomes a copy of its target,
+ * in up to four passes (links chain, listed before what they name). A link whose name or target leaves `dir`
+ * (`linkLeavesFolder`) refuses the install: it throws, and the stage's caller deletes `dir`. No mend (null) when the
+ * archive cannot be listed in-process (`members`) or sized per member (`archiveMemberSizes`), or tar cannot list its
+ * links; the failure then stands. Runs before the flatten, so the names are the archive's; never writes through a
+ * link tar did make (the SEC-2 sweep runs first). Whether the copy is whole is `judgeMendedTar`'s verdict, by the
+ * member check's own rules after the flatten. Logs content-free (the pinned archive's name, tar's exit code).
  */
 async function mendTarFailure(
   archivePath: string,
@@ -2085,14 +2101,16 @@ async function mendTarFailure(
   members: string[] | null,
   failure: TarExitError,
   opts: StageEngineOptions
-): Promise<boolean> {
+): Promise<MendedTar | null> {
   const at = { archive: basename(archivePath), exitCode: failure.exitCode }
-  const links = members === null ? null : await listArchiveLinks(archivePath, dir, opts.signal)
-  if (members === null || links === null) {
-    opts.log?.('tar failed and the archive could not be listed: no link is copied', at)
-    return false
+  const sizes = members === null ? null : await archiveMemberSizes(archivePath)
+  const links = sizes === null ? null : await listArchiveLinks(archivePath, dir, opts.signal)
+  if (members === null || sizes === null || links === null) {
+    opts.log?.('tar failed and the archive could not be listed or sized: no link is copied', at)
+    return null
   }
-  for (const link of links) {
+  const symlinks = links.filter((link) => !link.hard)
+  for (const link of symlinks) {
     if (linkLeavesFolder(dir, link)) {
       throw new Error(`extracted archive member escapes the install dir: ${link.name} -> ${link.target}`)
     }
@@ -2103,7 +2121,7 @@ async function mendTarFailure(
   let copies = 0
   for (let pass = 0; pass < 4; pass++) {
     let unresolved = 0
-    for (const link of links) {
+    for (const link of symlinks) {
       const to = join(dir, ...link.name.split('/'))
       if (!listed.has(link.name) || (await exists(to))) continue
       const from = resolve(dir, ...posix.dirname(link.name).split('/'), ...link.target.split('/'))
@@ -2117,21 +2135,63 @@ async function mendTarFailure(
     }
     if (unresolved === 0) break
   }
+  return { failure, at, sizes, links: new Set(links.map((link) => link.name)), copies }
+}
+
+/**
+ * #1045: the verdict on a tar `mendTarFailure` mended, by the member check's own rules (#998): each member the archive
+ * lists where the flatten put it (`stagedMemberKey`), less what the family leaves out (`leftOut`, removed by now) and
+ * macOS metadata (never listed). A link is there as a link or as a copy of its target. Every other member must be a
+ * file of exactly the size the archive gives (#1045 round 2): a member tar wrote short, on an I/O error or a full
+ * drive, is there too, and would be recorded as the engine's; one the archive gives no size for, or with something
+ * other than a file in its place, cannot be sized. A member whose name tar never writes where it says (absolute, or
+ * with a `..` step) is not there: tar refused it. Anything missing or not whole: tar's own failure stands
+ * (`mended.failure` is thrown), after a content-free log line per kind (a count and up to 20 member names).
+ */
+async function judgeMendedTar(
+  dir: string,
+  members: readonly string[],
+  flattened: string,
+  leftOut: ReadonlySet<string>,
+  mended: MendedTar,
+  opts: StageEngineOptions
+): Promise<void> {
   const missing: string[] = []
+  const unsized: string[] = []
   for (const member of members) {
-    const key = stagedMemberKey(member, '')
-    if (key === null || !(await exists(join(dir, ...key.split('/'))))) missing.push(member)
+    const key = stagedMemberKey(member, flattened)
+    if (key !== null && leftOut.has(key.toLowerCase())) continue
+    const st = key === null ? null : await lstat(join(dir, ...key.split('/'))).catch(() => null)
+    if (!st) {
+      missing.push(member)
+      continue
+    }
+    const size = mended.sizes.get(member)
+    if (size !== undefined) {
+      if (!st.isFile() || st.size !== size) unsized.push(member)
+    } else if (!mended.links.has(member) || (!st.isFile() && !st.isSymbolicLink())) {
+      unsized.push(member)
+    }
   }
   if (missing.length > 0) {
     opts.log?.('tar failed and files the archive lists are still missing after the link copies', {
-      ...at,
+      ...mended.at,
       count: missing.length,
       missing: missing.slice(0, 20)
     })
-    return false
   }
-  opts.log?.('tar failed, and every member the archive lists is there with its links copied', { ...at, copies })
-  return true
+  if (unsized.length > 0) {
+    opts.log?.('tar failed and files the archive lists cannot be sized or are not the size it gives', {
+      ...mended.at,
+      count: unsized.length,
+      files: unsized.slice(0, 20)
+    })
+  }
+  if (missing.length > 0 || unsized.length > 0) throw mended.failure
+  opts.log?.('tar failed, and every member the archive lists is there with its links copied', {
+    ...mended.at,
+    copies: mended.copies
+  })
 }
 
 /**
@@ -2164,13 +2224,16 @@ export async function stageEngineInstall(
   await renameWithRetry(plan.zipDest, staged.zipDest)
   // #998: what the verified archive holds, read from the archive itself (as its size, #986).
   const members = await archiveMembers(staged.zipDest)
+  /** #1045: a failed tar whose links were copied; the member check below gives its verdict. */
+  let mended: MendedTar | null = null
   try {
     await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
   } catch (err) {
     // #1045: a tar.gz's version links on a drive that holds none fail tar every time; their copies mend it
     // (`mendTarFailure`). Any other failure stands, and so does a tar that was stopped. The Windows archives are zips.
     if (!(err instanceof TarExitError) || opts.signal?.aborted || !TAR_GZ_NAME.test(staged.zipDest)) throw err
-    if (!(await mendTarFailure(staged.zipDest, stagingDir, members, err, opts))) throw err
+    mended = await mendTarFailure(staged.zipDest, stagingDir, members, err, opts)
+    if (!mended) throw err
   }
   if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
   const flattened = await flattenNestedBinary(staged)
@@ -2204,6 +2267,8 @@ export async function stageEngineInstall(
     opts.log?.('The engine archive could not be listed: no member check', { archive: basename(staged.zipDest) })
   } else {
     const leftOut = new Set(staged.excludedPaths.map((p) => markerBinaryKey(stagingDir, p).toLowerCase()))
+    // #1045: a mended tar must also leave every regular member whole (its size), or tar's failure stands.
+    if (mended) await judgeMendedTar(stagingDir, members, flattened, leftOut, mended, opts)
     listed = new Set()
     for (const member of members) {
       const key = stagedMemberKey(member, flattened)

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { archiveMembers, extractedArchiveBytes } from '../../src/main/services/archive-size'
+import { archiveMemberSizes, archiveMembers, extractedArchiveBytes } from '../../src/main/services/archive-size'
 import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
 
 // #986: the engine installer refuses a job the drive has no room to unpack, before anything is
@@ -173,5 +173,35 @@ describe('archiveMembers (#998)', () => {
     ['a Zip64 archive', makeSizeOnlyZip(1, 0xffffffff)]
   ])('is null for %s (the install then skips its check)', async (_label, bytes) => {
     expect(await archiveMembers(archive(bytes))).toBeNull()
+  })
+})
+
+// #1045 round 2: a failed tar is mended only when every regular member on the disk is the size the archive gives
+// (a member tar wrote short on an I/O error or a full drive was recorded as whole). The same reader as the member
+// list, so the same names: each regular member's size, never a link's, a folder's or macOS metadata's.
+describe('archiveMemberSizes (#1045)', () => {
+  it('gives each regular member of a tar.gz its size: links, folders and macOS metadata have none', async () => {
+    const tgz = archive(
+      makeTarGz([
+        { name: 'build/', dir: true },
+        { name: 'build/llama-server', data: data(5000), mode: 0o755 },
+        { name: 'build/libllama.so', symlink: 'libllama.so.0' },
+        { name: 'build/libllama.so.0', data: data(10) },
+        { name: 'build/empty.txt', data: data(0) },
+        { name: 'build/._llama-server', data: data(3) }
+      ])
+    )
+    expect(await archiveMemberSizes(tgz)).toEqual(
+      new Map([
+        ['build/llama-server', 5000],
+        ['build/libllama.so.0', 10],
+        ['build/empty.txt', 0]
+      ])
+    )
+  })
+
+  it('is null where the member list is: a name outside plain ASCII, an archive it cannot read', async () => {
+    expect(await archiveMemberSizes(archive(makeTarGz([{ name: 'café.so', data: data(1) }])))).toBeNull()
+    expect(await archiveMemberSizes(archive(Buffer.from('llama-server-release-archive-bytes')))).toBeNull()
   })
 })

@@ -2,7 +2,18 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -86,12 +97,25 @@ function contentDigest(dir: string): Record<string, string> {
 /**
  * The OS's tar on a drive that holds no links: it writes every other member and fails each of `refused` (here they
  * are left out of the real tar's run), then exits non-zero, as GNU tar does there (2; bsdtar exits 1). `hold`: a tar
- * wedged after its last write, whose exit comes only once the extractor kills it.
+ * wedged after its last write, whose exit comes only once the extractor kills it. `short`: members tar wrote only
+ * half of (an I/O error on a stick, a full drive). `folders`: members with a folder in their place, left out of the
+ * run too.
  */
-function tarOnLinklessDrive(refused: string[], opts: { hold?: boolean } = {}): ExtractSpawn {
+function tarOnLinklessDrive(
+  refused: string[],
+  opts: { hold?: boolean; short?: string[]; folders?: string[] } = {}
+): ExtractSpawn {
   return (command, args, options) => {
-    const real = spawn(command, [...refused.flatMap((m) => ['--exclude', m]), ...args], options)
-    const realDone = new Promise<number | null>((resolve) => real.on('close', resolve))
+    const left = [...refused, ...(opts.folders ?? [])]
+    const real = spawn(command, [...left.flatMap((m) => ['--exclude', m]), ...args], options)
+    const at = (member: string): string => join(String(options.cwd), ...member.split('/'))
+    const realDone = new Promise<number | null>((resolve) =>
+      real.on('close', (code) => {
+        for (const m of opts.short ?? []) truncateSync(at(m), Math.floor(statSync(at(m)).size / 2))
+        for (const m of opts.folders ?? []) mkdirSync(at(m), { recursive: true })
+        resolve(code)
+      })
+    )
     const child = new EventEmitter() as unknown as ChildProcess & EventEmitter
     const exit = (code: number | null, signal: NodeJS.Signals | null): void => {
       child.emit('exit', code, signal)
@@ -234,6 +258,44 @@ describe('engine archives with version links on a drive that holds no links (#10
     expect(logs).toContainEqual([
       'tar failed and files the archive lists are still missing after the link copies',
       { archive: ARCHIVE_NAME, exitCode: 2, count: 1, missing: [`${RELEASE}/libggml.so`] }
+    ])
+  })
+
+  // #1045 round 2: presence is not enough. A member tar wrote short (an I/O error on a stick, a full drive) is there,
+  // and the marker would record its bytes as the engine's: on a failed tar every regular member must be the size the
+  // archive gives, or tar's failure stands. (The links' copies count by their presence; their target is sized.)
+  it('a member tar wrote short fails the install with tar’s failure, and nothing is swapped', async () => {
+    const { rootPath, manifestsDir, pin } = linuxDrive()
+    const archive = release()
+    pin(archive)
+    const before = contentDigest(join(rootPath, 'runtime'))
+    const lib = `${RELEASE}/libllama.so.0.0.1`
+    const { mgr, logs } = manager(archive, makeTarExtractor({ spawn: tarOnLinklessDrive(LINKS, { short: [lib] }) }))
+    const { job, ends } = await update(rootPath, manifestsDir, mgr)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends.map((e) => e.reason)).toEqual(['install'])
+    expect(contentDigest(join(rootPath, 'runtime'))).toEqual(before)
+    expect(logs).toContainEqual([
+      'tar failed and files the archive lists cannot be sized or are not the size it gives',
+      { archive: ARCHIVE_NAME, exitCode: 2, count: 1, files: [lib] }
+    ])
+  })
+
+  // …and a member that cannot be sized (something other than a file in its place) is no mend either.
+  it('a member that cannot be sized fails the install with tar’s failure, and nothing is swapped', async () => {
+    const { rootPath, manifestsDir, pin } = linuxDrive()
+    const ggml = `${RELEASE}/libggml.so`
+    const archive = release([{ name: ggml, data: Buffer.from('ggml') }])
+    pin(archive)
+    const before = contentDigest(join(rootPath, 'runtime'))
+    const { mgr, logs } = manager(archive, makeTarExtractor({ spawn: tarOnLinklessDrive(LINKS, { folders: [ggml] }) }))
+    const { job, ends } = await update(rootPath, manifestsDir, mgr)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends.map((e) => e.reason)).toEqual(['install'])
+    expect(contentDigest(join(rootPath, 'runtime'))).toEqual(before)
+    expect(logs).toContainEqual([
+      'tar failed and files the archive lists cannot be sized or are not the size it gives',
+      { archive: ARCHIVE_NAME, exitCode: 2, count: 1, files: [ggml] }
     ])
   })
 
