@@ -74,7 +74,7 @@ import { runtimeMarkerPath, writeRuntimeMarker, type FetchFn } from '../../src/m
 import { tMain } from '../../src/main/services/i18n'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
-import { runToEnd } from '../helpers/download-fixtures'
+import { hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
 import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
@@ -603,9 +603,9 @@ describe('recoverEngineSwaps: a marker it cannot read just now leaves the layout
 
   // T8.5c round 3 (R1 N-1): an engine the user asks for reads such a marker again for about a second. One that stays
   // unreadable is a lasting fault (a bad sector, a deny-read ACL), and the copy it should vouch for cannot be vouched
-  // for: it counts as damaged, once the job's archives are in, and the job goes on as with a damaged marker. Round 1
-  // refused such a job as files in use, for good: an update killed between its renames over a failing block never got
-  // its chat engine back.
+  // for: it counts as damaged, in the job's own recovery before the download, and the job goes on as with a damaged
+  // marker. Round 1 refused such a job as files in use, for good: an update killed between its renames over a failing
+  // block never got its chat engine back.
   it.each([
     { name: 'a plain install', request: {} },
     { name: 'a reinstall', request: { families: ['llama_cpp' as const], reinstall: true as const } }
@@ -662,6 +662,69 @@ describe('recoverEngineSwaps: a marker it cannot read just now leaves the layout
     expect(logs).toContain('Engine job: a marker could not be read just now; it is read again')
     expect(logs.filter((m) => m.startsWith('Engine job: a marker still cannot be read'))).toEqual([])
   })
+
+  /** A download that fails at once (the server has no such archive): nothing is fetched, the job fails. */
+  const failingFetch = (async () => new Response('no such archive', { status: 404 })) as unknown as FetchFn
+
+  // T8.5c round 4 (R1 N-6): what judging before the download rests on. A copy whose marker reads is removed only when
+  // another whole copy takes the install's place: here the recovery rolls `.old`'s b150 in before anything is fetched,
+  // so a download that fails, or a cancel during it, still leaves that engine whole where the resolvers read it.
+  it.each([
+    { name: 'a download that fails', fetchImpl: failingFetch, cancel: false, end: 'failed' },
+    { name: 'a cancel during the download', fetchImpl: hangingFetch('engine-archive'), cancel: true, end: 'cancelled' }
+  ])('a lasting unreadable .new beside a whole .old, no install folder: $name leaves .old’s engine whole', async ({ fetchImpl, cancel, end }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(`${liveDir(rootPath)}.new`, 'b200', { label: 'staged' })
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    const old = contentDigest(`${liveDir(rootPath)}.old`)
+    const marker = runtimeMarkerPath(`${liveDir(rootPath)}.new`)
+    const mgr = manager({ fetchImpl })
+    denyReading(marker)
+    let job: EngineDownloadJob
+    try {
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+      // The cancel lands once the download has bytes: gated on the job's own counter, no timer.
+      if (cancel) {
+        await vi.waitFor(() => expect(mgr.get(started.jobId).receivedBytes).toBeGreaterThan(0), { timeout: hangBudgetMs(5000) })
+        mgr.cancel(started.jobId)
+      }
+      job = await settle(mgr, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(job.status).toBe(end)
+    expect(contentDigest(liveDir(rootPath))).toEqual(old)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // T8.5c round 4 (R1 N-5, kept as built): with no install folder and the only whole copy in `.new`, its marker held
+  // past the retry, the job's recovery counts the copy as damaged and deletes it before the download. A download that
+  // then fails leaves no engine, where a later start could have moved the copy in had the hold cleared by then. Kept:
+  // refusing in this layout reopens the lasting-fault dead end (R1 N-1): a hold that never clears would block every job
+  // for good. What it costs is a re-download once the download works, never data.
+  it('the only whole copy in .new, held for good, no install folder: a failed download leaves no engine, the next install restores one', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    mkdirSync(`${liveDir(rootPath)}.old`, { recursive: true })
+    copy(`${liveDir(rootPath)}.new`, 'b200', { label: 'staged' })
+    const marker = runtimeMarkerPath(`${liveDir(rootPath)}.new`)
+    const failing = manager({ fetchImpl: failingFetch })
+    denyReading(marker)
+    let first: EngineDownloadJob
+    try {
+      const started = await failing.start({ rootPath, manifestsDir, gates: ALLOW })
+      first = await settle(failing, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(first.status).toBe('failed')
+    // Exactly what is left: both leftovers gone, and the install folder the download made, empty (no engine).
+    expect(layout(rootPath)).toEqual({ live: '-|-', net: 'absent', ...NOTHING_LEFT })
+    expect(readdirSync(liveDir(rootPath))).toEqual([])
+    const working = manager()
+    const again = await working.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect((await settle(working, again.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
 })
 
 // ---- The swap inside a job ----------------------------------------------------------------------
@@ -673,14 +736,22 @@ const newEngine: ExtractFn = async (_archive, destDir) => {
 
 /** A manager whose download serves `archive`; `extract: 'os-tar'` runs the real `extractWithTar`. */
 function manager(
-  opts: { extract?: ExtractFn | 'os-tar'; archive?: Buffer; log?: (msg: string, meta?: unknown) => void } = {}
+  opts: {
+    extract?: ExtractFn | 'os-tar'
+    archive?: Buffer
+    log?: (msg: string, meta?: unknown) => void
+    /** The download, when the row's is not the archive's: one that fails, one that hangs. */
+    fetchImpl?: FetchFn
+  } = {}
 ): EngineDownloadManager {
   const archive = opts.archive ?? BODY
-  const fetchImpl = (async () =>
-    new Response(new Uint8Array(archive), {
-      status: 200,
-      headers: { 'content-length': String(archive.length) }
-    })) as unknown as FetchFn
+  const fetchImpl =
+    opts.fetchImpl ??
+    ((async () =>
+      new Response(new Uint8Array(archive), {
+        status: 200,
+        headers: { 'content-length': String(archive.length) }
+      })) as unknown as FetchFn)
   const log = opts.log ? { log: opts.log } : {}
   if (opts.extract === 'os-tar') return new EngineDownloadManager({ fetchImpl, ...log })
   return new EngineDownloadManager({ fetchImpl, extractImpl: opts.extract ?? newEngine, ...log })
