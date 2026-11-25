@@ -38,6 +38,9 @@ export const UNLOCK_FAILURE_KEYS = {
   vault_open_failed: 'main.workspace.vaultOpenFailed',
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
+  // W-68 (app-update wave, T2.14): a schema this version can't parse (copy deck C01). Its `{version}` and `{address}`
+  // are filled by T2.6; until then the text shows them as written.
+  workspace_schema_unreadable: 'main.workspace.schemaUnreadable',
   // `null`: main never sends these for this call. If it ever does, give the entry a key: a
   // `null` shows main's `message`, in main's language, and the screen is in two languages again.
   workspace_exists: null,
@@ -58,6 +61,8 @@ export const CREATE_FAILURE_KEYS = {
   vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',
+  // W-68: unlock only (copy deck C01: "never on the create form").
+  workspace_schema_unreadable: null,
   workspace_exists: 'main.workspace.exists',
   plaintext_not_allowed: 'main.workspace.plaintextNotAllowed',
   // A password under MIN_PASSWORD_LENGTH, or not a string (A2, #807): rendered with `{ min }`.

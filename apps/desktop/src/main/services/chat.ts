@@ -393,7 +393,9 @@ const PACK_OUTCOME_REASONS = new Set<string>([
   'read-failed',
   'timeout',
   'deadline',
-  'server-restarted'
+  'server-restarted',
+  // W-71 (app-update wave, T2.14): a selected pack whose archive is in a newer ZIM format.
+  'newer-format'
 ])
 
 /** Coerce a stored count defensively: a finite, non-negative INTEGER, else 0. A hand-edited

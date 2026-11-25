@@ -1685,6 +1685,18 @@ export const ru: UiCatalog<'ru'> = {
   'skills.reconcile.folderErrors.other':
     '{count} папки навыков не прочитаны и пропущены. Каждой папке нужен действительный файл ' +
     'SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.few':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Навыков пока нет',
   'skills.empty.line':
     'Каждый навык учит ИИ-модель выполнять определенную задачу. Добавьте навык, чтобы начать.',
@@ -2684,6 +2696,13 @@ export const ru: UiCatalog<'ru'> = {
     'Ваш пароль верный, но данные рабочего пространства на диске повреждены, и открыть их не ' +
     'удалось. Повторный ввод пароля не поможет. Не создавайте новое рабочее пространство — ' +
     'оставьте файлы как есть и восстановите папку «workspace» из резервной копии.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Ваш пароль верный, но зашифрованный файл рабочего пространства отсутствует на диске, и не ' +
     'осталось копии, из которой его можно восстановить. Не создавайте новое рабочее пространство. ' +
@@ -3247,6 +3266,7 @@ export const ru: UiCatalog<'ru'> = {
   'chat.packs.outcome.disabled': 'поиск не выполнен: пакет выключен',
   'chat.packs.outcome.file-missing': 'поиск не выполнен: нет файла',
   'chat.packs.outcome.identity-mismatch': 'поиск не выполнен: по этому пути другой архив',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'поиск не выполнен: имя файла конфликтует с другим пакетом',
   'chat.packs.outcome.not-searchable': 'поиск не выполнен: нет поискового индекса',
   'chat.packs.outcome.tools-missing': 'поиск не выполнен: программы kiwix-tools не установлены',
@@ -3344,6 +3364,9 @@ export const ru: UiCatalog<'ru'> = {
     'В Windows программа kiwix-manage не может прочитать этот архив, потому что в имени файла ' +
     'или папки есть кириллица, умлаут, диакритический знак или другой символ не из набора ASCII. ' +
     'Скопируйте файл в папку «zim/» на диске под именем без таких символов и добавьте его снова.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Не удалось добавить архив.',
   'packs.removedToast': 'Пакет знаний убран',
   'packs.articleCount.one': '{count} статья',
@@ -3357,6 +3380,10 @@ export const ru: UiCatalog<'ru'> = {
   'packs.state.identityMismatch': 'Другой архив',
   'packs.state.identityMismatchTitle':
     'По пути этого пакета находится другой архив — уберите этот пакет и добавьте файл снова',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Нет поискового индекса',
   'packs.state.notSearchableTitle':
     'У этого архива нет полнотекстового поискового индекса. При вопросах он пропускается, но его ' +

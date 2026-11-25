@@ -2070,6 +2070,32 @@ describe('packs:add failure reason codes (#715)', () => {
       await h.close()
     }
   })
+
+  // W-71 (T2.14): an archive in a ZIM format newer than the tools read is refused at the header, before any manager
+  // runs, with its own reason (the panel shows C05), never `not-a-zim` or `manager`; a readable file beside it is added.
+  it('names newer-format for an archive in a newer ZIM format, and never runs kiwix-manage on it (W-71)', async () => {
+    const h = await sessionHarness()
+    const add = async (paths: string[]): Promise<KnowledgePackAddResult> => {
+      dialogState.paths = paths
+      dialogState.canceled = false
+      return (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    }
+    try {
+      h.hooks.manage = async () => undefined
+      const newer = writeZimFixture(join(h.zimDir, 'from-the-future.zim'), packUuid('0000cc03', 'future'), {
+        major: 7,
+        trailing: 'body of from-the-future.zim'
+      })
+      expect(await add([newer])).toEqual({ outcome: 'failure', added: [], failed: 1, failureReason: 'newer-format' })
+      expect(h.metaAdds).toEqual([])
+      const mixed = await add([newer, h.addPackFile('today.zim')])
+      expect(mixed).toMatchObject({ outcome: 'partial', failed: 1, failureReason: 'newer-format' })
+      expect(mixed.added.map((p) => p.leaf)).toEqual(['today.zim'])
+      expect(h.metaAdds.some((p) => p.includes('from-the-future'))).toBe(false)
+    } finally {
+      await h.close()
+    }
+  })
 })
 
 // ---- T16-a — per-ask knowledge-pack OUTCOMES, end to end (#301 P4, findings M6/M7) ----------

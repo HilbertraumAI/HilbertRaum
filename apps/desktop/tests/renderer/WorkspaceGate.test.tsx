@@ -545,6 +545,20 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))
   })
 
+  // W-68 (T2.14): a schema this version can't parse shows C01 ("probably last used with a newer version … keep the files
+  // as they are"), never the damaged copy and its backup advice, and never main's own text. C01's `{version}` and
+  // `{address}` are passed from T2.6 on; until then `t()`'s missing-parameter rule shows the English value in every
+  // language (T2.6's rows pin the filled German).
+  it('unlock workspace_schema_unreadable shows the schema copy, never a backup (W-68)', async () => {
+    const key = 'main.workspace.schemaUnreadable'
+    const shown = t('de', key, { min: MIN_PASSWORD_LENGTH })
+    expect(shown).not.toBe(key) // the catalogs carry it
+    expect(shown).not.toMatch(/backup/i)
+    await failIn('unlock', { ok: false, reason: 'workspace_schema_unreadable', message: 'main said this' }, shown)
+    expect(screen.queryByText(t('de', 'main.workspace.vaultDamaged'))).not.toBeInTheDocument()
+    for (const region of screen.getAllByRole('alert')) expect(region).not.toHaveTextContent(/backup/i)
+  })
+
   it.each([
     // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
     // the gate still says what main said instead of showing an empty banner.

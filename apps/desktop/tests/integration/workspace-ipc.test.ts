@@ -94,6 +94,7 @@ import {
   newerPlaintext,
   plantProbeTrap,
   newerVault,
+  schemaUnreadableVault,
   setFrameMagic,
   staleDatabaseStage,
   storeCopy,
@@ -992,6 +993,14 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         }
       }
     ],
+    // W-68 (T2.14): the password verified, and SQLite cannot parse the database's schema ("malformed database schema",
+    // what a newer version's schema text does here): its own copy (C01), not the damaged one.
+    workspace_schema_unreadable: [
+      {
+        how: 'a database whose schema this SQLite cannot parse, under this build’s stamp',
+        arrange: () => ({ workspace: startedOn(schemaUnreadableVault(lockedVault('wsipc', PW), PW)), args: [PW] })
+      }
+    ],
     workspace_exists: NEVER_SENT,
     plaintext_not_allowed: NEVER_SENT,
     refused: NEVER_SENT,
@@ -1017,6 +1026,8 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     ],
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
+    // W-68: unlock only (the copy deck: "never on the create form").
+    workspace_schema_unreadable: NEVER_SENT,
     workspace_newer: [
       {
         how: 'a plaintext database a newer build stamped',
@@ -1385,6 +1396,40 @@ describe('an unlock refused for a newer vault format (#845)', () => {
       const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('vault damaged'))
       expect(logged).toHaveLength(1)
       expect(logged[0]).toContain('{"damage":"failed-authentication"}')
+    } finally {
+      workspace.shutdown()
+    }
+  })
+
+  // W-68 (T2.14): an unlock whose open fails because SQLite cannot parse the schema answers its own reason, never
+  // `vault_damaged` ("restore from a backup"). Its log line and audit line are fixed words: SQLite's message quotes a
+  // schema object's name and its SQL, and neither reaches the log, the audit or the answer. Nothing on the drive changes.
+  it('an unlock whose schema this SQLite cannot parse answers workspace_schema_unreadable with fixed log and audit words (W-68)', async () => {
+    const vp = schemaUnreadableVault(lockedVault('wsipc', PW), PW)
+    const enc = readFileSync(vp.encPath)
+    const descriptor = readFileSync(vp.descriptorPath)
+    const audit = vi.fn()
+    const workspace = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(workspace, { extra: { audit } }))
+    const marker = `W-68 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
+      expect(result).toEqual({
+        ok: false,
+        reason: 'workspace_schema_unreadable',
+        message: tMain('main.workspace.schemaUnreadable')
+      })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      expect(lines.filter((l) => l.includes('could not read the database schema'))).toHaveLength(1)
+      expect(lines.filter((l) => l.includes('vault damaged'))).toEqual([])
+      for (const quoted of ['w985_future', 'INDEZ', 'malformed']) expect(lines.join('\n')).not.toContain(quoted)
+      expect(audit.mock.calls).toEqual([['workspace_unlock_failed', 'Workspace unlock failed (database schema unreadable)']])
+      expect(workspace.getState().state).toBe('locked')
+      expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+      expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+      expect(existsSync(vp.dbPath)).toBe(false) // the decrypted copy is shredded, as after any failed open
     } finally {
       workspace.shutdown()
     }

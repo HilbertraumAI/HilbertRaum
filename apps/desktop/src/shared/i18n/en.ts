@@ -1701,6 +1701,12 @@ export const en = {
     '{count} skill folder could not be read and is skipped. Its SKILL.md is missing, invalid, or unreadable.',
   'skills.reconcile.folderErrors.other':
     '{count} skill folders could not be read and are skipped. Each folder needs a valid SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'No skills yet',
   'skills.empty.line': 'Skills teach the assistant how to do a specific task. Add one to get started.',
   // Trust chip (icon + word, never colour-only — guidelines §9).
@@ -2747,6 +2753,12 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum can’t read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you don’t have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the drive’s docs folder.',
   // #911: the password verified, but `.enc` is missing and no copy was left to restore it from. A new workspace would
   // replace the data key the stored documents need, so the copy warns against it.
   'main.workspace.vaultMissing':
@@ -3339,6 +3351,7 @@ export const en = {
   'chat.packs.outcome.disabled': 'not searched: pack disabled',
   'chat.packs.outcome.file-missing': 'not searched: file missing',
   'chat.packs.outcome.identity-mismatch': 'not searched: different archive at this location',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'not searched: name collision with another pack',
   'chat.packs.outcome.not-searchable': 'not searched: no full-text index',
   'chat.packs.outcome.tools-missing': 'not searched: kiwix-tools not installed',
@@ -3430,6 +3443,9 @@ export const en = {
   // one exists from its own folder, so what is left is the file name, or a folder outside the
   // app's own. Names the cause and the workaround — never the raw path.
   'packs.addFailed.pathUnsupported': 'On Windows, kiwix-manage cannot read this archive because its file name or folder contains an umlaut, an accent or another non-ASCII character. Copy the file into the drive’s zim/ folder under a name without such characters and add it again.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it wasn’t ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'The archive could not be added.',
   'packs.removedToast': 'Knowledge pack removed',
   'packs.articleCount.one': '{count} article',
@@ -3440,6 +3456,10 @@ export const en = {
   'packs.state.missingTitle': 'The archive file could not be found — is the drive plugged in?',
   'packs.state.identityMismatch': 'Different archive',
   'packs.state.identityMismatchTitle': 'The file at this pack’s location is a different archive — remove this pack and add the file again',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it isn’t ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   // #301 P6 (plan §9.23 (a) row 5, (c)5): confirmed by the `/suggest` probe at a reconcile's
   // end (P4 M7) — the pack stays enabled/readable, just skipped by the ask.
   'packs.state.notSearchable': 'No full-text index',

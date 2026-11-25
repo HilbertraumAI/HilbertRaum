@@ -383,7 +383,8 @@ export const IPC = {
   /**
    * Structural summary of the last disk reconcile's discovery errors — `SkillReconcileStatus`
    * (SKA-32, skills audit 2026-07-03, U7). Counts + fixed reason codes ONLY (never folder names or
-   * package content — §22-M1); drives the Settings → Skills "N folders could not be read" notice.
+   * package content — §22-M1); drives the Settings → Skills "N folders could not be read" notice
+   * and (W-65) the separate "N skills … made for a newer version" one (`needsNewerAppCount`).
    */
   skillReconcileStatus: 'skills:reconcileStatus',
   // Tier-2 app-orchestrated tool runs (skills plan §12.2/§16, S11b). Generic `skills:*` shape (NOT

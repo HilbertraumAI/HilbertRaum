@@ -41,6 +41,9 @@ export const IMPORT_ERROR_KEY: Record<string, MessageKey> = {
   nestedArchive: 'skills.import.error.nestedArchive',
   noSkillMd: 'skills.import.error.noSkillMd',
   invalidManifest: 'skills.import.error.invalidManifest',
+  // W-65 (T2.14): a package made for a newer version reads with the incompatible-skill text (copy deck X03), the
+  // installer's `needsNewerApp` message being that key's English value.
+  needsNewerApp: 'skills.incompatible.title',
   idMismatch: 'skills.import.error.idMismatch',
   downgradeBlocked: 'skills.import.error.downgradeBlocked',
   appReadOnly: 'skills.import.error.appReadOnly',

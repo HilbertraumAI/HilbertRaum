@@ -2,9 +2,16 @@ import { describe, it, expect } from 'vitest'
 import { closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { SCHEMA_VERSION, openDatabase, probeDatabaseFile, walAwaitsCheckpoint } from '../../src/main/services/db'
+import {
+  SCHEMA_VERSION,
+  openDatabase,
+  probeDatabaseFile,
+  sqliteJudgedDamaged,
+  sqliteSchemaUnreadable,
+  walAwaitsCheckpoint
+} from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { tempRoot } from '../helpers/db-fixtures'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 import { oversizedFirstCell, plantProbeTrap, writeNewerSchema } from '../helpers/vault-fixtures'
 
 // #876: the lock's guard, the #855 lost-copy verdict, the init() salvage, the `.recovery` roll-forward and the v1 rekey
@@ -218,6 +225,50 @@ describe('probeDatabaseFile (#876)', () => {
     expect(probeDatabaseFile(path)).toEqual(verdict)
     expect(sha(path)).toBe(before)
     expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
+  })
+})
+
+// W-68 (app-update wave, T2.14): an unlock whose open fails because SQLite cannot parse the schema ("malformed database
+// schema", what a newer version's schema text does to this SQLite, and also damage inside `sqlite_schema` itself) gets
+// its own copy instead of "restore from a backup". Told apart from other damage by SQLite's message prefix only, on a
+// SQLITE_CORRUPT error; the damage verdict itself (`sqliteJudgedDamaged`) is unchanged and calls both damaged.
+describe('sqliteSchemaUnreadable (W-68)', () => {
+  /** What `run` threw (a row whose step does not throw fails here). */
+  const thrown = (run: () => unknown): unknown => {
+    try {
+      run()
+    } catch (err) {
+      return err
+    }
+    throw new Error('expected the step to throw')
+  }
+
+  it('is true for a schema this SQLite cannot parse, and false for a damaged table page, noise and a look-alike', () => {
+    const schema = appDatabase().path
+    writeNewerSchema(schema, { userVersion: SCHEMA_VERSION }) // this build's stamp, so the open reads the schema
+    const schemaErr = thrown(() => openDatabase(schema))
+
+    const { path: page, pageSize, roots } = appDatabase('settings')
+    overwritePage(page, roots.settings, pageSize)
+    const raw = openRawDb(page, { readOnly: true })
+    const pageErr = thrown(() => raw.prepare('SELECT * FROM settings').all())
+    raw.close()
+
+    const noise = join(tempRoot('db-probe'), 'noise.sqlite')
+    writeFileSync(noise, randomBytes(8192))
+    const rawNoise = openRawDb(noise, { readOnly: true })
+    const noiseErr = thrown(() => rawNoise.prepare('SELECT * FROM sqlite_schema').all())
+    rawNoise.close()
+
+    // Both SQLite errors are damage to the existing verdict; only the schema one is "unreadable schema".
+    expect(sqliteJudgedDamaged(schemaErr)).toBe(true)
+    expect(sqliteSchemaUnreadable(schemaErr)).toBe(true)
+    expect(sqliteJudgedDamaged(pageErr)).toBe(true)
+    expect(sqliteSchemaUnreadable(pageErr)).toBe(false)
+    expect(sqliteSchemaUnreadable(noiseErr)).toBe(false)
+    // The words alone are not enough: SQLite's CORRUPT code has to be on the error too.
+    expect(sqliteSchemaUnreadable(new Error('malformed database schema (w985_future)'))).toBe(false)
+    expect(sqliteSchemaUnreadable(null)).toBe(false)
   })
 })
 

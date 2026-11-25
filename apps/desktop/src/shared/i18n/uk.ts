@@ -1701,6 +1701,18 @@ export const uk: UiCatalog<'uk'> = {
   'skills.reconcile.folderErrors.other':
     '{count} папки навички не вдалося прочитати й пропущено. Кожна папка має містити правильний ' +
     'файл SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.few':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Навичок ще немає',
   'skills.empty.line':
     'Навички вчать помічника виконувати певне завдання. Додайте навичку, щоб почати.',
@@ -2698,6 +2710,13 @@ export const uk: UiCatalog<'uk'> = {
     'Ваш пароль правильний, але дані робочого простору на диску пошкоджено, тому їх не вдалося ' +
     'відкрити. Повторне введення пароля не допоможе. Не створюйте новий робочий простір — ' +
     'залиште файли як є та відновіть папку робочого простору з резервної копії.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Ваш пароль правильний, але зашифрованого файлу робочого простору немає на диску, і не ' +
     'залишилося копії, з якої його можна відновити. Не створюйте новий робочий простір. Поверніть ' +
@@ -3250,6 +3269,7 @@ export const uk: UiCatalog<'uk'> = {
   'chat.packs.outcome.disabled': 'пошук не виконано: пакет вимкнено',
   'chat.packs.outcome.file-missing': 'пошук не виконано: файлу немає',
   'chat.packs.outcome.identity-mismatch': 'пошук не виконано: на цьому місці інший архів',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'пошук не виконано: назва конфліктує з іншим пакетом',
   'chat.packs.outcome.not-searchable': 'пошук не виконано: немає повнотекстового індексу',
   'chat.packs.outcome.tools-missing': 'пошук не виконано: програми kiwix-tools не встановлено',
@@ -3346,6 +3366,9 @@ export const uk: UiCatalog<'uk'> = {
     'У Windows програма kiwix-manage не може прочитати цей архів, бо назва його файлу або папки ' +
     'містить кириличну літеру, умлаут, діакритичний знак або інший символ поза ASCII. Скопіюйте ' +
     'файл у папку zim/ на диску під назвою без таких символів і додайте його ще раз.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Не вдалося додати архів.',
   'packs.removedToast': 'Пакет знань прибрано',
   'packs.articleCount.one': '{count} стаття',
@@ -3359,6 +3382,10 @@ export const uk: UiCatalog<'uk'> = {
   'packs.state.identityMismatch': 'Інший архів',
   'packs.state.identityMismatchTitle':
     'На місці файлу цього пакету лежить інший архів — приберіть цей пакет і додайте файл ще раз',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Без індексу пошуку',
   'packs.state.notSearchableTitle':
     'Цей архів не має повнотекстового індексу пошуку. Під час запитань він не використовується, ' +

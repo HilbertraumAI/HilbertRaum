@@ -1553,6 +1553,12 @@ export const tr: UiCatalog<'tr'> = {
   'skills.reconcile.folderErrors.other':
     '{count} beceri klasörü okunamadı ve atlanıyor. Her klasörde geçerli bir SKILL.md dosyası ' +
     'olmalıdır.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Henüz beceri yok',
   'skills.empty.line':
     'Beceriler, asistana belirli bir işi nasıl yapacağını öğretir. Başlamak için bir beceri ' +
@@ -2515,6 +2521,13 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak sürücüdeki çalışma alanı verileri hasarlı ve açılamadı. Parolayı ' +
     'yeniden yazmak işe yaramaz. Yeni bir çalışma alanı oluşturmayın: dosyaları olduğu gibi ' +
     'bırakın ve çalışma alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Parolanız doğru, ancak çalışma alanının şifreli dosyası sürücüde yok ve onu kurtarmak için ' +
     'hiçbir kopya kalmadı. Yeni bir çalışma alanı oluşturmayın. Dosyayı yerine koyun veya çalışma ' +
@@ -3042,6 +3055,7 @@ export const tr: UiCatalog<'tr'> = {
   'chat.packs.outcome.disabled': 'aranmadı: paket devre dışı',
   'chat.packs.outcome.file-missing': 'aranmadı: dosya eksik',
   'chat.packs.outcome.identity-mismatch': 'aranmadı: bu konumda farklı bir arşiv var',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'aranmadı: başka bir paketle ad çakışması',
   'chat.packs.outcome.not-searchable': 'aranmadı: tam metin dizini yok',
   'chat.packs.outcome.tools-missing': 'aranmadı: kiwix-tools kurulu değil',
@@ -3132,6 +3146,9 @@ export const tr: UiCatalog<'tr'> = {
     'Windows’ta kiwix-manage bu arşivi okuyamıyor, çünkü dosyanın adı veya klasörü bir umlaut, ' +
     'aksanlı bir harf ya da başka bir ASCII dışı karakter (ç, ğ, ı, ş gibi) içeriyor. Dosyayı bu ' +
     'tür karakterler içermeyen bir adla sürücünün zim/ klasörüne kopyalayın ve yeniden ekleyin.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Arşiv eklenemedi.',
   'packs.removedToast': 'Bilgi paketi kaldırıldı',
   'packs.articleCount.one': '{count} makale',
@@ -3143,6 +3160,10 @@ export const tr: UiCatalog<'tr'> = {
   'packs.state.identityMismatch': 'Farklı arşiv',
   'packs.state.identityMismatchTitle':
     'Bu paketin konumundaki dosya farklı bir arşiv. Bu paketi kaldırıp dosyayı yeniden ekleyin.',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Tam metin dizini yok',
   'packs.state.notSearchableTitle':
     'Bu arşivin tam metin arama dizini yok. Soru sorarken atlanır, ancak makaleleri okunabilir ' +

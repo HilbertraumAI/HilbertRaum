@@ -1644,6 +1644,15 @@ export const es: UiCatalog<'es'> = {
   'skills.reconcile.folderErrors.other':
     'No se pudieron leer {count} carpetas de habilidades y se omiten. Cada carpeta necesita un ' +
     'archivo «SKILL.md» válido.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Aún no hay habilidades',
   'skills.empty.line':
     'Las habilidades le enseñan al asistente a hacer una tarea concreta. Agrega una para empezar.',
@@ -2665,6 +2674,13 @@ export const es: UiCatalog<'es'> = {
     'y no se pudieron abrir. Volver a escribir la contraseña no servirá. No crees un espacio de ' +
     'trabajo nuevo: deja los archivos como están y restaura la carpeta «workspace» desde una ' +
     'copia de seguridad.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Tu contraseña es correcta, pero el archivo cifrado del espacio de trabajo falta en la unidad y ' +
     'no quedó ninguna copia para recuperarlo. No crees un espacio de trabajo nuevo. Vuelve a poner ' +
@@ -3255,6 +3271,7 @@ export const es: UiCatalog<'es'> = {
   'chat.packs.outcome.disabled': 'sin consultar: paquete desactivado',
   'chat.packs.outcome.file-missing': 'sin consultar: falta el archivo',
   'chat.packs.outcome.identity-mismatch': 'sin consultar: hay otro archivo en esta ubicación',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'sin consultar: su nombre coincide con el de otro paquete',
   'chat.packs.outcome.not-searchable': 'sin consultar: no tiene índice de texto completo',
   'chat.packs.outcome.tools-missing':
@@ -3353,6 +3370,9 @@ export const es: UiCatalog<'es'> = {
     'su carpeta contiene una diéresis, un acento u otro carácter que no es ASCII. Copia el ' +
     'archivo en la carpeta «zim/» de la unidad con un nombre sin esos caracteres y vuelve a ' +
     'agregarlo.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'No se pudo agregar el archivo.',
   'packs.removedToast': 'Paquete de conocimiento quitado',
   'packs.articleCount.one': '{count} artículo',
@@ -3366,6 +3386,10 @@ export const es: UiCatalog<'es'> = {
   'packs.state.identityMismatchTitle':
     'En la ubicación de este paquete hay un archivo distinto: quita este paquete y vuelve a ' +
     'agregar el archivo',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Sin índice de texto',
   'packs.state.notSearchableTitle':
     'Este archivo no tiene índice de búsqueda de texto completo. Se omite al hacer preguntas, ' +

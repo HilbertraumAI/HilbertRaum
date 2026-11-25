@@ -1611,6 +1611,12 @@ export const nl: UiCatalog<'nl'> = {
   'skills.reconcile.folderErrors.other':
     '{count} skillmappen konden niet worden gelezen en worden overgeslagen. Elke map heeft een ' +
     'geldige SKILL.md nodig.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Nog geen skills',
   'skills.empty.line':
     'Skills leren de assistent een bepaalde taak uit te voeren. Voeg een skill toe om te ' +
@@ -2622,6 +2628,13 @@ export const nl: UiCatalog<'nl'> = {
     'konden niet worden geopend. Het wachtwoord opnieuw invoeren helpt niet. Maak geen nieuwe ' +
     'werkruimte aan: laat de bestanden zoals ze zijn en herstel de map van de werkruimte vanuit ' +
     'een back-up.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Je wachtwoord klopt, maar het versleutelde bestand van de werkruimte ontbreekt op de schijf, en ' +
     'er is geen kopie meer waarmee het hersteld kan worden. Maak geen nieuwe werkruimte aan. Zet het ' +
@@ -3208,6 +3221,7 @@ export const nl: UiCatalog<'nl'> = {
   'chat.packs.outcome.disabled': 'niet doorzocht: pakket uitgeschakeld',
   'chat.packs.outcome.file-missing': 'niet doorzocht: bestand ontbreekt',
   'chat.packs.outcome.identity-mismatch': 'niet doorzocht: ander archief op deze locatie',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'niet doorzocht: de naam botst met een ander pakket',
   'chat.packs.outcome.not-searchable': 'niet doorzocht: geen zoekindex',
   'chat.packs.outcome.tools-missing': 'niet doorzocht: kiwix-tools niet geïnstalleerd',
@@ -3301,6 +3315,9 @@ export const nl: UiCatalog<'nl'> = {
     'Onder Windows kan kiwix-manage dit archief niet lezen, omdat de bestandsnaam of de map een ' +
     'umlaut, een accent of een ander niet-ASCII-teken bevat. Kopieer het bestand onder een naam ' +
     'zonder zulke tekens naar de map zim/ op de schijf en voeg het opnieuw toe.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Het archief kon niet worden toegevoegd.',
   'packs.removedToast': 'Kennispakket verwijderd',
   'packs.articleCount.one': '{count} artikel',
@@ -3313,6 +3330,10 @@ export const nl: UiCatalog<'nl'> = {
   'packs.state.identityMismatchTitle':
     'Het bestand op de locatie van dit pakket is een ander archief: verwijder dit pakket en voeg ' +
     'het bestand opnieuw toe',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Geen zoekindex',
   'packs.state.notSearchableTitle':
     'Dit archief heeft geen zoekindex voor de volledige tekst. Bij vragen wordt het archief ' +

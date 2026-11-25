@@ -236,6 +236,12 @@ export interface SkillManifestValidation {
   notes: string[]
   /** Structured note codes parallel to `notes` (SKA-35). */
   noteCodes?: SkillNoteRef[]
+  /**
+   * W-65: the well-formed `compatibility.minAppVersion` the frontmatter declared, kept on a FAILED result (which has no
+   * manifest), so a skill made for a newer app can be told apart from a broken one ({@link failedSkillNeedsNewerApp}).
+   * Absent when the minimum is missing or malformed, and on a passing result (its manifest carries it).
+   */
+  declaredMinAppVersion?: string
 }
 
 /** Result of parsing a whole SKILL.md (frontmatter + body). */
@@ -248,6 +254,8 @@ export interface SkillParseResult {
   notes: string[]
   /** Structured note codes parallel to `notes` (SKA-35). */
   noteCodes?: SkillNoteRef[]
+  /** W-65: as {@link SkillManifestValidation.declaredMinAppVersion}, also when only the body failed. */
+  declaredMinAppVersion?: string
 }
 
 export interface SkillParseOptions {
@@ -305,6 +313,21 @@ export function skillNeedsNewerApp(minAppVersion: string | undefined, appVersion
   const have = readSkillAppVersion(appVersion)
   if (!need || !have) return false
   return appOlderThanMinimum(have, need)
+}
+
+/**
+ * W-65 (app-update wave, F-25's typed case): whether a SKILL.md that FAILED this version's checks was made for a newer
+ * app, so the reconcile, the import preview and the install say so instead of "invalid". True when the frontmatter
+ * declared a well-formed `compatibility.minAppVersion` that {@link skillNeedsNewerApp} finds above `appVersion`, whatever
+ * else failed (a `kind` this version does not know, a body over its cap). The gate's own rule, so it is fail-open too: an
+ * app version it cannot read ('' included) never gives this verdict. A result that passed never does either: a valid
+ * skill made for a newer app is listed and kept off by the gate instead.
+ */
+export function failedSkillNeedsNewerApp(
+  result: Pick<SkillParseResult, 'ok' | 'declaredMinAppVersion'>,
+  appVersion: string
+): boolean {
+  return !result.ok && skillNeedsNewerApp(result.declaredMinAppVersion, appVersion)
 }
 
 /** Default SKILL.md body cap (64 KiB of chars). The `limits.ts` default references this. */
@@ -705,7 +728,9 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   }
 
   if (errors.length > 0) {
-    return { ok: false, errors, notes, noteCodes: collector.refs }
+    // W-65: the declared minimum rides the failure (no manifest is returned), so a newer app's skill reads as such.
+    const declared = compatibility.minAppVersion
+    return { ok: false, errors, notes, noteCodes: collector.refs, ...(declared ? { declaredMinAppVersion: declared } : {}) }
   }
 
   return {
@@ -796,7 +821,9 @@ export function parseSkillMarkdown(source: string, opts: SkillParseOptions = {})
   }
 
   if (errors.length > 0 || !v.manifest) {
-    return { ok: false, errors, notes, noteCodes }
+    // W-65: a frontmatter that passed while the body failed still declared its minimum.
+    const declared = v.manifest?.compatibility.minAppVersion ?? v.declaredMinAppVersion
+    return { ok: false, errors, notes, noteCodes, ...(declared ? { declaredMinAppVersion: declared } : {}) }
   }
   return { ok: true, manifest: v.manifest, body, errors: [], notes, noteCodes }
 }

@@ -30,6 +30,34 @@ export const ZIM_HEADER_BYTES = 80
 /** The 16 raw UUID bytes live at 8–23 (plan §2.4). */
 const UUID_OFFSET = 8
 const UUID_BYTES = 16
+/** The format's major version: a little-endian uint16 at offset 4 (the minor follows at 6). */
+const MAJOR_OFFSET = 4
+
+/**
+ * W-71 (app-update wave, T2.14): the newest ZIM format major the knowledge-pack tools read (libzim reads 5 and 6). An
+ * archive whose major is ABOVE it is a newer format: it is never handed to kiwix-manage or kiwix-serve, and the user
+ * reads "newer format" instead of a message that blames the file. Only "above" is refused, so every lower major reads
+ * exactly as before this check existed.
+ */
+export const ZIM_MAX_READABLE_MAJOR = 6
+
+/** W-71: whether a header's format major is newer than the tools read. */
+export function zimFormatTooNew(major: number): boolean {
+  return major > ZIM_MAX_READABLE_MAJOR
+}
+
+/**
+ * W-71: `registerPack` refuses an archive in a newer ZIM format before kiwix-manage runs (the add's reason
+ * `newer-format`, copy deck C05). Content-free: the major is a number, never a path.
+ */
+export class ZimNewerFormatError extends Error {
+  readonly major: number
+  constructor(major: number) {
+    super(`The archive uses a newer ZIM format (major ${major}) than this version reads`)
+    this.name = 'ZimNewerFormatError'
+    this.major = major
+  }
+}
 
 /** Why a header could not yield an identity. Reason CODES only — never a path (sentinel rule). */
 export type ZimHeaderErrorReason = 'short' | 'magic' | 'unreadable'
@@ -63,8 +91,9 @@ export function formatZimUuid(bytes: Uint8Array): string {
  * a wrong magic ⇒ `'magic'`, any filesystem error ⇒ `'unreadable'`. The descriptor is closed
  * in a `finally` on every path (plan §2.4 "close descriptors on every path") — the reconcile
  * calls this once per file per pass, so a leaked handle would pin a removable drive.
+ * W-71: it also reports the format's `major`; judging it ({@link zimFormatTooNew}) is the caller's.
  */
-export function readZimHeader(path: string): { uuid: string } {
+export function readZimHeader(path: string): { uuid: string; major: number } {
   let fd: number | null = null
   try {
     fd = openSync(path, 'r')
@@ -81,7 +110,10 @@ export function readZimHeader(path: string): { uuid: string } {
     }
     if (read < ZIM_HEADER_BYTES) throw new ZimHeaderError('short')
     if (buf.readUInt32LE(0) !== ZIM_MAGIC) throw new ZimHeaderError('magic')
-    return { uuid: formatZimUuid(buf.subarray(UUID_OFFSET, UUID_OFFSET + UUID_BYTES)) }
+    return {
+      uuid: formatZimUuid(buf.subarray(UUID_OFFSET, UUID_OFFSET + UUID_BYTES)),
+      major: buf.readUInt16LE(MAJOR_OFFSET)
+    }
   } finally {
     try {
       closeSync(fd)

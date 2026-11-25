@@ -42,7 +42,7 @@ describe('readZimHeader (plan §2.4)', () => {
     const dir = tempDir()
     const uuid = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
     const file = writeZimFixture(join(dir, 'a.zim'), uuid, { trailing: 'body bytes after the header' })
-    expect(readZimHeader(file)).toEqual({ uuid })
+    expect(readZimHeader(file)).toEqual({ uuid, major: 6 })
     // The swapped-field spelling of the SAME bytes is a different id: a reader that byte-swapped
     // the first three fields would match no `books.id` the server ever answers to.
     const swapped = '3c2d1e0f-5a4b-7869-8796-a5b4c3d2e1f0'
@@ -91,6 +91,14 @@ describe('readZimHeader (plan §2.4)', () => {
     const opened = fdCalls.opens - before.opens
     expect(opened).toBeGreaterThanOrEqual(400) // the reads really went through the counter
     expect(fdCalls.closes - before.closes).toBe(opened)
+  })
+
+  // W-71 (T2.14): the format's major version is a little-endian uint16 at offset 4. The reader only reports it (the
+  // packs layer refuses a major above 6); every value a uint16 holds reads back as written, the UUID unchanged.
+  it.each([5, 6, 7, 65535, 0])('reads the format major %i from offset 4', (major) => {
+    const uuid = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
+    const file = writeZimFixture(join(tempDir(), `major-${major}.zim`), uuid, { major, trailing: 'body' })
+    expect(readZimHeader(file)).toEqual({ uuid, major })
   })
 
   it('a directory is unreadable, not a crash', () => {

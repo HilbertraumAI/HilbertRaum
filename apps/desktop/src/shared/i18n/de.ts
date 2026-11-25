@@ -1736,6 +1736,12 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Skill-Ordner konnte nicht gelesen werden und wird übersprungen. Seine SKILL.md fehlt, ist ungültig oder nicht lesbar.',
   'skills.reconcile.folderErrors.other':
     '{count} Skill-Ordner konnten nicht gelesen werden und werden übersprungen. Jeder Ordner braucht eine gültige SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} Skill auf diesem Laufwerk wurde für eine neuere Version von HilbertRaum erstellt und ' +
+    'wird übersprungen. Um ihn zu nutzen, installiere das Update unter Einstellungen → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} Skills auf diesem Laufwerk wurden für eine neuere Version von HilbertRaum erstellt und ' +
+    'werden übersprungen. Um sie zu nutzen, installiere das Update unter Einstellungen → Updates.',
   'skills.empty.title': 'Noch keine Skills',
   'skills.empty.line': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Füge einen hinzu, um zu starten.',
   'skills.trusted.app': 'App',
@@ -2705,6 +2711,14 @@ export const de: Record<keyof typeof en, string> = {
     'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
     'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
     'den Ordner „workspace“ aus einem Backup wieder her.',
+  'main.workspace.schemaUnreadable':
+    'Dein Passwort ist richtig, aber diese Version von HilbertRaum kann den Arbeitsbereich nicht ' +
+    'lesen. Wahrscheinlich wurde er zuletzt mit einer neueren Version benutzt. Dein Arbeitsbereich ' +
+    'ist unverändert. Um ihn zu öffnen, installiere die neuere Version: Wähle „Update aus Datei ' +
+    'installieren…“. Wenn du keine Update-Datei dafür hast, kannst du eine unter ' +
+    '{address}/from/{version} herunterladen. Wenn auf diesem Laufwerk nie eine neuere Version ' +
+    'benutzt wurde, lass die Dateien unverändert und sieh in der Anleitung zur Fehlerbehebung im ' +
+    'Ordner docs auf dem Laufwerk nach.',
   'main.workspace.vaultMissing':
     'Dein Passwort ist richtig, aber die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem ' +
     'Laufwerk, und es ist keine Kopie übrig, aus der sie sich wiederherstellen ließe. Lege keinen ' +
@@ -3315,6 +3329,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.packs.outcome.disabled': 'nicht durchsucht: Paket deaktiviert',
   'chat.packs.outcome.file-missing': 'nicht durchsucht: Datei fehlt',
   'chat.packs.outcome.identity-mismatch': 'nicht durchsucht: anderes Archiv an diesem Ort',
+  'chat.packs.outcome.newer-format': 'nicht durchsucht: neueres ZIM-Format',
   'chat.packs.outcome.not-served': 'nicht durchsucht: Namenskonflikt mit einem anderen Paket',
   'chat.packs.outcome.not-searchable': 'nicht durchsucht: kein Volltextindex',
   'chat.packs.outcome.tools-missing': 'nicht durchsucht: kiwix-tools nicht installiert',
@@ -3396,6 +3411,10 @@ export const de: Record<keyof typeof en, string> = {
   // Dateiname oder ein Ordner außerhalb des Ordners der App. Nennt Ursache und Abhilfe — nie den
   // rohen Pfad.
   'packs.addFailed.pathUnsupported': 'Unter Windows kann kiwix-manage dieses Archiv nicht lesen, weil sein Datei- oder Ordnername einen Umlaut, einen Akzent oder ein anderes Nicht-ASCII-Zeichen enthält. Kopier die Datei unter einem Namen ohne solche Zeichen in den „zim“-Ordner des Laufwerks und füge sie erneut hinzu.',
+  'packs.addFailed.newerFormat':
+    'Dieses Archiv nutzt ein neueres ZIM-Format, als diese Version von HilbertRaum lesen kann. ' +
+    'Deshalb wurde das Archiv nicht hinzugefügt. Eine neuere Version von HilbertRaum kann es ' +
+    'vielleicht hinzufügen.',
   'packs.addFailed.other': 'Das Archiv konnte nicht hinzugefügt werden.',
   'packs.removedToast': 'Wissenspaket entfernt',
   'packs.articleCount.one': '{count} Artikel',
@@ -3406,6 +3425,11 @@ export const de: Record<keyof typeof en, string> = {
   'packs.state.missingTitle': 'Die Archivdatei wurde nicht gefunden – ist das Laufwerk angeschlossen?',
   'packs.state.identityMismatch': 'Anderes Archiv',
   'packs.state.identityMismatchTitle': 'Die Datei an diesem Speicherort ist ein anderes Archiv – dieses Paket entfernen und die Datei erneut hinzufügen',
+  'packs.state.newerFormat': 'Neueres Format',
+  'packs.state.newerFormatTitle':
+    'Dieses Archiv nutzt ein neueres ZIM-Format, als diese Version von HilbertRaum lesen kann. ' +
+    'Deshalb wird das Archiv nicht verwendet. Eine neuere Version von HilbertRaum kann es vielleicht ' +
+    'verwenden.',
   // #301 P6 (Plan §9.23 (a) Zeile 5, (c)5): durch die `/suggest`-Sondierung am Ende eines
   // Abgleichs bestätigt (P4 M7) — das Paket bleibt aktiv/lesbar, wird bei der Frage nur übersprungen.
   'packs.state.notSearchable': 'Kein Volltextindex',

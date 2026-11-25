@@ -567,6 +567,32 @@ describe('duplicate id — coexist with one active (DS12)', () => {
 
 })
 
+// W-65 (T2.14, decision 6): a package whose SKILL.md fails this version's checks but declares a well-formed minimum above
+// the running app was made for a newer version. The preview and the install both answer with the incompatible-skill text
+// (the renderer maps the code to `skills.incompatible.title`), never "The skill manifest is invalid", and nothing is placed.
+// The gate is fail-open: on an app version it cannot read the same package is an invalid manifest.
+describe('a package made for a newer version is refused as such (W-65)', () => {
+  const futureZip = (): Promise<string> =>
+    writeZip([{ name: 'SKILL.md', content: skillMdText({ id: 'from-the-future', kind: 'agent', minAppVersion: '0.2.0' }) }])
+
+  it.each([
+    ['an app below the minimum', '0.1.66', 'needsNewerApp'],
+    ['an unknown app version (fail-open)', '', 'invalidManifest']
+  ] as const)('on %s (app %j) the preview and the install answer %s', async (_name, appVersion, code) => {
+    const db = freshDb()
+    const deps = makeDeps({ appVersion })
+    const zip = await futureZip()
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual([code])
+    expect(preview.errors).toEqual([SKILL_IMPORT_ERRORS[code]])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS[code])
+    // Nothing placed and no row: the staging dir is gone and the skill never reached the registry.
+    expect(readdirSync(deps.userSkillsDir).filter((n) => !n.startsWith('.'))).toEqual([])
+    expect(getSkillsByDeclaredId(db, 'from-the-future')).toEqual([])
+  })
+})
+
 describe('downgrade is developer-mode gated (DS15)', () => {
   it('refuses a lower version unless developer mode', async () => {
     const db = freshDb()

@@ -19,6 +19,7 @@ import type { Db } from '../db'
 import { log } from '../logging'
 import {
   SKILL_ID_RE,
+  failedSkillNeedsNewerApp,
   parseSemverCore,
   skillNeedsNewerApp,
   type SkillKind,
@@ -77,8 +78,10 @@ export interface DiscoveredSkill {
  * failed folder. The parallel human-readable `errors` strings may carry a (SKILL_ID_RE-validated)
  * folder path and the parser's fixed structural messages; they are for tests/debugging in-process
  * and must never be logged or sent to the renderer (§22-M1).
+ * `needsNewerApp` (W-65, app-update wave T2.14): a SKILL.md this version cannot accept that declares a well-formed
+ * minimum above this app (`failedSkillNeedsNewerApp`): made for a newer version, counted apart from the unreadable ones.
  */
-export type SkillDiscoveryErrorCode = 'invalidFolderName' | 'unreadable' | 'invalidManifest' | 'duplicateId'
+export type SkillDiscoveryErrorCode = 'invalidFolderName' | 'unreadable' | 'invalidManifest' | 'duplicateId' | 'needsNewerApp'
 
 export interface DiscoveryResult {
   skills: DiscoveredSkill[]
@@ -171,7 +174,8 @@ function rowToRecord(r: SkillRow): SkillRecord {
 export function discoverSkillsInDir(
   dir: string,
   source: SkillSource,
-  opts: { limits?: SkillLimits } = {}
+  /** `appVersion`: the running app's, for W-65's verdict on a failed SKILL.md (absent ⇒ '', which never gives it). */
+  opts: { limits?: SkillLimits; appVersion?: string } = {}
 ): DiscoveryResult {
   const skills: DiscoveredSkill[] = []
   const errors: string[] = []
@@ -228,6 +232,13 @@ export function discoverSkillsInDir(
       continue
     }
     if (!parsed.ok || !parsed.manifest) {
+      // W-65 (F-25's typed case): made for a newer version, not broken. Its own code, so Settings → Skills counts it on
+      // its own line (C06/C07) instead of sending the user to look for a typo. Fail-open like the gate: on an app
+      // version it cannot read, the folder stays `invalidManifest`.
+      if (failedSkillNeedsNewerApp(parsed, opts.appVersion ?? '')) {
+        pushError('needsNewerApp', folderName, 'the skill needs a newer app version (skipped)')
+        continue
+      }
       // The parser's errors are fixed structural strings (content-free by SKA-31/§22-M1).
       pushError('invalidManifest', folderName, parsed.errors.join('; '))
       continue
@@ -272,8 +283,8 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   // excluded from discovery, so they otherwise accumulate invisibly on the portable drive forever).
   sweepStaleSkillTempDirs(opts.userSkillsDir, now)
 
-  const app = discoverSkillsInDir(opts.appSkillsDir, 'app', { limits })
-  const user = discoverSkillsInDir(opts.userSkillsDir, 'user', { limits })
+  const app = discoverSkillsInDir(opts.appSkillsDir, 'app', { limits, appVersion: opts.appVersion })
+  const user = discoverSkillsInDir(opts.userSkillsDir, 'user', { limits, appVersion: opts.appVersion })
   const discovered = [...app.skills, ...user.skills]
   const errors = [...app.errors, ...user.errors]
   const errorCodes = [...app.errorCodes, ...user.errorCodes]
@@ -565,10 +576,13 @@ export function setSkillEnabled(
 
 /** Structural summary of the LAST reconcile's discovery errors (SKA-32) — counts+codes only. */
 export interface SkillReconcileStatus {
-  /** Skill folders that exist but could not be read/validated on the last reconcile. */
+  /** Skill folders that exist but could not be read/validated on the last reconcile (W-65: not those made for a newer
+   *  version, which `needsNewerAppCount` counts). */
   errorCount: number
-  /** Structural reason codes (deduplicated) — never folder names or package content (§22-M1). */
+  /** Structural reason codes (deduplicated) of the `errorCount` folders — never folder names or package content (§22-M1). */
   errorCodes: SkillDiscoveryErrorCode[]
+  /** W-65 (T2.14): skill folders made for a newer version (`needsNewerApp`). Absent when there are none. */
+  needsNewerAppCount?: number
 }
 
 /** The registry object carried on `AppContext.skills` — bundles the resolved dirs + a DB getter. */
@@ -615,7 +629,15 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   const doReconcile = (): ReconcileResult => {
     const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits, appVersion })
     reconciledThisSession = true
-    lastStatus = { errorCount: result.errors.length, errorCodes: [...new Set(result.errorCodes)] }
+    // W-65: the folders made for a newer version are counted on their own; the "could not be read" count and its codes
+    // are the rest. `errorCodes` is parallel to `errors`, so the codes alone give both counts.
+    const unreadable = result.errorCodes.filter((code) => code !== 'needsNewerApp')
+    const newer = result.errorCodes.length - unreadable.length
+    lastStatus = {
+      errorCount: unreadable.length,
+      errorCodes: [...new Set(unreadable)],
+      ...(newer > 0 ? { needsNewerAppCount: newer } : {})
+    }
     return result
   }
   const ensureReconciled = (): void => {

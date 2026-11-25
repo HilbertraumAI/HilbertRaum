@@ -10,6 +10,7 @@ import {
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
+  VaultSchemaUnreadableError,
   WorkspaceExistsError,
   WrongPasswordError,
   isVaultNewerError,
@@ -411,6 +412,23 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
           ok: false,
           reason: 'vault_damaged',
           message: tMain('main.workspace.vaultDamaged')
+        }
+      }
+      // W-68 (app-update wave, T2.14): the password verified, but SQLite cannot parse the database's schema ("malformed
+      // database schema"): most likely a newer version's schema text, possibly damage inside the schema itself. Its own
+      // reason and copy (C01: a newer version can open it; if none was ever used here, keep the files and see the
+      // troubleshooting guide), never `vault_damaged`'s "restore from a backup". The log line and the audit line are
+      // fixed words: SQLite's message quotes the schema, and the error keeps none of it. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultSchemaUnreadableError ||
+        (err instanceof Error && err.name === 'VaultSchemaUnreadableError')
+      ) {
+        log.warn('Workspace unlock refused: this version could not read the database schema (password verified)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (database schema unreadable)')
+        return {
+          ok: false,
+          reason: 'workspace_schema_unreadable',
+          message: tMain('main.workspace.schemaUnreadable')
         }
       }
       // #844: the password verified and SQLite found a database, but opening it could not finish

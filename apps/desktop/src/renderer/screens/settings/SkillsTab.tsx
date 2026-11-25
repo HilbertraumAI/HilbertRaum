@@ -46,6 +46,9 @@ export function SkillsTab(): JSX.Element {
   // SKA-32: the last reconcile's structural error summary (counts+codes only, never a folder
   // name). Non-zero → the calm "N skill folders could not be read" notice below the toolbar.
   const [reconcileStatus, setReconcileStatus] = useState<SkillReconcileStatus | null>(null)
+  // W-65: the folders made for a newer version (absent on the status when there are none, or from an older main).
+  const newerSkillFolders =
+    typeof reconcileStatus?.needsNewerAppCount === 'number' ? reconcileStatus.needsNewerAppCount : 0
   // Per-skill enable/disable in-flight set (audit FE-3): the Switch is disabled while a toggle is
   // pending and a second toggle for the same skill is ignored, so rapid clicks can't race (no
   // overlapping enable/disable whose last-resolved refresh wins). Disable-while-pending over
@@ -260,6 +263,12 @@ export function SkillsTab(): JSX.Element {
         </div>
         {/* SH-2 (#145): always-mounted so the FIRST load failure is announced. */}
         <ErrorBanner message={loadError} t={t} />
+        {/* W-65 (T2.14): skill folders made for a newer version get their own line (C06/C07), so the user is
+            sent to the update instead of looking for a typo; the "could not be read" line below no longer counts
+            them. Count only, like it. */}
+        {newerSkillFolders > 0 && (
+          <Banner tone="warning">{tCount('skills.reconcile.needsNewerApp', newerSkillFolders)}</Banner>
+        )}
         {/* SKA-32: reconcile errors were previously dropped silently — a drop-in with one YAML typo
             simply never appeared. Count only; the folder itself is user content and never named. */}
         {(reconcileStatus?.errorCount ?? 0) > 0 && (

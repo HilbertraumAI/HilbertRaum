@@ -41,11 +41,13 @@ import type { Db } from '../db'
 import {
   SKILL_ID_RE,
   SKILL_SEMVER_RE,
+  failedSkillNeedsNewerApp,
   skillNeedsNewerApp,
   summarizeSkillPermissions,
   type SkillManifest,
   type SkillNoteRef
 } from '../../../shared/skill-manifest'
+import { t } from '../../../shared/i18n'
 import type { SkillInfo, SkillPreview } from '../../../shared/types'
 import { parseSkillManifestFromDir } from './manifest'
 import { resolveSkillLimits, type SkillLimits } from './limits'
@@ -81,6 +83,11 @@ export const SKILL_IMPORT_ERRORS = {
   nestedArchive: 'The package contains an embedded archive, which is not allowed.',
   noSkillMd: 'The package does not contain a SKILL.md file.',
   invalidManifest: 'The skill manifest is invalid.',
+  // W-65 (T2.14, decision 6): a SKILL.md this version cannot accept that declares a minimum above this app. The renderer
+  // shows the incompatible-skill text (`skills.incompatible.title`, copy deck X03) for it, never `invalidManifest`'s, so
+  // the structural English is that key's English value, read from the catalog: the SKA-33 matcher finds a wrapped import
+  // error by the catalog's EN text (skillImportI18n.ts), and X03's final value (T2.6) then needs no second edit here.
+  needsNewerApp: t('en', 'skills.incompatible.title'),
   idMismatch: 'The skill id is not a valid name.',
   downgradeBlocked:
     'A newer version of this skill is already installed. Turn on developer mode to install an older version.',
@@ -617,7 +624,11 @@ export function previewSkillPackage(
     if (!existsSync(join(tmp, 'SKILL.md'))) return fail(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(tmp, { limits })
     if (!parsed.ok || !parsed.manifest) {
-      return fail(SKILL_IMPORT_ERRORS.invalidManifest, parsed.notes, parsed.noteCodes)
+      // W-65: a package made for a newer version says so (X03), not "The skill manifest is invalid".
+      const reason = failedSkillNeedsNewerApp(parsed, deps.appVersion ?? '')
+        ? SKILL_IMPORT_ERRORS.needsNewerApp
+        : SKILL_IMPORT_ERRORS.invalidManifest
+      return fail(reason, parsed.notes, parsed.noteCodes)
     }
     const m = parsed.manifest
     if (!SKILL_ID_RE.test(m.id) || !SKILL_SEMVER_RE.test(m.version)) {
@@ -709,7 +720,14 @@ export function importSkill(
     assertNoSymlinks(stagingDir)
     if (!existsSync(join(stagingDir, 'SKILL.md'))) throw new SkillImportError(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(stagingDir, { limits })
-    if (!parsed.ok || !parsed.manifest) throw new SkillImportError(SKILL_IMPORT_ERRORS.invalidManifest)
+    if (!parsed.ok || !parsed.manifest) {
+      // W-65: the same verdict as the preview's.
+      throw new SkillImportError(
+        failedSkillNeedsNewerApp(parsed, deps.appVersion ?? '')
+          ? SKILL_IMPORT_ERRORS.needsNewerApp
+          : SKILL_IMPORT_ERRORS.invalidManifest
+      )
+    }
     const manifest: SkillManifest = parsed.manifest
     if (!SKILL_ID_RE.test(manifest.id) || !SKILL_SEMVER_RE.test(manifest.version)) {
       throw new SkillImportError(SKILL_IMPORT_ERRORS.idMismatch)

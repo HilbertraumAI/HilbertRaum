@@ -1688,6 +1688,15 @@ export const it: UiCatalog<'it'> = {
   'skills.reconcile.folderErrors.other':
     '{count} cartelle di skill non sono leggibili e vengono saltate. Ogni cartella deve ' +
     'contenere un file «SKILL.md» valido.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Ancora nessuna skill',
   'skills.empty.line':
     'Le skill insegnano all’assistente a svolgere un compito specifico. Aggiungine una per ' +
@@ -2713,6 +2722,13 @@ export const it: UiCatalog<'it'> = {
     'La tua password è corretta, ma i dati dell’area di lavoro sull’unità sono danneggiati e non ' +
     'è stato possibile aprirli. Reinserire la password non serve. Non creare una nuova area di ' +
     'lavoro: lascia i file come sono e ripristina la cartella «workspace» da un backup.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'La tua password è corretta, ma il file crittografato dell’area di lavoro manca dall’unità e non ' +
     'è rimasta nessuna copia da cui recuperarlo. Non creare una nuova area di lavoro. Rimetti il ' +
@@ -3287,6 +3303,7 @@ export const it: UiCatalog<'it'> = {
   'chat.packs.outcome.file-missing': 'non consultato: file mancante',
   'chat.packs.outcome.identity-mismatch':
     'non consultato: in questa posizione c’è un archivio diverso',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'non consultato: nome in conflitto con un altro pacchetto',
   'chat.packs.outcome.not-searchable': 'non consultato: senza indice di ricerca',
   'chat.packs.outcome.tools-missing': 'non consultato: programmi kiwix-tools non installati',
@@ -3385,6 +3402,9 @@ export const it: UiCatalog<'it'> = {
     'cartella contiene una dieresi, un accento o un altro carattere non ASCII. Copia il file ' +
     'nella cartella «zim/» dell’unità con un nome senza caratteri di questo tipo e aggiungilo di ' +
     'nuovo.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Non è stato possibile aggiungere l’archivio.',
   'packs.removedToast': 'Pacchetto di conoscenze rimosso',
   'packs.articleCount.one': '{count} articolo',
@@ -3398,6 +3418,10 @@ export const it: UiCatalog<'it'> = {
   'packs.state.identityMismatchTitle':
     'Il file nella posizione di questo pacchetto è un archivio diverso: rimuovi questo pacchetto ' +
     'e aggiungi di nuovo il file',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Senza indice di ricerca',
   'packs.state.notSearchableTitle':
     'Questo archivio non ha un indice per la ricerca nel testo completo. Viene saltato quando ' +

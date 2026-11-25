@@ -144,6 +144,22 @@ describe('skills registry — discovery', () => {
     expect(res.skills).toHaveLength(0)
     expect(res.errors).toHaveLength(0)
   })
+
+  // W-65 (T2.14, F-25's new verdict): a folder whose SKILL.md fails this version's checks but declares a well-formed
+  // minimum above the running app was made for a newer version; it gets its own code, not `invalidManifest`. The gate is
+  // fail-open, so an app version it cannot read ('') leaves the folder `invalidManifest`.
+  it.each([
+    ['an app below the minimum', '0.1.66', 'needsNewerApp'],
+    ['a pre-release of the minimum (older than its own release)', '0.2.0-beta.1', 'needsNewerApp'],
+    ['an unknown app version (the gate is fail-open)', '', 'invalidManifest']
+  ])('a folder made for a newer version, on %s (app %j), is %s', (_name, appVersion, code) => {
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'from-the-future', { kind: 'agent', minAppVersion: '0.2.0' })
+    const res = discoverSkillsInDir(dirs.userSkillsDir, 'user', { appVersion })
+    expect(res.skills).toHaveLength(0)
+    expect(res.errorCodes).toEqual([code])
+    expect(res.errors).toHaveLength(1)
+  })
 })
 
 // SKA-36 (audit 2026-07-03, U7): crash-leftover `.skill-import-*` staging dirs and stale
@@ -368,6 +384,29 @@ describe('skills registry — reconcile', () => {
     writeSkill(dirs.userSkillsDir, 'flaky')
     reconcileSkills(db, opts(dirs))
     expect(getSkill(db, 'user:flaky')!.unavailableAt).toBeNull() // cleared on return
+  })
+
+  // W-65 (T2.14, F-25): a newer version rewrote an installed skill's SKILL.md (a kind this version does not know, made for
+  // a newer version). The row stays, marked unavailable like a vanished folder, with the user's enabled flag and the
+  // stored reason untouched, and the folder is counted as made for a newer version, not as unreadable.
+  it('an installed skill a newer version rewrote keeps its row: unavailable, enabled and reason untouched, counted as newer (W-65)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'mine')
+    writeSkill(dirs.appSkillsDir, 'built-in', { minAppVersion: '0.2.0' }) // the version gate keeps it off
+    const registry = createSkillRegistry({ getDb: () => db, ...dirs, appVersion: '0.1.66' })
+    registry.reconcile()
+    setSkillEnabled(db, 'user:mine', true) // the user's choice: on, no reason
+    const rowOf = (installId: string): unknown =>
+      db.prepare('SELECT enabled, disabled_reason, unavailable_at FROM skills WHERE install_id = ?').get(installId)
+    expect(rowOf('app:built-in')).toEqual({ enabled: 0, disabled_reason: 'min_app_version', unavailable_at: null })
+
+    writeSkill(dirs.userSkillsDir, 'mine', { kind: 'agent', minAppVersion: '0.2.0' })
+    writeSkill(dirs.appSkillsDir, 'built-in', { kind: 'agent', minAppVersion: '0.2.0' })
+    registry.reconcile()
+    expect(rowOf('user:mine')).toEqual({ enabled: 1, disabled_reason: null, unavailable_at: expect.any(String) })
+    expect(rowOf('app:built-in')).toEqual({ enabled: 0, disabled_reason: 'min_app_version', unavailable_at: expect.any(String) })
+    expect(registry.reconcileStatus()).toEqual({ errorCount: 0, errorCodes: [], needsNewerAppCount: 2 })
   })
 
   it('markSkillUnavailable only flips on first detection (idempotent)', () => {
@@ -629,6 +668,24 @@ describe('skills registry — handle + loader', () => {
     rmSync(join(dirs.userSkillsDir, 'Bad_Name'), { recursive: true, force: true })
     registry.reconcile()
     expect(registry.reconcileStatus()).toEqual({ errorCount: 0, errorCodes: [] })
+  })
+
+  // W-65 (T2.14): the folders made for a newer version get their own count (Settings → Skills shows C06/C07 for them), and
+  // the "could not be read" count and codes stop including them. On an app version the gate cannot read, the same folder
+  // is unreadable again (fail-open), so it is counted there.
+  it.each([
+    ['0.1.66', { errorCount: 1, errorCodes: ['invalidManifest'], needsNewerAppCount: 1 }],
+    ['', { errorCount: 2, errorCodes: ['invalidManifest'] }]
+  ])('reconcileStatus() counts the folders made for a newer version apart (app %j, W-65)', (appVersion, expected) => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'good')
+    writeSkill(dirs.userSkillsDir, 'broken', { version: 'not-semver' })
+    writeSkill(dirs.userSkillsDir, 'from-the-future', { kind: 'agent', minAppVersion: '0.2.0' })
+    const registry = createSkillRegistry({ getDb: () => db, ...dirs, appVersion })
+    registry.reconcile()
+    expect(registry.reconcileStatus()).toEqual(expected)
+    expect(JSON.stringify(registry.reconcileStatus())).not.toContain('from-the-future')
   })
 
   it('the loader reads the folder for both sources (one mode)', () => {

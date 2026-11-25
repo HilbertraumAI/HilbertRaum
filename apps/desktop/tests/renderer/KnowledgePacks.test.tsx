@@ -332,7 +332,12 @@ describe('PacksPanel', () => {
     ['tools-missing', /kiwix-tools binaries are not installed/],
     ['manager', 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.'],
     ['path-unsupported', /kiwix-manage cannot read this archive because its file name or folder contains/],
-    ['other', 'The archive could not be added.']
+    ['other', 'The archive could not be added.'],
+    // W-71 (T2.14): C05.
+    [
+      'newer-format',
+      'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it wasn’t added. A newer version of HilbertRaum may be able to add it.'
+    ]
   ] as const)('add flow: failure (%s) shows the reason’s banner text, never a different one', async (reason, expected) => {
     const addKnowledgePacks = vi.fn(async () => ({
       outcome: 'failure' as const,
@@ -367,7 +372,12 @@ describe('PacksPanel', () => {
       'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.'
     ],
     ['path-unsupported', /kiwix-manage dieses Archiv nicht lesen, weil sein Datei- oder Ordnername/],
-    ['other', 'Das Archiv konnte nicht hinzugefügt werden.']
+    ['other', 'Das Archiv konnte nicht hinzugefügt werden.'],
+    // W-71 (T2.14): C05.
+    [
+      'newer-format',
+      'Dieses Archiv nutzt ein neueres ZIM-Format, als diese Version von HilbertRaum lesen kann. Deshalb wurde das Archiv nicht hinzugefügt. Eine neuere Version von HilbertRaum kann es vielleicht hinzufügen.'
+    ]
   ] as const)('add flow (DE): failure (%s) shows the German reason banner', async (reason, expected) => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     const addKnowledgePacks = vi.fn(async () => ({
@@ -582,6 +592,40 @@ describe('PacksPanel', () => {
     )
     expect(await screen.findByText(/Archivdatei wurde nicht gefunden/)).toBeInTheDocument()
     expect(screen.getByText(/ist ein anderes Archiv/)).toBeInTheDocument()
+  })
+
+  // W-71 (T2.14): a pack whose archive is in a newer ZIM format gets the "Newer format" chip (C03), its explanation (C04)
+  // as the chip's title AND as a visible line, never the "File missing" or "Different archive" copy.
+  it.each([
+    [
+      'en',
+      'Newer format',
+      'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it isn’t used. A newer version of HilbertRaum may be able to use it.',
+      ['File missing', 'Different archive']
+    ],
+    [
+      'de',
+      'Neueres Format',
+      'Dieses Archiv nutzt ein neueres ZIM-Format, als diese Version von HilbertRaum lesen kann. Deshalb wird das Archiv nicht verwendet. Eine neuere Version von HilbertRaum kann es vielleicht verwenden.',
+      ['Datei fehlt', 'Anderes Archiv']
+    ]
+  ] as const)('%s: a pack in a newer ZIM format shows the newer-format chip and line (W-71)', async (lang, chip, line, never) => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
+    stubApi(packsPanelStubs({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ id: 'p-newer', title: 'Newer pack', available: false, unavailableReason: 'newer-format' })
+      ]
+    }))
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(line)).toBeInTheDocument()
+    expect(screen.getByText(chip)).toBeInTheDocument()
+    expect(screen.getByTitle(line)).toHaveTextContent(chip)
+    for (const text of never) expect(screen.queryByText(text)).not.toBeInTheDocument()
   })
 
   // #301 P6 (plan §9.23 (b)7): `.packs-list` is an ARIA list — one listitem per pack.
@@ -1163,7 +1207,8 @@ const LONG_TITLE = ((): string => {
   return out.slice(0, 200)
 })()
 
-/** Every reason code in `KnowledgePackOutcomeReason` — leg (g) renders EN copy for all 14. */
+/** Every reason code in `KnowledgePackOutcomeReason` — leg (g) renders EN copy for all 15 (W-71's
+ *  `newer-format` joined in T2.14). */
 const ALL_REASONS: readonly KnowledgePackOutcomeReason[] = [
   'selection-limit',
   'removed',
@@ -1178,7 +1223,8 @@ const ALL_REASONS: readonly KnowledgePackOutcomeReason[] = [
   'read-failed',
   'timeout',
   'deadline',
-  'server-restarted'
+  'server-restarted',
+  'newer-format'
 ]
 
 const T18_COLLECTIONS: Collection[] = [
@@ -1728,7 +1774,7 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
       expect(summary).toHaveAttribute('aria-expanded', 'false')
       await userG.click(summary)
       expect(summary).toHaveAttribute('aria-expanded', 'true')
-      // One list, one item per selected pack — "list, 15 items" is the announced structure.
+      // One list, one item per selected pack — "list, 16 items" is the announced structure.
       expect(screen.getByRole('list')).toBeInTheDocument()
       expect(screen.getAllByRole('listitem')).toHaveLength(outcomes.length)
       expect(screen.getByText(tr('en', 'chat.packs.outcome.searched'))).toBeInTheDocument()

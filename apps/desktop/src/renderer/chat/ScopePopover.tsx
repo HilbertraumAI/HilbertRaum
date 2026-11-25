@@ -413,7 +413,8 @@ export function ScopePopover({
                 // then availability WITH its recorded reason, then searchability. A row that says
                 // "not available" where the outcome will say "different archive at this location"
                 // is a second, quieter lie — the picker names the same cause the answer will.
-                // `packUnavailable` survives only as the fallback for a pre-P3b null reason.
+                // `packUnavailable` is the fallback for a pre-P3b null reason, and (W-71, T2.14) the
+                // hint for a pack in a newer ZIM format, which the answer reports as `newer-format`.
                 const ineligible = !k.enabled
                   ? t('chat.scope.packDisabled')
                   : !k.available

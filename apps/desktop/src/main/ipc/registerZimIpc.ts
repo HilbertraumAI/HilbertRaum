@@ -15,7 +15,7 @@ import { documentsDir } from '../services/ingestion'
 import { ArticlePathError } from '../services/zim/client'
 import { KiwixManageError } from '../services/zim/tools'
 import { zimErrorClass } from '../services/zim/error-class'
-import { ZimHeaderError } from '../services/zim/identity'
+import { ZimHeaderError, ZimNewerFormatError } from '../services/zim/identity'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -44,8 +44,12 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
  * copy; anything else ⇒ 'other'. Since #787 that is the argv the tool actually got
  * (`nonAsciiArgv`, set by `planKiwixManageAdd` on win32 only), not the archive path: most such
  * paths now reach it in an ASCII spelling, and a failure then has another cause.
+ * W-71 (app-update wave, T2.14): `ZimNewerFormatError` (the header says a ZIM format newer than the
+ * tools read, refused before the manager runs) ⇒ `newer-format`, whose banner (C05) says so
+ * instead of blaming the file.
  */
 function classifyAddFailure(err: unknown): KnowledgePackAddFailureReason {
+  if (err instanceof ZimNewerFormatError) return 'newer-format'
   if (err instanceof ZimHeaderError) return 'not-a-zim'
   if (err instanceof KiwixManageError) {
     if (err.kind === 'exit' && err.nonAsciiArgv) return 'path-unsupported'

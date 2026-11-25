@@ -1695,6 +1695,18 @@ export const pl: UiCatalog<'pl'> = {
   'skills.reconcile.folderErrors.other':
     'Pominięto {count} folderu umiejętności, którego nie udało się odczytać. Każdy folder wymaga ' +
     'prawidłowego pliku SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.few':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Nie ma jeszcze umiejętności',
   'skills.empty.line':
     'Umiejętności uczą asystenta wykonywania konkretnego zadania. Dodaj umiejętność, aby zacząć.',
@@ -2705,6 +2717,13 @@ export const pl: UiCatalog<'pl'> = {
     'Hasło jest prawidłowe, ale dane obszaru roboczego na dysku są uszkodzone i nie udało się ' +
     'ich otworzyć. Ponowne wpisanie hasła nie pomoże. Nie twórz nowego obszaru roboczego – ' +
     'zostaw pliki bez zmian i przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you do not have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the docs folder on the ' +
+    'drive.',
   'main.workspace.vaultMissing':
     'Hasło jest prawidłowe, ale na dysku brakuje zaszyfrowanego pliku obszaru roboczego i nie ' +
     'pozostała żadna kopia, z której można by go odzyskać. Nie twórz nowego obszaru roboczego. Odłóż ' +
@@ -3260,6 +3279,7 @@ export const pl: UiCatalog<'pl'> = {
   'chat.packs.outcome.disabled': 'nie przeszukano: pakiet wyłączony',
   'chat.packs.outcome.file-missing': 'nie przeszukano: brak pliku',
   'chat.packs.outcome.identity-mismatch': 'nie przeszukano: inne archiwum w tej lokalizacji',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'nie przeszukano: nazwa koliduje z innym pakietem',
   'chat.packs.outcome.not-searchable': 'nie przeszukano: brak indeksu pełnotekstowego',
   'chat.packs.outcome.tools-missing': 'nie przeszukano: nie zainstalowano narzędzi kiwix-tools',
@@ -3360,6 +3380,9 @@ export const pl: UiCatalog<'pl'> = {
     'pliku lub folderu zawiera literę ze znakiem diakrytycznym (na przykład ą, ł, ü, é) albo ' +
     'inny znak spoza ASCII. Skopiuj plik do folderu „zim/” na dysku pod nazwą bez takich znaków ' +
     'i dodaj go ponownie.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'Nie udało się dodać archiwum.',
   'packs.removedToast': 'Usunięto pakiet wiedzy',
   'packs.articleCount.one': '{count} artykuł',
@@ -3373,6 +3396,10 @@ export const pl: UiCatalog<'pl'> = {
   'packs.state.identityMismatch': 'Inne archiwum',
   'packs.state.identityMismatchTitle':
     'Plik w lokalizacji tego pakietu to inne archiwum – usuń ten pakiet i dodaj plik ponownie',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Brak indeksu pełnotekstowego',
   'packs.state.notSearchableTitle':
     'To archiwum nie ma indeksu wyszukiwania pełnotekstowego. Jest pomijane przy zadawaniu ' +

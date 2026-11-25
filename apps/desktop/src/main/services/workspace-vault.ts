@@ -36,6 +36,7 @@ import {
   openDatabase,
   probeDatabaseFile,
   sqliteJudgedDamaged,
+  sqliteSchemaUnreadable,
   stampLastWriter,
   walAwaitsCheckpoint,
   SCHEMA_VERSION,
@@ -235,9 +236,26 @@ export class VaultOpenFailedError extends Error {
   }
 }
 
+/**
+ * W-68 (app-update wave, T2.14): thrown by `unlockEncryptedVault` when the password is CORRECT and SQLite cannot parse the
+ * decrypted database's schema ({@link sqliteSchemaUnreadable}: "malformed database schema") under a stamp this build
+ * reads. A newer version's schema text does that (one that also raised the stamp is `WorkspaceNewerError`), and so does
+ * damage inside `sqlite_schema`. The IPC layer maps it to `workspace_schema_unreadable`, whose copy (C01) names the newer
+ * version and keeps the safety instruction for real damage ("keep the files as they are"), instead of
+ * `vault_damaged`'s "restore from a backup". The decrypted copy is shredded like after any failure past the decrypt, and
+ * `.enc` is untouched. Content-free: nothing of SQLite's message, which quotes the schema, is kept.
+ */
+export class VaultSchemaUnreadableError extends Error {
+  constructor() {
+    super('The workspace decrypted to a database whose schema this version cannot read')
+    this.name = 'VaultSchemaUnreadableError'
+  }
+}
+
 /** What a failure of the unlock's open, or of its own settings writes, is thrown as (#208, #247,
  *  #844): a newer build's database as itself, SQLite's damage verdict as `VaultDamagedError`, and
- *  anything else as `VaultOpenFailedError`.
+ *  anything else as `VaultOpenFailedError`. W-68 (T2.14): within the damage verdict, a schema SQLite
+ *  cannot parse is `VaultSchemaUnreadableError`, after the probe's `newer`.
  *  T2.9 fix round (R1-1): SQLite's damage verdict on the decrypted file at `dbPath` is checked against
  *  {@link probeDatabaseFile} first: a file it calls `newer` (its header's stamp above this build's) is a newer build's
  *  database, thrown as `WorkspaceNewerError`. A file format this SQLite refuses (header byte 19, the read version, above
@@ -246,7 +264,8 @@ function openFailure(err: unknown, dbPath: string): unknown {
   if (isWorkspaceNewerError(err)) return err
   if (!sqliteJudgedDamaged(err)) return new VaultOpenFailedError(err)
   const probe = probeDatabaseFile(dbPath)
-  return probe.verdict === 'newer' ? new WorkspaceNewerError(probe.found) : new VaultDamagedError()
+  if (probe.verdict === 'newer') return new WorkspaceNewerError(probe.found)
+  return sqliteSchemaUnreadable(err) ? new VaultSchemaUnreadableError() : new VaultDamagedError()
 }
 
 /**

@@ -1743,6 +1743,15 @@ export const fr: UiCatalog<'fr'> = {
   'skills.reconcile.folderErrors.other':
     '{count} dossiers de compétences n’ont pas pu être lus et sont ignorés. Chaque dossier doit ' +
     'contenir un fichier «\u00A0SKILL.md\u00A0» valide.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'Aucune compétence pour l’instant',
   'skills.empty.line':
     'Les compétences apprennent à l’assistant à effectuer une tâche précise. Ajoutez-en une pour ' +
@@ -2815,6 +2824,13 @@ export const fr: UiCatalog<'fr'> = {
     'endommagées et n’ont pas pu être ouvertes. Ressaisir le mot de passe n’y changera rien. Ne ' +
     'créez pas de nouvel espace de travail\u00A0: laissez les fichiers tels quels et restaurez ' +
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum cannot read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version\u00A0: choose Install update from a file… If you do not have an update file for ' +
+    'it, you can download one from {address}/from/{version}. If no newer version was ever used on ' +
+    'this drive, keep the files as they are and see the troubleshooting guide in the docs folder on ' +
+    'the drive.',
   'main.workspace.vaultMissing':
     'Votre mot de passe est correct, mais le fichier chiffré de l’espace de travail est absent du ' +
     'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
@@ -3426,6 +3442,7 @@ export const fr: UiCatalog<'fr'> = {
   'chat.packs.outcome.disabled': 'non interrogé\u00A0: pack désactivé',
   'chat.packs.outcome.file-missing': 'non interrogé\u00A0: fichier absent',
   'chat.packs.outcome.identity-mismatch': 'non interrogé\u00A0: autre archive à cet emplacement',
+  'chat.packs.outcome.newer-format': 'not searched\u00A0: newer ZIM format',
   'chat.packs.outcome.not-served': 'non interrogé\u00A0: conflit de nom avec un autre pack',
   'chat.packs.outcome.not-searchable': 'non interrogé\u00A0: pas d’index de recherche plein texte',
   'chat.packs.outcome.tools-missing': 'non interrogé\u00A0: programmes kiwix-tools non installés',
@@ -3525,6 +3542,9 @@ export const fr: UiCatalog<'fr'> = {
     'dossier contient un tréma, un accent ou un autre caractère non ASCII. Copiez le fichier ' +
     'dans le dossier «\u00A0zim/\u00A0» du disque sous un nom sans ces caractères, puis ' +
     'ajoutez-le de nouveau.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it was not ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'L’archive n’a pas pu être ajoutée.',
   'packs.removedToast': 'Pack de connaissances retiré',
   'packs.articleCount.one': '{count} article',
@@ -3539,6 +3559,10 @@ export const fr: UiCatalog<'fr'> = {
   'packs.state.identityMismatchTitle':
     'Le fichier situé à l’emplacement de ce pack est une autre archive\u00A0: retirez ce pack et ' +
     'ajoutez de nouveau le fichier',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it is not ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   'packs.state.notSearchable': 'Sans index',
   'packs.state.notSearchableTitle':
     'Cette archive n’a pas d’index de recherche plein texte. Elle est ignorée lors des ' +

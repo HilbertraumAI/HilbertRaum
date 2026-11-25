@@ -1152,6 +1152,21 @@ export function sqliteJudgedDamaged(err: unknown): boolean {
   return code === SQLITE_CORRUPT || code === SQLITE_NOTADB
 }
 
+/**
+ * W-68 (app-update wave, T2.14): whether SQLite could not parse the database's SCHEMA. True for a SQLITE_CORRUPT error
+ * whose message starts with SQLite's fixed "malformed database schema": what a schema row this SQLite cannot parse
+ * raises (a newer version's schema text that came without a stamp bump, #985's rule), and what damage inside
+ * `sqlite_schema` raises too. `errstr` cannot tell it apart (it is "database disk image is malformed" for every CORRUPT),
+ * so the message is read, for its prefix only: the rest quotes a schema object's name and its SQL, and is never logged,
+ * stored or sent. The unlock maps it to its own copy instead of "restore from a backup" (`openFailure`,
+ * workspace-vault.ts). {@link sqliteJudgedDamaged} still calls it damage, and its other callers keep their verdicts.
+ */
+export function sqliteSchemaUnreadable(err: unknown): boolean {
+  if (sqlitePrimaryCode(err) !== SQLITE_CORRUPT) return false
+  const message = (err as { message?: unknown }).message
+  return typeof message === 'string' && message.startsWith('malformed database schema')
+}
+
 /** The primary SQLite result code of a `node:sqlite` error (the low byte of its extended `errcode`), else null. */
 function sqlitePrimaryCode(err: unknown): number | null {
   const code = (err as { errcode?: unknown } | null)?.errcode

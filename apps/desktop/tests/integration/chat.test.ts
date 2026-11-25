@@ -1114,6 +1114,20 @@ describe('messages.pack_outcomes_json — per-ask knowledge-pack outcomes (#301 
     expect(getLatestMessage(db, conv.id)?.packOutcomes).toBeUndefined()
   })
 
+  // W-71 (T2.14): `newer-format` is a code this build writes (a ticked pack whose archive is in a newer ZIM format), so a
+  // stored row carrying it reads back like every other known code instead of being dropped as a newer build's.
+  it('reads back a stored newer-format outcome (W-71)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const newer: KnowledgePackOutcome[] = [
+      { packId: 'uuid-future', title: 'Zukunft', status: 'skipped', reason: 'newer-format', found: 0, admitted: 0 }
+    ]
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a', packOutcomes: newer })
+    expect(getLatestMessage(db, conv.id)?.packOutcomes).toEqual(newer)
+    expect(listMessages(db, conv.id).at(-1)?.packOutcomes).toEqual(newer)
+  })
+
   it('parses tolerantly: a malformed payload reads as undefined, and unknown or wrong-typed entries are dropped', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
