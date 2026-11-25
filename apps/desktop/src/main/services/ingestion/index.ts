@@ -63,7 +63,7 @@ import {
 import type { PlaintextOpsRegistry } from './plaintext-ops'
 import { failureRowMessage } from './engine-failure'
 import { locateOriginal, locateStoredCopy, resolveStoredCopy, warnOriginalChanged } from './stored-copy'
-import { canonicalLeafFor } from './stored-copy-leaf'
+import { canonicalLeafFor, storedCopyLeaf } from './stored-copy-leaf'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
@@ -766,6 +766,13 @@ export async function prepareDocument(
   const op = deps.plaintextOps?.register(deps.plaintextOpKind ?? 'import-prepare', deps.signal)
   try {
     setStatus(db, documentId, 'extracting')
+    // T2.7 security re-check 2 (N-3): every file below is named after the row's id (`<store>/<id><ext>[.enc]`,
+    // `<store>/<id>.parse<ext>`). An id that is no bare name (a separator, `.` or `..`: the rule `canonicalLeafFor`
+    // applies to a stored copy's leaf) leads out of the store, so the row fails as its source missing, with nothing
+    // written. Every id the app writes is a UUID.
+    if (storedCopyLeaf(documentId) !== documentId || documentId === '' || documentId === '.' || documentId === '..') {
+      throw new Error(t('en', 'main.ingest.sourceMissing'))
+    }
     // Perf marks identify a document only by its random UUID (perf.ts content rules).
     perfMark('ingest_start', { docId: documentId, bytes: row.size_bytes ?? null })
 

@@ -223,6 +223,31 @@ describe('encrypted document cache (H1)', () => {
       expect(readdirSync(store)).toEqual([])
     }
   })
+
+  // T2.7 security re-check 2 (N-3): the import and the re-index name the store's files after the row's id
+  // (`<store>/<id><ext>[.enc]`, `<store>/<id>.parse<ext>`). An id with `..` or a separator (a row the app did not make)
+  // led out of the store: the original was encrypted over a file elsewhere on the drive. An id that is no bare name is
+  // refused before anything is written, and the row fails as its source missing.
+  it('a row whose id leads out of the store: the re-index writes nothing outside it and the file there stays (N-3)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    const outside = join(dirname(store), 'outside')
+    mkdirSync(outside)
+    const victim = join(outside, `victim.txt${ENCRYPTED_DOC_SUFFIX}`)
+    writeFileSync(victim, 'USER FILE: elsewhere on the drive')
+    const crafted = join('..', 'outside', 'victim')
+    db.prepare('UPDATE documents SET id = ? WHERE id = ?').run(crafted, doc.id)
+
+    const info = await reindexDocument(db, store, crafted, { cipher: testCipher() })
+
+    expect(readdirSync(outside)).toEqual([`victim.txt${ENCRYPTED_DOC_SUFFIX}`])
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: elsewhere on the drive')
+    expect(readdirSync(store)).toEqual([])
+    expect(info.status).toBe('failed')
+    const row = db.prepare('SELECT error_message FROM documents WHERE id = ?').get(crafted) as { error_message: string | null }
+    expect(row.error_message).toBe(t('en', 'main.ingest.sourceMissing'))
+  })
 })
 
 // DB-2 / DB-7: concurrent reads of ONE encrypted copy each decrypt into their own `.parse`
