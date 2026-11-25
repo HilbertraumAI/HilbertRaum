@@ -497,12 +497,16 @@ const unavailableNoticed = new WeakMap<object, number>()
 
 /**
  * W-70 (app-update plan, T3.11; frozen): is `modelId` a model this version cannot list, i.e. no entry of
- * `discoverManifests(...).manifests` has it? That covers an id listed only as needing a newer HilbertRaum (the usual
- * case after a "Go back": the restored content keeps the newer version's definitions), an id whose definition failed
- * validation, and an id no definition names. Not this case (false): no definitions folder, or one that cannot be read
- * (the sentence would be false there; the start path says what is wrong). A listed model whose weight file is missing
- * or whose role is not chat is listed. The verdict is kept for the unlocked session (`unlockEpoch`) and the id, so the
- * status the shell polls costs one manifest walk per session, not one per poll; a failed read is not kept. Never throws.
+ * `discoverManifests(...).manifests` has it, and the walk can say so? It can when the id is listed only as needing a
+ * newer HilbertRaum (`unsupported`: the usual case after a "Go back", where the restored content keeps the newer
+ * version's definitions), or when the walk reported no error at all (an id no definition names). Not this case (false):
+ * any definition file the walk could not read or parse (review R1-3: an antivirus hold on a freshly plugged-in stick;
+ * the walk reports a read and a validation failure alike), since the held file may be the active model's own and the
+ * sentence would then be false; also no definitions folder, or one that cannot be read. The start path then runs as
+ * before and says what is wrong; the cost is that an id whose only definition fails validation (a later writer's breach
+ * of F-23) gets no notice either. A listed model whose weight file is missing or whose role is not chat is listed. The
+ * verdict is kept for the unlocked session (`unlockEpoch`) and the id, so the status the shell polls costs one manifest
+ * walk per session, not one per poll; a failed folder read is not kept. Never throws.
  */
 export function activeModelUnlisted(ctx: Pick<AppContext, 'workspace' | 'manifestsDir'>, modelId: string): boolean {
   try {
@@ -510,7 +514,10 @@ export function activeModelUnlisted(ctx: Pick<AppContext, 'workspace' | 'manifes
     const kept = unlistedVerdicts.get(ctx.workspace)
     if (kept && kept.epoch === epoch && kept.modelId === modelId) return kept.unlisted
     if (!ctx.manifestsDir) return false
-    const unlisted = !discoverManifests(ctx.manifestsDir).manifests.some((m) => m.manifest.id === modelId)
+    const walk = discoverManifests(ctx.manifestsDir)
+    const unlisted =
+      !walk.manifests.some((m) => m.manifest.id === modelId) &&
+      (walk.errors.length === 0 || walk.unsupported.some((u) => u.manifest.id === modelId))
     unlistedVerdicts.set(ctx.workspace, { epoch, modelId, unlisted })
     return unlisted
   } catch {

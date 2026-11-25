@@ -35,6 +35,7 @@ import {
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
+import { log } from '../../src/main/services/logging'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { RuntimeOs } from '../../src/shared/runtime-sources'
 import { rawSetting } from '../helpers/db-fixtures'
@@ -240,6 +241,10 @@ describe('healEngineLoadState: a GPU flag set under another engine build is trie
     // "Go back": the flag was set under the newer version's engine, release 1 runs its own older one.
     { own: 'an older version', arrange: (r) => engine(r, { marker: { ...STAMPED, version: 'b8000' } }), rearmed: true },
     { own: 'another backend', arrange: (r) => engine(r, { marker: { ...STAMPED, backend: 'cuda' } }), rearmed: true },
+    // Owner, 2026-11-25 (review R1-1): "the Mac gets its GPU back". The same version built for the Mac (Metal) is another
+    // build, so a Kit flagged on a Windows or Linux computer (Vulkan) gets a new try on a Mac. A known limit, kept: back on
+    // that computer the flag is gone, and its card fails one GPU start again (a per-computer flag is the real fix).
+    { own: 'the same version built for the Mac (Metal)', arrange: (r) => engine(r, { marker: { ...STAMPED, backend: 'metal' } }), rearmed: true },
     // Inequality, not F-24's order: a tag shape release 1 cannot order is simply another build.
     { own: 'a tag shape release 1 cannot order', arrange: (r) => engine(r, { marker: { ...STAMPED, version: 'b9849-rc1' } }), rearmed: true },
     { own: 'unknown (a program without an install marker)', arrange: (r) => engine(r, { marker: null }), rearmed: false },
@@ -335,7 +340,76 @@ describe('healEngineLoadState: a GPU flag set under another engine build is trie
     expect(getSettings(db).gpuAutoDisabled).toBe(false)
     expect(rawSetting(db, 'gpuAutoDisabledEngine')).toBeNull()
   })
+
+  // Review R1-2: the store writes a patch key by key with no transaction, so the order is what a write cut short leaves
+  // (the drive pulled, the app killed). A clear writes the flag first and its stamp last: cut short anywhere, it leaves at
+  // worst a stamp beside a false flag, which nothing reads. Stamp first left a set flag with no stamp, which never re-arms.
+  it.each<{ clear: string; arrange: () => { db: Db; root: string }; error: string }>([
+    {
+      clear: 'the re-arm under another build',
+      arrange: () => {
+        const db = flagged(JSON.stringify(STAMPED))
+        const root = tmp()
+        engine(root, { marker: { ...STAMPED, version: 'b12110' } })
+        return { db, root }
+      },
+      error: GPU_FAULT
+    },
+    {
+      clear: 'the #530 clear of a load refusal',
+      arrange: () => {
+        const db = freshDb()
+        updateSettings(db, { gpuAutoDisabledEngine: STAMPED, gpuAutoDisabled: true, gpuLastError: LEGACY_GPU_ERROR })
+        const root = tmp()
+        engine(root, { marker: STAMPED })
+        return { db, root }
+      },
+      error: LEGACY_GPU_ERROR
+    }
+  ])('$clear, cut short after any of its writes, never leaves the flag set without its stamp', ({ arrange, error }) => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      for (const [writes, left] of [
+        [1, { gpuAutoDisabled: false, gpuLastError: error, gpuAutoDisabledEngine: STAMPED }],
+        [2, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: STAMPED }]
+      ] as const) {
+        const { db, root } = arrange()
+        cutGpuRowsShortAfter(db, writes)
+
+        expect(() => healEngineLoadState(unlockedCtx(db, root), LINUX)).not.toThrow()
+
+        expect(gpuRows(db), `cut short after ${writes} write(s)`).toEqual(left)
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
+
+/** The three settings rows a GPU flag's set and clears write, as stored. */
+function gpuRows(db: Db): Record<string, unknown> {
+  return Object.fromEntries(
+    ['gpuAutoDisabled', 'gpuLastError', 'gpuAutoDisabledEngine'].map((key) => [key, rawSetting(db, key)])
+  )
+}
+
+/**
+ * A write cut short (R1-2): the next `writes` updates of the three GPU rows land, every later one fails as a pulled drive
+ * would. All three rows exist (seeded), so each write of a patch is one UPDATE (the store's upsert of an existing key).
+ */
+function cutGpuRowsShortAfter(db: Db, writes: number): void {
+  for (const row of Object.values(gpuRows(db))) expect(row).not.toBeUndefined()
+  db.exec(`
+    CREATE TABLE cut_budget (n INTEGER NOT NULL);
+    INSERT INTO cut_budget (n) VALUES (${writes});
+    CREATE TRIGGER cut_gpu_rows_short BEFORE UPDATE ON settings
+    WHEN OLD.key IN ('gpuAutoDisabled', 'gpuLastError', 'gpuAutoDisabledEngine')
+    BEGIN
+      SELECT RAISE(ABORT, 'drive pulled') WHERE (SELECT n FROM cut_budget) <= 0;
+      UPDATE cut_budget SET n = n - 1;
+    END;
+  `)
+}
 
 describe('rewriteEngineFailureRows (#530)', () => {
   it('maps the Windows no-text shape (an NTSTATUS exit code only) to the generic canonical text', () => {

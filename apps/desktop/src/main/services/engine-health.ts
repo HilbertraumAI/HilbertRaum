@@ -79,7 +79,8 @@ export function healEngineLoadState(
     if (!workspaceAdmitsWork(ctx.workspace)) return result
     const s = getSettings(ctx.db)
     if (s.gpuAutoDisabled && s.gpuLastError && classifyLoadFailureMessage(s.gpuLastError, opts) !== null) {
-      updateSettings(ctx.db, { gpuAutoDisabledEngine: null, gpuAutoDisabled: false, gpuLastError: null })
+      // W-70 (review R1-2): a clear writes the flag first and its stamp last (`rearmGpuForOtherEngine`).
+      updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: null })
       result.gpuFlagCleared = true
       log.info('Cleared a compatibility-mode flag that an engine load failure had set (not a GPU fault)')
     } else if (s.gpuAutoDisabled && s.gpuAutoDisabledEngine !== null) {
@@ -100,15 +101,19 @@ export function healEngineLoadState(
  * order: an older, a newer and a tag this version cannot order are all another build. An unknown own build (no marker
  * this app can read, a dev binary outside the folder) and a missing engine keep the flag until the next session
  * start; so does a flag with no stamp this app can read (every workspace flagged before release 1), as decided by the
- * owner on 2026-11-25. One patch, the stamp first; no audit event (the #530 clear writes none either). A wrong re-arm
- * costs one failed GPU start, which sets the flag again with this build's stamp. Runs in its own try: a failure here
- * never stops the row heal.
+ * owner on 2026-11-25. The same version built for another OS is another build too (the Mac's Metal against Vulkan
+ * elsewhere): one Kit moved between a Mac and a Windows or Linux computer re-arms on each move (owner, 2026-11-25: "the
+ * Mac gets its GPU back"; a known limit). One patch, the flag first and the stamp last (review R1-2): the store writes
+ * key by key with no transaction, so a write cut short leaves at worst a stamp beside a false flag, which nothing reads,
+ * never a set flag without its stamp, which would never re-arm. The #530 clear and "Try GPU again" keep the same order.
+ * No audit event (the #530 clear writes none either). A wrong re-arm costs one failed GPU start, which sets the flag
+ * again with this build's stamp. Runs in its own try: a failure here never stops the row heal.
  */
 function rearmGpuForOtherEngine(ctx: Pick<AppContext, 'db' | 'paths' | 'isDev'>, stamped: EngineBuildStamp): void {
   try {
     const own = ownEngineBuild(ctx.paths.rootPath, ctx.isDev)
     if (own === null || (own.version === stamped.version && own.backend === stamped.backend)) return
-    updateSettings(ctx.db, { gpuAutoDisabledEngine: null, gpuLastError: null, gpuAutoDisabled: false })
+    updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: null })
     log.info('Cleared a compatibility-mode flag set under another engine build: the graphics card gets a new try', {
       stamped,
       own

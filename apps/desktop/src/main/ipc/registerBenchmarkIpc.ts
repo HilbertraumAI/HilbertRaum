@@ -891,8 +891,9 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
 export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   ctx.probeGpu?.invalidate()
   clearSpeculativeSuppression()
-  // W-70: the engine build the flag was set under goes with it.
-  updateSettings(ctx.db, { gpuAutoDisabledEngine: null, gpuAutoDisabled: false, gpuLastError: null })
+  // W-70: the engine build the flag was set under goes with it, written last (review R1-2): the store writes key by key,
+  // so a write cut short leaves at worst a stamp beside a false flag, never a set flag without its stamp.
+  updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: null })
   // The cleared flags are snapshot inputs of their own (`cpuOnly` → the resident rows, the
   // effective class, the verdict), so this write pushes right here (PR #303 audit A-D1): the
   // probe's own push follows its WRITE — on this branch every path writes (PR #308 decision 6:

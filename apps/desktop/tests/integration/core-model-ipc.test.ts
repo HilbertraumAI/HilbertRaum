@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -303,6 +303,30 @@ describe('registerCoreIpc', () => {
     ws.completeLock()
     ws.completeUnlock()
     expect(await unavailable()).toBe(false)
+  })
+
+  // W-70 review R1-4: the status's guard. No definition names an empty id or a value of another type, so without the guard
+  // Home would show "Choose a model" for a stored value that is no model choice at all.
+  it.each<[string, unknown]>([
+    ['an empty id', ''],
+    ['an id of another type (only a later writer could store one)', 42]
+  ])('getAppStatus never flags %s as a model this version cannot list (W-70)', async (_label, stored) => {
+    const db = seededDb()
+    db.prepare("UPDATE settings SET value_json = ? WHERE key = 'activeModelId'").run(JSON.stringify(stored))
+    expect(getSettings(db).activeModelId).toBe(stored)
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: { configPath: bogusConfigDir() },
+      db,
+      manifestsDir: manifestsDirWith(rawManifest()),
+      workspace: {
+        ...workspaceStandIn(),
+        getState: (): WorkspaceStateInfo => ({ state: 'unlocked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+      }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+
+    expect(((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).activeModelUnavailable).toBe(false)
   })
 
   it('writeClipboard writes text via the MAIN clipboard module and reports success', async () => {
@@ -2428,6 +2452,87 @@ describe('maybeAutoStartActiveModel', () => {
 
       expect(notices).toEqual([])
       expect(startRequests).toBe(1)
+    })
+
+    /**
+     * Model definitions where one file cannot be read just now (review R1-3: an antivirus hold on a freshly plugged-in
+     * stick): a folder link named like a definition, which the walk lists as a file and whose read fails (EISDIR) on every
+     * OS. The walk reports it in `errors` and goes on. `junction` needs no privilege on Windows and is a folder symlink elsewhere.
+     */
+    function withHeldDefinition(...readable: Array<Record<string, unknown>>): string {
+      const dir = manifestsDirWith(...readable)
+      symlinkSync(mkdtempSync(join(tmpdir(), 'hilbertraum-held-definition-')), join(dir, 'held.yaml'), 'junction')
+      return dir
+    }
+
+    /** Home's read in the same session: what the status the shell polls says, over the same workspace (one verdict). */
+    async function homeFlagged(db: Db, ws: WorkspaceStandIn, manifestsDir: string = CATALOG_MANIFESTS): Promise<boolean | undefined> {
+      registerCoreIpc({
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db,
+        manifestsDir,
+        workspace: Object.assign(ws, {
+          getState: (): WorkspaceStateInfo => ({ state: 'unlocked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+        })
+      } as unknown as AppContext)
+      return ((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).activeModelUnavailable
+    }
+
+    it('one definition that cannot be read just now: no notice, today’s start path, and Home not flagged (R1-3)', async () => {
+      // The held file may be the active model's own: the walk cannot say, so "isn't available in this version" could be
+      // false, and kept for the whole session. A manual start a moment later finds it.
+      const dir = withHeldDefinition(rawManifest({ id: 'another-chat-model', local_path: 'models/chat/another.gguf' }))
+      expect(discoverManifests(dir).errors).toHaveLength(1)
+      const db = seededDb()
+      updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+      const ws = workspaceStandIn()
+
+      const { notices, startRequests } = await autoStart(db, { manifestsDir: dir, workspace: ws })
+
+      expect(notices).toEqual([])
+      expect(startRequests).toBe(1)
+      expect(await homeFlagged(db, ws, dir)).toBe(false)
+    })
+
+    it('an id listed as needing a newer HilbertRaum gets the notice even while another definition cannot be read (R1-3)', async () => {
+      const dir = withHeldDefinition(rawManifest({ id: NEWER, local_path: 'models/chat/qwen9.gguf', min_app_version: '999.0.0' }))
+      const walk = discoverManifests(dir)
+      expect([walk.unsupported.map((u) => u.manifest.id), walk.errors.length]).toEqual([[NEWER], 1])
+      const db = seededDb()
+      updateSettings(db, { activeModelId: NEWER })
+      const ws = workspaceStandIn()
+
+      const { notices, startRequests } = await autoStart(db, { manifestsDir: dir, workspace: ws })
+
+      expect(notices).toEqual([[t('en', 'main.models.activeUnavailable', { model: NEWER }), 'models']])
+      expect(startRequests).toBe(0)
+      expect(await homeFlagged(db, ws, dir)).toBe(true)
+    })
+
+    it('an active model id of another type (only a later writer could store one) keeps today’s start path, no notice (R1-4)', async () => {
+      const db = seededDb()
+      db.prepare("UPDATE settings SET value_json = '42' WHERE key = 'activeModelId'").run()
+      expect(getSettings(db).activeModelId).toBe(42)
+
+      const { notices, startRequests } = await autoStart(db)
+
+      expect(notices).toEqual([])
+      expect(startRequests).toBe(1)
+    })
+
+    it('the auto-start switch off: no notice and no start, and Home still shows its no-model state (R1-4)', async () => {
+      const db = seededDb()
+      updateSettings(db, { activeModelId: NEWER, autoStartActiveModel: false })
+      const ws = workspaceStandIn()
+
+      const { notices, startRequests } = await autoStart(db, { workspace: ws })
+
+      expect(notices).toEqual([])
+      expect(startRequests).toBe(0)
+      // The status does not read the switch: Home shows "Almost set up.", "No model selected yet" and "Choose a model"
+      // (ChatHomeNav's W-70 row), which holds, since a manual start cannot run this model either.
+      expect(await homeFlagged(db, ws)).toBe(true)
     })
   })
 })

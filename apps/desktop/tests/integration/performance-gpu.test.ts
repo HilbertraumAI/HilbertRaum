@@ -71,6 +71,7 @@ import type {
   TranslationDeviceStatus
 } from '../../src/shared/types'
 import { modelPlacement } from '../helpers/benchmark-records'
+import { rawSetting } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
 import {
   CARDS,
@@ -903,5 +904,37 @@ describe('"Try GPU again" and the session latches (#182, #372)', () => {
 
     expect(settings.gpuAutoDisabled).toBe(false)
     expect(settings.gpuAutoDisabledEngine).toBeNull()
+  })
+
+  // W-70 review R1-2: the store writes a patch key by key with no transaction, so a clear cut short (the drive pulled)
+  // keeps what it wrote so far. The flag goes first and its stamp last: at worst a stamp is left beside a false flag,
+  // which nothing reads, never a set flag with no stamp, which no later session start would ever re-arm.
+  it('cut short after any of its writes, it never leaves the flag set without its engine stamp', async () => {
+    const STAMP = { version: 'b9849', backend: 'vulkan' }
+    const gpuRows = (db: Db): Record<string, unknown> =>
+      Object.fromEntries(['gpuAutoDisabled', 'gpuLastError', 'gpuAutoDisabledEngine'].map((key) => [key, rawSetting(db, key)]))
+    for (const [writes, left] of [
+      [1, { gpuAutoDisabled: false, gpuLastError: 'Vulkan device lost', gpuAutoDisabledEngine: STAMP }],
+      [2, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: STAMP }]
+    ] as const) {
+      const root = freshRoot()
+      const db = seededDb(root)
+      updateSettings(db, { gpuAutoDisabledEngine: STAMP, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+      // The next `writes` updates of the three rows land (all three exist, so each is one UPDATE); later ones fail.
+      db.exec(`
+        CREATE TABLE cut_budget (n INTEGER NOT NULL);
+        INSERT INTO cut_budget (n) VALUES (${writes});
+        CREATE TRIGGER cut_gpu_rows_short BEFORE UPDATE ON settings
+        WHEN OLD.key IN ('gpuAutoDisabled', 'gpuLastError', 'gpuAutoDisabledEngine')
+        BEGIN
+          SELECT RAISE(ABORT, 'drive pulled') WHERE (SELECT n FROM cut_budget) <= 0;
+          UPDATE cut_budget SET n = n - 1;
+        END;
+      `)
+
+      await expect(tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => [RTX]) }))).rejects.toThrow('drive pulled')
+
+      expect(gpuRows(db), `cut short after ${writes} write(s)`).toEqual(left)
+    }
   })
 })
