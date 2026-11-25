@@ -226,16 +226,23 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 **The database schema and SQLite**
 - A foreign key onto one of release 1's tables never refuses a delete: `ON DELETE CASCADE` or
   `SET NULL`, or no key at all for data that must outlive release 1's delete.
-- No function release 1's SQLite lacks in a trigger, generated column, `CHECK` or index expression on
-  a table release 1 reads or writes.
-- Schema text release 1's SQLite cannot parse ships only with a higher stamp, and the stamp is raised
-  for nothing else: without it release 1 reads the database as damaged (#985).
+- Release 1's own statements keep succeeding: below a higher stamp, its tables change only by added
+  columns that are nullable or have a default, and gain no `NOT NULL`, `UNIQUE`, `CHECK`, `STRICT` or
+  raising trigger its writes can trip; none of its tables or columns is dropped or renamed (release 1
+  creates a missing one again, empty).
+- No function, collation, virtual-table module or FTS5 tokenizer release 1's SQLite lacks in a
+  trigger, generated column, `CHECK`, index expression or partial index on a table release 1 reads or
+  writes.
+- Schema text release 1's SQLite cannot parse ships only with a higher stamp: without it release 1
+  reads the database as damaged (#985). The stamp is raised only for a change release 1 must not open:
+  this one, a file-format change, a change its own statements cannot survive.
 - A database file release 1's SQLite refuses to open (header byte 19 above 2, any other SQLite-level
   format change) also carries a higher stamp.
 - Whatever the stamp: the file starts with the SQLite magic and is at least 100 bytes long, its page
   size is a power of two from 512 to 65,536, and its schema format number is at most 4.
 - `documents.ocr_meta_json` keeps a valid `pageCount` and `textPageCount` on every row that has
-  `ocr_json`; otherwise release 1's open writes the sidecar again with its own fields only.
+  `ocr_json`; otherwise release 1's open writes the sidecar again with its own fields only, as its OCR
+  run and its re-index of a photo do.
 - `schema_meta.last_writer` is at most 256 characters of printable ASCII with no space and a non-empty
   field on each side of its first `;`. Release 1 overwrites it whole at every open, so it holds no
   data of a later version and proves nothing about who wrote since. `schema_meta` keeps its columns
@@ -243,35 +250,63 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 
 **The vault, the journal and stages**
 - A new vault format is one release 1 refuses: a descriptor `version` above 2, a new `kdf.algo`
-  value, a journal `version` above 1, a frame `HRAUMEN2` to `HRAUMEN9` (then a higher descriptor
-  version).
+  value, a journal `version` above 1, a frame `HRAUMEN2` to `HRAUMEN9` at `.enc` or at a stage (then
+  a higher descriptor version). Release 1 reads the frame of those files only, and a stage in a new
+  frame locks it out of the whole workspace.
+- Stored document and image copies stay `HRAUMEN1` while the descriptor version is 2: release 1 does
+  not refuse a stored copy in another frame, it fails on that document. A new stored-copy frame needs
+  a descriptor version above 2.
 - Under descriptor version 2 the key-derivation parameters stay inside release 1's bounds (key length
   32; scrypt `N` a power of two from 1,024 to 2^22, `r` 1 to 32, `p` 1 to 16; argon2id `m` 8 to 2^21
   KiB, `t` 1 to 64, `p` 1 to 16).
 - No new field that matters under descriptor version 2 or journal version 1: release 1 drops a field
   it does not know when it rewrites either file.
-- A stage counts only once the version-2 descriptor that wraps its data key is on the drive: before
-  that, release 1 deletes it.
-- A journal lists only stages made under the data key the descriptor wraps: release 1 rolls a listed
-  stage forward with no key check.
+- A stage counts only once the version-2 descriptor that wraps its data key is on the drive: under a
+  version-1 descriptor, or with no descriptor, no `.enc` and no journal, release 1 deletes it.
+- Every stage release 1 can roll forward with no key check (one a journal lists, or one whose target
+  is gone) is under the data key the descriptor wraps.
 - A version-1 journal entry is the stage's full path, ends `.enc.new`, and lies inside the workspace
   folder with no link on the way; any other entry vouches for nothing (#1014).
 - Never `.enc` and a waiting database stage under the same data key, whichever was written first:
-  release 1 deletes that stage (#1027).
+  release 1 deletes such a stage when no journal lists it (#1027), and rolls a listed one over `.enc`.
 - No file named `*.enc.new` in `documents/` or `images/` that is not a stage of the stored copy
   beside it.
 - `hilbertraum.sqlite.recovery` is a plaintext SQLite copy of the workspace that only a failed lock or
   a crash leaves, and nothing else is ever stored under that name.
 - A session that ended without a lock (a live write-ahead log beside `.enc`) is lost at any release-1
-  start: no promise of crash recovery on a drive release 1 may still open.
+  start that sweeps: no promise of crash recovery on a drive release 1 may still open. So is a working
+  copy beside a staged `.enc.new` when `.enc` is missing.
 
 **File names in the workspace**
 - No stored file in `documents/` or `images/` has a name that holds `.parse` or ends `.tmp` (release
   1's start shreds those); `repo-hygiene.test.ts` fails when a readable file type would give its stored
   copy such a name.
+- The stored-copy columns name only that row's own copy: `documents.stored_name` is the bare name
+  `<id><ext>[.enc]`, `stored_path` a path to that same file, `image_sessions.stored_name` a bare name in
+  `images/` that only that session uses. Release 1 shreds the file they lead to on delete, and its
+  encrypted re-index shreds a plaintext copy after encrypting it. Never a shared copy or the user's
+  own file.
 - A later version removes its own orphans: release 1 deletes only the files it knows.
 - Nothing of a later version's own under a name release 1 deletes or replaces (the write temps, the
-  quarantined journal, the lost-session marker, the rotated log: named in §7.7).
+  quarantined journal, `zim-transient/`, the lost-session marker, the log files: named in §7.7).
+
+**Rows release 1 reads, resets and creates again**
+- `documents.status` holds only release 1's seven values (`queued`, `extracting`, `chunking`,
+  `embedding`, `indexed`, `failed`, `deleted`): release 1 reads any other as `failed`.
+- No row is left `queued`, `extracting`, `chunking` or `embedding`, with `tree_status` `building` or
+  `extract_status` `extracting`, or as a `started` skill run, for work a later version means to resume:
+  release 1 resets them.
+- A document's title keeps its file extension: release 1 picks the parser, the MIME type and the
+  stored copy's name from it on every re-index.
+- A row of a new kind never goes into `messages`: every row whose `kind` is not `'compaction'` is a
+  chat message to release 1 (listed, sent to the model, searched).
+- `messages` rows keep their rowids (no rebuild that drops them, no `VACUUM`): release 1 orders turns
+  and anchors checkpoints by them.
+- The built-in `library` and `temporary` collections exist, and "in no collection" does not survive a
+  release-1 open: it files every unfiled `indexed` document with a `NULL` `origin_json` into the
+  Library.
+- A new shape of stored JSON is a new column: release 1's re-index reads `ocr_json` as `pages` with a
+  whole-number `pageNumber` and a text `text`, and drops the scanned text of any other shape.
 
 **Stored messages**
 - A code (`hr:<key>?<name>=<value>&…`) names only a key release 1 knows and gives every placeholder
@@ -284,12 +319,15 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   `main.ingest.tooManyChunks`, `main.ingest.unsupportedType`, `main.chat.defaultTitle`,
   `main.benchmark.warnSlowRead`.
 - The English a message was ever stored as stays readable: a changed value joins the alias table, and
-  no alias is ever removed.
+  no alias is ever removed. Release 1 shows a later version's reworded English as it is; to have it
+  translated, store the code of release 1's key.
 - A key never switches between plain text and a template (a new key instead).
 - A stored message or code fits in 4,096 UTF-16 units.
 - Release 1 originates no code, and v0.1.66 and older show a code as it is.
-- Never a coded failure whose re-index by release 1 would lose something: release 1 offers "Try
-  again" on a code it does not know.
+- Never a failure release 1 does not know, plain or coded, whose re-index would lose something:
+  release 1 offers "Try again" on every reason it cannot name.
+- A failed document's reason never reads as one of release 1's old raw failures (the llama-server and
+  search-model texts named in §7.7): release 1 rewrites those at every engine health check.
 
 **Extractions (bank statements and invoices)**
 - The two extractor numbers only rise (release 1: bank 11, invoice 13); a number is never used again
@@ -305,15 +343,16 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   document, at any version.
 - Corrections live in a table release 1 does not know, with no foreign key onto release 1's rows,
   keyed by the document and a stable row identity.
-- Doubt about an invoice's text is said only through `text_quality` `'suspect'` and
-  `'suspect-confirmed'`.
+- Doubt is said only through the values release 1 knows: `text_quality` `'suspect'` and
+  `'suspect-confirmed'`, `date_order_inferred` `'default'`, a `dropped_row_count` above 0.
 - A document's newest row (`ORDER BY created_at DESC, id DESC`, as text) is the newer version's.
 - Rows pass release 1's row schemas (dates `YYYY-MM-DD`, three-capital-letter currencies, the
   non-empty fields, integers below 2^53, at most 10,000 rows).
 
 **Settings**
-- A value under one of release 1's settings keys is one release 1 could have written; a new meaning
-  is a new key (release 1 leaves keys it does not know).
+- A value under one of release 1's settings keys is one release 1 could have written, inside the
+  bounds of its write gate (`updateSettings`: the context, retrieval and port ranges, the length caps);
+  a new meaning or a wider range is a new key (release 1 leaves keys it does not know).
 - A new field in `lastBenchmark`, `benchmarkHistory`, `modelPlacements` or `gpuProbe` lasts only until
   release 1 writes that record.
 
