@@ -490,6 +490,54 @@ export function effectiveReadOrPersisted(ctx: AppContext): EffectiveReadSample |
   return preferCandidate(latched, persisted) ? latched : persisted
 }
 
+/** W-70: the verdict of `activeModelUnlisted` per workspace, for one unlocked session and one model id. */
+const unlistedVerdicts = new WeakMap<object, { epoch: number; modelId: string; unlisted: boolean }>()
+/** W-70 / C09: the unlocked session in which each workspace last showed the notice. */
+const unavailableNoticed = new WeakMap<object, number>()
+
+/**
+ * W-70 (app-update plan, T3.11; frozen): is `modelId` a model this version cannot list, i.e. no entry of
+ * `discoverManifests(...).manifests` has it? That covers an id listed only as needing a newer HilbertRaum (the usual
+ * case after a "Go back": the restored content keeps the newer version's definitions), an id whose definition failed
+ * validation, and an id no definition names. Not this case (false): no definitions folder, or one that cannot be read
+ * (the sentence would be false there; the start path says what is wrong). A listed model whose weight file is missing
+ * or whose role is not chat is listed. The verdict is kept for the unlocked session (`unlockEpoch`) and the id, so the
+ * status the shell polls costs one manifest walk per session, not one per poll; a failed read is not kept. Never throws.
+ */
+export function activeModelUnlisted(ctx: Pick<AppContext, 'workspace' | 'manifestsDir'>, modelId: string): boolean {
+  try {
+    const epoch = ctx.workspace.unlockEpoch()
+    const kept = unlistedVerdicts.get(ctx.workspace)
+    if (kept && kept.epoch === epoch && kept.modelId === modelId) return kept.unlisted
+    if (!ctx.manifestsDir) return false
+    const unlisted = !discoverManifests(ctx.manifestsDir).manifests.some((m) => m.manifest.id === modelId)
+    unlistedVerdicts.set(ctx.workspace, { epoch, modelId, unlisted })
+    return unlisted
+  } catch {
+    return false
+  }
+}
+
+/**
+ * C09 (copy deck part 1, `main.models.activeUnavailable`), once per unlocked session: the auto-start after unlock,
+ * create or the plaintext start names the model (its id, a technical value) in the notice bar with "Go to AI Model".
+ * The failed lock's restart of the eager services runs in the same session and does not repeat it. Nothing else
+ * changes: `activeModelId` is kept byte for byte, no other model is chosen or started, nothing is written, no audit
+ * event and no `update.log` line (Δ-59). Plaintext start: the notice may go out before a window listens (the channel
+ * is not replayed); Home's no-model state (`AppStatus.activeModelUnavailable`) still says it.
+ */
+function noticeActiveModelUnavailable(ctx: AppContext, modelId: string): void {
+  try {
+    const epoch = ctx.workspace.unlockEpoch()
+    if (unavailableNoticed.get(ctx.workspace) === epoch) return
+    unavailableNoticed.set(ctx.workspace, epoch)
+    log.warn('Auto-start skipped: this version does not list the active model', { modelId })
+    ctx.runtimeNotice?.(tMain('main.models.activeUnavailable', { model: modelId }), 'models')
+  } catch (err) {
+    log.warn('Telling the user that the active model is not listed failed', { modelId, error: String(err) })
+  }
+}
+
 /**
  * Auto-start the selected (active) chat model in the background once the workspace is
  * usable (app launch for plaintext_dev; unlock/create for encrypted) — a restarted app
@@ -520,6 +568,12 @@ export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> 
     return // settings unreadable (e.g. just locked again) — manual start still works
   }
   if (!modelId) return
+  // W-70 / C09: a model this version cannot list is named in the notice bar and not started (a value of another type,
+  // which only a later writer could store, keeps the start path below and its refusal).
+  if (typeof modelId === 'string' && activeModelUnlisted(ctx, modelId)) {
+    noticeActiveModelUnavailable(ctx, modelId)
+    return
+  }
   log.info('Auto-starting the active model runtime in the background', { modelId })
   try {
     await startModelRuntime(ctx, modelId)

@@ -36,6 +36,7 @@ export const SETTINGS_WRITERS = {
   modelPlacements: 'main',
   gpuMode: 'renderer',
   gpuAutoDisabled: 'main',
+  gpuAutoDisabledEngine: 'main',
   gpuLastError: 'main',
   gpuProbe: 'main',
   autoStartActiveModel: 'renderer',

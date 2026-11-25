@@ -431,7 +431,7 @@ function initBackend(): void {
   // the crash path additionally restarts the same model once at CPU and broadcasts the
   // friendly compatibility-mode notice to the renderer.
   const gpuProbe = createCachedGpuProbe()
-  const persistGpuFailure = createGpuFailureRecorder({ requireDb: () => workspace.requireDb(), audit })
+  const persistGpuFailure = createGpuFailureRecorder({ requireDb: () => workspace.requireDb(), audit, paths, isDev })
   // `target` (#530): where the notice's button should take the user — omitted, it opens
   // Diagnostics ("Details"); 'models' opens the AI Model screen, where the engine banner says what to do.
   const notifyRenderer = (message: string, target?: 'models'): void => {

@@ -14,6 +14,7 @@ import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogFull } from '../services/logging'
 import { engineProblems } from '../services/runtime/engine-load'
+import { activeModelUnlisted } from './registerModelIpc'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
 import { RERANKER_POSTURE_SETTINGS_KEYS, rerankerPostureInputsChanged } from '../services/rag/device-posture'
@@ -104,6 +105,10 @@ export function registerCoreIpc(ctx: AppContext): void {
       offlineMode: policy.offlineMode,
       networkAllowed: policy.networkAllowed,
       activeModelId: s?.activeModelId ?? null,
+      // W-70: a model this version cannot list is never started; Home shows its no-model state for it. One manifest
+      // walk per unlocked session and model id (`activeModelUnlisted` keeps the verdict), never one per poll.
+      activeModelUnavailable:
+        typeof s?.activeModelId === 'string' && s.activeModelId !== '' ? activeModelUnlisted(ctx, s.activeModelId) : false,
       // Real, persisted profile from the hardware benchmark; UNKNOWN until first run.
       hardwareProfile: s?.lastBenchmark?.profile ?? 'UNKNOWN',
       workspaceMode: ws.mode ?? 'plaintext_dev',

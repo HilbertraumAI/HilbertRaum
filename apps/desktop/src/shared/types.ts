@@ -122,6 +122,13 @@ export interface AppStatus {
   /** Effective network permission = policy ceiling ∧ user setting. */
   networkAllowed: boolean
   activeModelId: string | null
+  /**
+   * W-70 (app-update plan, T3.11): `activeModelId` names a model this version cannot list (a newer version chose it
+   * before a "Go back"), so it is never started (the unlock's notice C09 says why) and Home shows its no-model state
+   * rather than "Getting ready…". Read once per unlocked session and model id. Optional so older status fixtures stay
+   * valid; absent reads as false.
+   */
+  activeModelUnavailable?: boolean
   hardwareProfile: HardwareProfile
   workspaceMode: WorkspaceMode
   workspaceReady: boolean
@@ -485,6 +492,15 @@ export interface PreflightResult {
   problems: string[]
 }
 
+/**
+ * Which build of the chat engine a drive's `runtime/llama.cpp/<os>/` holds (W-70): the install marker's `version` and
+ * `backend`, copied as written (F-24's strings, compared as exact text). `AppSettings.gpuAutoDisabledEngine`.
+ */
+export interface EngineBuildStamp {
+  version: string
+  backend: string
+}
+
 export interface AppSettings {
   /**
    * Whether the user permits network access for model/engine downloads. Default TRUE so
@@ -562,6 +578,15 @@ export interface AppSettings {
    * Diagnostics' "Try GPU again" (e.g. after a driver update). Never a shipped default.
    */
   gpuAutoDisabled: boolean
+  /**
+   * W-70 (app-update plan, T3.11): the engine build `gpuAutoDisabled` was set under, from the install marker of
+   * `runtime/llama.cpp/<os>/`, or null when that build was unknown. Rewritten with every set, before the flag (the
+   * store writes key by key); cleared by "Try GPU again" and the #530 clear. Read only while the flag is set: the
+   * session-start heal tries the card again when the drive's own build is another one (`healEngineLoadState`). A
+   * flag with no stamp it can read stays. FROZEN for every later writer (release 1 reads it so for life): a plain
+   * object of exactly these two non-empty strings of at most 128 characters, or null; anything more goes in a new key.
+   */
+  gpuAutoDisabledEngine: EngineBuildStamp | null
   /** Timestamped reason (stderr tail) for the last GPU failure, for Diagnostics. */
   gpuLastError: string | null
   /** Cached `--list-devices` probe result (feeds Diagnostics + classifyProfile). */
@@ -685,6 +710,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // toggle moves a machine to CPU.
   gpuMode: 'auto',
   gpuAutoDisabled: false,
+  gpuAutoDisabledEngine: null,
   gpuLastError: null,
   gpuProbe: null,
   autoStartActiveModel: true,

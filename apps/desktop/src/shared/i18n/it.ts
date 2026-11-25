@@ -3077,6 +3077,9 @@ export const it: UiCatalog<'it'> = {
     'Su questa unità non è stato trovato nessun elenco dei modelli: manca la cartella ' +
     '«model-manifests».',
   'main.models.unknown': 'Questo modello non è più nell’elenco dei modelli di questa unità.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '«{name}» non è un modello di chat, quindi non può essere avviato qui.',
   'main.models.startDamaged':
     'Il modello «{name}» non ha superato il controllo dei file, quindi non è stato avviato. ' +

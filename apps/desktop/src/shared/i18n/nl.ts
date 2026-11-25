@@ -2992,6 +2992,9 @@ export const nl: UiCatalog<'nl'> = {
   'main.models.noManifests':
     'Er is geen modellijst op deze schijf gevonden: de map model-manifests ontbreekt.',
   'main.models.unknown': 'Dit model staat niet meer in de modellijst van deze schijf.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '“{name}” is geen chatmodel en kan hier dus niet worden gestart.',
   'main.models.startDamaged':
     'Het model “{name}” is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +

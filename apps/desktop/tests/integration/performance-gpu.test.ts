@@ -888,4 +888,20 @@ describe('"Try GPU again" and the session latches (#182, #372)', () => {
       clearSpeculativeSuppression()
     }
   })
+
+  // W-70 (app-update plan, T3.11): the flag's engine stamp goes with it, so the next GPU failure is the only stamp there.
+  it('clears the engine build the flag was set under together with the flag', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, {
+      gpuAutoDisabledEngine: { version: 'b9849', backend: 'vulkan' },
+      gpuAutoDisabled: true,
+      gpuLastError: 'Vulkan device lost'
+    })
+
+    const settings = await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => [RTX]) }))
+
+    expect(settings.gpuAutoDisabled).toBe(false)
+    expect(settings.gpuAutoDisabledEngine).toBeNull()
+  })
 })

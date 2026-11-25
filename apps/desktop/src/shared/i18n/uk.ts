@@ -3042,6 +3042,9 @@ export const uk: UiCatalog<'uk'> = {
   'main.models.noManifests':
     'На цьому диску не знайдено списку моделей — бракує папки model-manifests.',
   'main.models.unknown': 'Цієї моделі більше немає у списку моделей на цьому диску.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '«{name}» — не модель чату, тому її не можна запустити тут.',
   'main.models.startDamaged':
     'Модель «{name}» не пройшла перевірку файлів, тому її не запущено. Завантажте її знову на екрані ' +

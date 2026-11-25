@@ -2844,6 +2844,9 @@ export const tr: UiCatalog<'tr'> = {
     'dizinleyin.',
   'main.models.noManifests': 'Bu sürücüde model listesi bulunamadı: model-manifests klasörü eksik.',
   'main.models.unknown': 'Bu model artık bu sürücünün model listesinde yok.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '“{name}” bir sohbet modeli değil, bu yüzden burada başlatılamaz.',
   'main.models.startDamaged':
     '“{name}” modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +

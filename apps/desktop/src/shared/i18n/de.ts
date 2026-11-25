@@ -3102,6 +3102,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.models.noManifests':
     'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
   'main.models.unknown': 'Dieses Modell steht nicht mehr in der Modellliste dieses Laufwerks.',
+  'main.models.activeUnavailable':
+    '{model} ist in dieser Version von HilbertRaum nicht verfügbar und wurde deshalb nicht ' +
+    'gestartet. Wähle im KI-Modell-Bereich ein anderes Modell.',
   'main.models.notChat': '„{name}“ ist kein Chat-Modell und kann hier nicht gestartet werden.',
   'main.models.startDamaged':
     'Das Modell „{name}“ hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +

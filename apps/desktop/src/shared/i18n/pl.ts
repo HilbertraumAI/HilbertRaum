@@ -3051,6 +3051,9 @@ export const pl: UiCatalog<'pl'> = {
   'main.models.noManifests':
     'Na tym dysku nie znaleziono listy modeli – brak folderu model-manifests.',
   'main.models.unknown': 'Tego modelu nie ma już na liście modeli tego dysku.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '„{name}” nie jest modelem czatu, więc nie można go tu uruchomić.',
   'main.models.startDamaged':
     'Model „{name}” nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +

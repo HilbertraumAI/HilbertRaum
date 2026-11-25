@@ -1,5 +1,5 @@
 import type { Db } from './db'
-import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type EngineBuildStamp } from '../../shared/types'
 import {
   normalizeBenchmarkHistory,
   normalizeBenchmarkResult,
@@ -22,6 +22,27 @@ const MAX_SETTINGS_ARRAY = 10_000
  *  timestamped reason (`persistGpuFailure` truncates it to 2 000 chars before it gets here). */
 const MAX_SETTINGS_ID_LENGTH = 512
 const MAX_SETTINGS_ERROR_LENGTH = 4096
+
+/** W-70: the bound on each string of `gpuAutoDisabledEngine` (a real engine tag is under 20 characters). Frozen. */
+const MAX_ENGINE_STAMP_LENGTH = 128
+
+/**
+ * W-70 (app-update plan, T3.11): `value` as an engine build stamp, or null when it is none. A stamp is a plain object
+ * whose `version` and `backend` are non-empty strings of at most 128 characters; only those two are kept (a field a
+ * later version adds is ignored). Release 1 reads and writes the key through this for life, so a value of any other
+ * shape is no stamp, never a guess. Never throws.
+ */
+export function engineBuildStampOf(value: unknown): EngineBuildStamp | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const fields = value as Record<string, unknown>
+  const tag = (key: 'version' | 'backend'): string | null => {
+    const v = Object.hasOwn(fields, key) ? fields[key] : undefined
+    return typeof v === 'string' && v.length > 0 && v.length <= MAX_ENGINE_STAMP_LENGTH ? v : null
+  }
+  const version = tag('version')
+  const backend = tag('backend')
+  return version !== null && backend !== null ? { version, backend } : null
+}
 
 /** Serialized-JSON ceiling for the object-valued settings (`checksumCache` map, plus the
  *  `lastBenchmark`/`gpuProbe` result blobs). These are read on start/hot paths and persist into
@@ -99,6 +120,8 @@ export function getSettings(db: Db): AppSettings {
   if ('modelPlacements' in stored) stored.modelPlacements = normalizeModelPlacements(stored.modelPlacements)
   // The probe too (P5): the memory class, the VRAM budget and the graphics tile read it.
   if ('gpuProbe' in stored) stored.gpuProbe = normalizeGpuProbe(stored.gpuProbe)
+  // W-70: a GPU flag's engine stamp of any other shape reads as none (the flag then stays); its row is kept.
+  if ('gpuAutoDisabledEngine' in stored) stored.gpuAutoDisabledEngine = engineBuildStampOf(stored.gpuAutoDisabledEngine)
   // Merge stored values over defaults so new fields always have a value.
   return { ...DEFAULT_SETTINGS, ...(stored as Partial<AppSettings>) }
 }
@@ -186,6 +209,12 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       const normalized = normalizeGpuProbe(value)
       if (normalized == null) continue
       toStore = normalized
+    } else if (key === 'gpuAutoDisabledEngine' && value !== null) {
+      // W-70: the null default carries no type, so the shape is checked here: exactly the two bounded strings are
+      // stored (extra fields dropped); any other value is ignored and the prior stamp kept. `null` clears it.
+      const stamp = engineBuildStampOf(value)
+      if (stamp === null) continue
+      toStore = stamp
     } else if (Array.isArray(def)) {
       if (!Array.isArray(value)) continue
       toStore = (value as unknown[]).filter((x) => typeof x === 'string').slice(0, MAX_SETTINGS_ARRAY)

@@ -21,6 +21,7 @@ import { seededFreshDb } from '../helpers/seeded-db'
 const MAX_ID = 512 // MAX_SETTINGS_ID_LENGTH
 const MAX_ERROR = 4096 // MAX_SETTINGS_ERROR_LENGTH
 const MAX_OBJECT_BYTES = 256 * 1024 // MAX_SETTINGS_OBJECT_BYTES (data-contracts.md "Settings storage")
+const MAX_ENGINE_TAG = 128 // MAX_ENGINE_STAMP_LENGTH (W-70: each string of `gpuAutoDisabledEngine`)
 
 /** A deliberately mistyped renderer patch crossing the IPC boundary: a whole-patch cast, not `as never`. */
 type JunkPatch = Record<string, unknown>
@@ -167,6 +168,38 @@ describe('settings write gate (BE-1)', () => {
     // The real writer (persistGpuFailure) sends a ~2 kB timestamped reason — well under the cap.
     const reason = `2026-07-10T00:00:00.000Z — ${'e'.repeat(1990)}`
     expect(updateSettings(db, { gpuLastError: reason }).gpuLastError).toBe(reason)
+  })
+
+  // W-70 (app-update plan, T3.11): the engine build a GPU auto-disable was set under. Release 1 compares its two strings
+  // with its own engine's as exact text for life, so the stored shape is frozen: a plain object of two non-empty strings
+  // of at most 128 characters, nothing else. A write of any other shape is dropped (the prior stamp kept), extra fields
+  // are not stored, and null clears it.
+  it('gpuAutoDisabledEngine accepts only { version, backend } of bounded strings; junk keeps the prior stamp; null clears', () => {
+    const db = freshDb()
+    const stamp = { version: 'b9849', backend: 'vulkan' }
+    expect(updateSettings(db, { gpuAutoDisabledEngine: stamp }).gpuAutoDisabledEngine).toEqual(stamp)
+    for (const junk of [
+      'b9849',
+      [stamp],
+      { version: 'b9849' },
+      { version: 9849, backend: 'vulkan' },
+      { version: 'b9849', backend: '' },
+      { version: 'x'.repeat(MAX_ENGINE_TAG + 1), backend: 'vulkan' },
+      { version: 'b9849', backend: 'x'.repeat(MAX_ENGINE_TAG + 1) },
+      42,
+      true
+    ]) {
+      updateSettings(db, { gpuAutoDisabledEngine: junk } as JunkPatch)
+      expect(rawSetting(db, 'gpuAutoDisabledEngine')).toEqual(stamp)
+    }
+    // Exactly at the bound is accepted, so the pinned value holds it from both sides.
+    const atBound = { version: 'v'.repeat(MAX_ENGINE_TAG), backend: 'b'.repeat(MAX_ENGINE_TAG) }
+    expect(updateSettings(db, { gpuAutoDisabledEngine: atBound }).gpuAutoDisabledEngine).toEqual(atBound)
+    // Anything more goes into a new key (the later-writer duty): extra fields are not stored.
+    updateSettings(db, { gpuAutoDisabledEngine: { ...stamp, signedBy: 'release-key' } } as JunkPatch)
+    expect(rawSetting(db, 'gpuAutoDisabledEngine')).toEqual(stamp)
+    updateSettings(db, { gpuAutoDisabledEngine: null })
+    expect(rawSetting(db, 'gpuAutoDisabledEngine')).toBeNull()
   })
 
   // PR #303 audit P4: the blob was `{ profile: 'FAST_LOCAL' }` — a profile name the app has

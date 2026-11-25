@@ -3202,6 +3202,9 @@ export const fr: UiCatalog<'fr'> = {
     'Aucune liste de modèles n’a été trouvée sur ce disque\u00A0: le dossier ' +
     '«\u00A0model-manifests\u00A0» est absent.',
   'main.models.unknown': 'Ce modèle ne figure plus dans la liste des modèles de ce disque.',
+  'main.models.activeUnavailable':
+    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat':
     '«\u00A0{name}\u00A0» n’est pas un modèle du Chat, il ne peut donc pas être démarré ici.',
   'main.models.startDamaged':

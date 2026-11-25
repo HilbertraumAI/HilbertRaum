@@ -87,6 +87,7 @@ import { decrypt, deserializeBlob } from '../../src/main/services/security/crypt
 import { createLocalApiServer } from '../../src/main/services/local-api/lifecycle'
 import type { MainSettingsKey, RendererSettingsPatch } from '../../src/shared/settings-writers'
 import { benchmarkResult, modelPlacement } from '../helpers/benchmark-records'
+import { manifestsDirWith, rawManifest, writeManifest } from '../helpers/manifest-fixtures'
 import { until } from '../helpers/hang-budget'
 import { freePort } from '../helpers/local-api-harness'
 import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
@@ -267,6 +268,43 @@ describe('registerCoreIpc', () => {
     expect(status.translationDevice).toEqual({ device: 'auto', gpuLayers: 12, totalLayers: 49, live: true })
   })
 
+  // W-70 (app-update plan, T3.11): an active model this version cannot list (one a newer version chose before a "Go
+  // back") is never started, so Home must not say "Getting ready…" for it for ever. The status says so. The shell polls
+  // this handler, so the verdict is read once per unlocked session and model id, never a manifest walk per poll.
+  it('getAppStatus says when the active model is one this version cannot list, read once per session and model (W-70)', async () => {
+    const db = seededDb()
+    const dir = manifestsDirWith(rawManifest())
+    const ws = workspaceStandIn()
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: { configPath: bogusConfigDir() },
+      db,
+      manifestsDir: dir,
+      workspace: {
+        ...ws,
+        getState: (): WorkspaceStateInfo => ({ state: 'unlocked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+      }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+    const unavailable = async (): Promise<boolean | undefined> =>
+      ((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).activeModelUnavailable
+
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    expect(await unavailable()).toBe(false)
+    updateSettings(db, { activeModelId: 'qwen9-from-a-newer-version' })
+    expect(await unavailable()).toBe(true)
+    // Read once per session: a definition that appears now is looked for again only after the next unlock.
+    writeManifest(
+      dir,
+      'qwen9.yaml',
+      rawManifest({ id: 'qwen9-from-a-newer-version', display_name: 'Qwen9', local_path: 'models/chat/qwen9.gguf' })
+    )
+    expect(await unavailable()).toBe(true)
+    ws.completeLock()
+    ws.completeUnlock()
+    expect(await unavailable()).toBe(false)
+  })
+
   it('writeClipboard writes text via the MAIN clipboard module and reports success', async () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
@@ -341,6 +379,8 @@ describe('registerCoreIpc', () => {
       benchmarkHistory: [benchmarkResult()],
       modelPlacements: { qwen: modelPlacement() },
       gpuAutoDisabled: true,
+      // W-70: the engine build the flag was set under (main-owned like the flag).
+      gpuAutoDisabledEngine: { version: 'b9849', backend: 'vulkan' },
       gpuLastError: '2026-11-18T00:00:00.000Z: vk::Device::createBuffer failed',
       gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-11-18T00:00:00.000Z' },
       checksumCache: { 'models/chat/x.gguf': { size: 1, mtimeMs: 2, sha256: 'a'.repeat(64) } }
@@ -2097,15 +2137,26 @@ describe('maybeAutoStartActiveModel', () => {
     onStart?: () => void
     /** AUD-03: a session-aware workspace stand-in (its `completeLock` / `completeUnlock` drive the session). */
     workspace?: WorkspaceStandIn
+    /** The model definitions this version lists; default the committed catalog. */
+    manifestsDir?: string | null
+    /** W-70: the notice bar (`ctx.runtimeNotice`). */
+    runtimeNotice?: (message: string, target?: 'models') => void
+    /** #599: a start request began (the runtime reads "starting" from here on). */
+    onStartRequest?: () => void
   }): AppContext {
     return {
       db: opts.db,
-      manifestsDir: CATALOG_MANIFESTS,
+      manifestsDir: opts.manifestsDir === undefined ? CATALOG_MANIFESTS : opts.manifestsDir,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
       workspace: opts.workspace ?? workspaceStandIn({ unlocked: opts.unlocked !== false }),
+      runtimeNotice: opts.runtimeNotice,
       runtime: {
         ...START_READS,
+        beginStartRequest: () => {
+          opts.onStartRequest?.()
+          return START_READS.beginStartRequest()
+        },
         start: async () => {
           opts.onStart?.()
           return { running: true, modelId: 'x', port: null, healthy: true, message: 'ok' }
@@ -2281,5 +2332,102 @@ describe('maybeAutoStartActiveModel', () => {
 
     await sentinelAutoStart()
     expect(started).toBe(true)
+  })
+
+  // W-70 / C09 (app-update plan, T3.11; copy deck part 1): after a "Go back" the workspace keeps the newer version's
+  // choice of model, which release 1 may not list. The auto-start then names it in the notice bar ("Go to AI Model")
+  // instead of failing silently, once per unlocked session, and changes nothing: no start, no other model, no write.
+  describe('an active model this version cannot list (W-70, C09)', () => {
+    const NEWER = 'qwen9-from-a-newer-version'
+    afterEach(() => applyUiLanguageSetting('en'))
+
+    /** One auto-start of `NEWER` (or `modelId`) on a fresh context; what it noticed and how many starts it began. */
+    async function autoStart(
+      db: Db,
+      over: { manifestsDir?: string | null; workspace?: WorkspaceStandIn } = {}
+    ): Promise<{ notices: Array<[string, string | undefined]>; startRequests: number }> {
+      const notices: Array<[string, string | undefined]> = []
+      let startRequests = 0
+      await maybeAutoStartActiveModel(
+        autoStartCtx({
+          db,
+          ...over,
+          runtimeNotice: (message, target) => void notices.push([message, target]),
+          onStartRequest: () => {
+            startRequests += 1
+          }
+        })
+      )
+      return { notices, startRequests }
+    }
+    const settingsRows = (db: Db): unknown =>
+      db.prepare('SELECT key, value_json, updated_at FROM settings ORDER BY key').all()
+
+    it('names the model in the interface language with the AI Model button, starts nothing and changes nothing', async () => {
+      const db = seededDb()
+      updateSettings(db, { activeModelId: NEWER })
+      const before = settingsRows(db)
+
+      applyUiLanguageSetting('en')
+      const en = await autoStart(db)
+      applyUiLanguageSetting('de')
+      const de = await autoStart(db)
+
+      // The deck's text, byte for byte (C09, legal-sensitive and frozen).
+      expect(en.notices).toEqual([
+        [`${NEWER} isn’t available in this version of HilbertRaum, so it wasn’t started. Choose another model on the AI Model screen.`, 'models']
+      ])
+      expect(de.notices).toEqual([
+        [
+          `${NEWER} ist in dieser Version von HilbertRaum nicht verfügbar und wurde deshalb nicht gestartet. Wähle im KI-Modell-Bereich ein anderes Modell.`,
+          'models'
+        ]
+      ])
+      expect(en.startRequests + de.startRequests).toBe(0)
+      // The choice is kept byte for byte (going forward again finds it), and nothing else was written.
+      expect(settingsRows(db)).toEqual(before)
+    })
+
+    it('an id listed only as needing a newer HilbertRaum gets the same notice', async () => {
+      // The usual case after a "Go back": the restored content keeps the newer version's definitions.
+      const dir = manifestsDirWith(rawManifest(), rawManifest({ id: NEWER, local_path: 'models/chat/qwen9.gguf', min_app_version: '999.0.0' }))
+      expect(discoverManifests(dir).unsupported.map((u) => u.manifest.id)).toEqual([NEWER])
+      const db = seededDb()
+      updateSettings(db, { activeModelId: NEWER })
+
+      const { notices, startRequests } = await autoStart(db, { manifestsDir: dir })
+
+      expect(notices).toEqual([[t('en', 'main.models.activeUnavailable', { model: NEWER }), 'models']])
+      expect(startRequests).toBe(0)
+    })
+
+    it('says it once per unlocked session: a failed lock’s restart does not repeat it, the next unlock does', async () => {
+      const db = seededDb()
+      updateSettings(db, { activeModelId: NEWER })
+      const ws = workspaceStandIn()
+
+      expect((await autoStart(db, { workspace: ws })).notices).toHaveLength(1)
+      // registerWorkspaceIpc's failed lock restarts the eager services in the same session (no epoch bump).
+      expect((await autoStart(db, { workspace: ws })).notices).toHaveLength(0)
+      ws.completeLock()
+      ws.completeUnlock()
+      expect((await autoStart(db, { workspace: ws })).notices).toHaveLength(1)
+    })
+
+    it.each<[string, string, () => string | null]>([
+      // The catalog lists it; its weight file is not on this drive (the developer mock fallback starts it here).
+      ['a listed model whose weight file is missing', 'qwen3-4b-instruct-q4', () => CATALOG_MANIFESTS],
+      ['a listed model whose role is not chat', 'multilingual-e5-small-q8', () => CATALOG_MANIFESTS],
+      ['no model definitions folder', NEWER, () => null],
+      ['a definitions folder that cannot be read', NEWER, () => join(tmpdir(), 'hilbertraum-no-such-manifests-dir')]
+    ])('not this case: %s (today’s start path, no notice)', async (_label, modelId, dir) => {
+      const db = seededDb()
+      updateSettings(db, { activeModelId: modelId })
+
+      const { notices, startRequests } = await autoStart(db, { manifestsDir: dir() })
+
+      expect(notices).toEqual([])
+      expect(startRequests).toBe(1)
+    })
   })
 })

@@ -27,13 +27,17 @@ import type { Embedder } from '../../src/main/services/embeddings'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import {
+  llamaOsDir,
   llamaServerBinaryName,
   llamaServerDir,
   type ChildProcessLike,
   type SpawnFn
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import type { RuntimeOs } from '../../src/shared/runtime-sources'
+import { rawSetting } from '../helpers/db-fixtures'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const LINUX = { platform: 'linux' as const }
@@ -72,8 +76,10 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-const unlockedCtx = (db: Db): Pick<AppContext, 'db' | 'workspace'> =>
-  ({ db, workspace: workspaceStandIn() }) as unknown as Pick<AppContext, 'db' | 'workspace'>
+/** What the session-start heal reads: the workspace, and (W-70) the drive whose engine build it compares. */
+type HealCtx = Pick<AppContext, 'db' | 'workspace' | 'paths' | 'isDev'>
+const unlockedCtx = (db: Db, rootPath: string = tmp(), isDev = false): HealCtx =>
+  ({ db, workspace: workspaceStandIn(), paths: { rootPath }, isDev }) as unknown as HealCtx
 
 /** A document row in a given state (the file need not exist; only the row matters here). */
 function addDoc(db: Db, status: string, errorMessage: string | null): string {
@@ -144,11 +150,11 @@ describe('healEngineLoadState (#530)', () => {
     const db = freshDb()
     updateSettings(db, { gpuAutoDisabled: true, gpuLastError: LEGACY_GPU_ERROR })
     const id = addDoc(db, 'failed', LEGACY_ROW)
-    const locked = { db, workspace: workspaceStandIn({ unlocked: false }) } as unknown as Pick<AppContext, 'db' | 'workspace'>
+    const locked = { db, workspace: workspaceStandIn({ unlocked: false }) } as unknown as HealCtx
     const locking = {
       db,
       workspace: workspaceStandIn({ locking: true })
-    } as unknown as Pick<AppContext, 'db' | 'workspace'>
+    } as unknown as HealCtx
     for (const ctx of [locked, locking]) {
       expect(healEngineLoadState(ctx, LINUX)).toEqual({ gpuFlagCleared: false, rowsRewritten: 0, searchModelRowsRewritten: 0 })
     }
@@ -186,6 +192,148 @@ describe('healEngineLoadState (#530)', () => {
     expect(second.rowsRewritten).toBe(0)
     expect(second.searchModelRowsRewritten).toBe(0)
     expect(rowMessage(db, legacy)).toBe(canonical)
+  })
+})
+
+// W-70 (app-update plan, T3.11): `gpuAutoDisabled` carries the engine build it was set under (`gpuAutoDisabledEngine`),
+// and the session-start heal tries the card again once the drive's own engine is another build. Release 1 is the only
+// version that runs after a "Go back", so this table is its rule for life: another version OR backend (exact text, no
+// order) re-arms; the same build, an unknown or missing engine, and a flag with no stamp it can read stay on the processor.
+describe('healEngineLoadState: a GPU flag set under another engine build is tried again (W-70)', () => {
+  const STAMPED = { version: 'b9849', backend: 'vulkan' }
+  // A genuine GPU fault: #530's clear leaves it, so only the W-70 rule can move the flag.
+  const GPU_FAULT = '2026-11-25T10:00:00.000Z — vk::Queue::submit: ErrorDeviceLost'
+
+  /** The chat engine in the drive's `runtime/llama.cpp/<os>/`: the program (unless `program: false`) and its marker. */
+  function engine(
+    root: string,
+    opts: { program?: boolean; marker: { version: string; backend: string } | 'cut-short' | null }
+  ): void {
+    const dir = llamaServerDir(root)
+    mkdirSync(dir, { recursive: true })
+    if (opts.program !== false) writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')
+    const whole = (build: { version: string; backend: string }): string =>
+      JSON.stringify({ ...build, os: llamaOsDir() as RuntimeOs, arch: 'x64' })
+    // An interrupted copy's marker of ANOTHER build: a reader that took it for a build would re-arm.
+    if (opts.marker === 'cut-short') writeFileSync(runtimeMarkerPath(dir), whole({ version: 'b12110', backend: 'vulkan' }).slice(0, 24))
+    else if (opts.marker) writeRuntimeMarker(dir, { ...opts.marker, os: llamaOsDir() as RuntimeOs, arch: 'x64' })
+  }
+
+  /** A workspace a GPU failure flagged, its stamp row planted as stored text (`undefined`: no row, as before release 1). */
+  function flagged(stampText: string | undefined): Db {
+    const db = freshDb()
+    updateSettings(db, { gpuAutoDisabled: true, gpuLastError: GPU_FAULT })
+    db.prepare("DELETE FROM settings WHERE key = 'gpuAutoDisabledEngine'").run()
+    if (stampText !== undefined) {
+      db.prepare(
+        "INSERT INTO settings (key, value_json, updated_at) VALUES ('gpuAutoDisabledEngine', ?, '2026-11-25T10:00:00.000Z')"
+      ).run(stampText)
+    }
+    return db
+  }
+  const stampRow = (db: Db): string | undefined =>
+    (db.prepare("SELECT value_json AS v FROM settings WHERE key = 'gpuAutoDisabledEngine'").get() as { v: string } | undefined)?.v
+
+  it.each<{ own: string; arrange: (root: string) => void; rearmed: boolean }>([
+    { own: 'the same build', arrange: (r) => engine(r, { marker: STAMPED }), rearmed: false },
+    { own: 'another version', arrange: (r) => engine(r, { marker: { ...STAMPED, version: 'b12110' } }), rearmed: true },
+    // "Go back": the flag was set under the newer version's engine, release 1 runs its own older one.
+    { own: 'an older version', arrange: (r) => engine(r, { marker: { ...STAMPED, version: 'b8000' } }), rearmed: true },
+    { own: 'another backend', arrange: (r) => engine(r, { marker: { ...STAMPED, backend: 'cuda' } }), rearmed: true },
+    // Inequality, not F-24's order: a tag shape release 1 cannot order is simply another build.
+    { own: 'a tag shape release 1 cannot order', arrange: (r) => engine(r, { marker: { ...STAMPED, version: 'b9849-rc1' } }), rearmed: true },
+    { own: 'unknown (a program without an install marker)', arrange: (r) => engine(r, { marker: null }), rearmed: false },
+    { own: 'unknown (a marker cut short)', arrange: (r) => engine(r, { marker: 'cut-short' }), rearmed: false },
+    { own: 'missing (no engine folder)', arrange: () => undefined, rearmed: false },
+    {
+      own: 'missing (a marker of another build, but no program)',
+      arrange: (r) => engine(r, { program: false, marker: { ...STAMPED, version: 'b12110' } }),
+      rearmed: false
+    }
+  ])('a flag stamped b9849/vulkan, the drive’s own engine $own: re-armed $rearmed, and the row heal still runs', ({ arrange, rearmed }) => {
+    const db = flagged(JSON.stringify(STAMPED))
+    addDoc(db, 'failed', LEGACY_ROW)
+    const root = tmp()
+    arrange(root)
+
+    const result = healEngineLoadState(unlockedCtx(db, root), LINUX)
+
+    const s = getSettings(db)
+    expect(s.gpuAutoDisabled).toBe(!rearmed)
+    expect(s.gpuLastError).toBe(rearmed ? null : GPU_FAULT)
+    expect(rawSetting(db, 'gpuAutoDisabledEngine')).toEqual(rearmed ? null : STAMPED)
+    expect(result.rowsRewritten).toBe(1)
+  })
+
+  it('a dev build running HILBERTRAUM_LLAMA_BIN runs a program outside the folder: build unknown, the flag stays (a packaged build ignores the override)', () => {
+    const outside = join(tmp(), llamaServerBinaryName())
+    writeFileSync(outside, 'fake-binary')
+    const root = tmp()
+    engine(root, { marker: { ...STAMPED, version: 'b12110' } })
+    vi.stubEnv('HILBERTRAUM_LLAMA_BIN', outside)
+    try {
+      const dev = flagged(JSON.stringify(STAMPED))
+      healEngineLoadState(unlockedCtx(dev, root, true), LINUX)
+      expect(getSettings(dev).gpuAutoDisabled).toBe(true)
+      expect(stampRow(dev)).toBe(JSON.stringify(STAMPED))
+
+      // The control: the same drive in a packaged build runs the folder's program, which is another build.
+      const packaged = flagged(JSON.stringify(STAMPED))
+      healEngineLoadState(unlockedCtx(packaged, root, false), LINUX)
+      expect(getSettings(packaged).gpuAutoDisabled).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.each<[string, string | undefined]>([
+    ['no stamp row (every workspace flagged before release 1)', undefined],
+    ['a null stamp (set while the build was unknown)', 'null'],
+    ['a string', '"b9849"'],
+    ['an array', '["b9849","vulkan"]'],
+    ['an object without a backend', '{"version":"b9849"}'],
+    ['a version that is no string', '{"version":9849,"backend":"vulkan"}'],
+    ['an empty version', '{"version":"","backend":"vulkan"}'],
+    ['a tag past 128 characters', JSON.stringify({ version: 'b'.repeat(129), backend: 'vulkan' })],
+    ['text that is no JSON', '{"version":"b98']
+  ])('a flag with %s stays on the processor and its row is kept, whatever build the drive runs', (_label, stampText) => {
+    // Owner, 2026-11-25: "keep them on the processor". Release 1 never guesses a build it did not record.
+    const db = flagged(stampText)
+    const root = tmp()
+    engine(root, { marker: { version: 'b12110', backend: 'cuda' } })
+
+    healEngineLoadState(unlockedCtx(db, root), LINUX)
+
+    expect(getSettings(db).gpuAutoDisabled).toBe(true)
+    expect(getSettings(db).gpuLastError).toBe(GPU_FAULT)
+    expect(stampRow(db)).toBe(stampText)
+  })
+
+  it('a flag that is off leaves its stamp alone, whatever build the drive runs', () => {
+    const db = freshDb()
+    db.prepare("DELETE FROM settings WHERE key = 'gpuAutoDisabledEngine'").run()
+    db.prepare(
+      "INSERT INTO settings (key, value_json, updated_at) VALUES ('gpuAutoDisabledEngine', ?, '2026-11-25T10:00:00.000Z')"
+    ).run(JSON.stringify(STAMPED))
+    const root = tmp()
+    engine(root, { marker: { ...STAMPED, version: 'b12110' } })
+
+    healEngineLoadState(unlockedCtx(db, root), LINUX)
+
+    expect(getSettings(db).gpuAutoDisabled).toBe(false)
+    expect(stampRow(db)).toBe(JSON.stringify(STAMPED))
+  })
+
+  it('the #530 clear of a flag a load refusal set clears its stamp too', () => {
+    const db = freshDb()
+    updateSettings(db, { gpuAutoDisabledEngine: STAMPED, gpuAutoDisabled: true, gpuLastError: LEGACY_GPU_ERROR })
+    const root = tmp()
+    engine(root, { marker: STAMPED }) // the same build: the W-70 rule alone would keep the flag
+
+    expect(healEngineLoadState(unlockedCtx(db, root), LINUX).gpuFlagCleared).toBe(true)
+
+    expect(getSettings(db).gpuAutoDisabled).toBe(false)
+    expect(rawSetting(db, 'gpuAutoDisabledEngine')).toBeNull()
   })
 })
 
