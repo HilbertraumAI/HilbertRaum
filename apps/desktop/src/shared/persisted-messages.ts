@@ -7,8 +7,10 @@ import { en, type MessageKey } from './i18n'
 // reads a stored message by its key where it acts on one (`scanDetected`, the default-title check, the slow-read upsert).
 //
 // Release 1 is the oldest version that will ever read a workspace, so what it does here can never be fixed in the field:
-//  - The English values are locked by `tests/fixtures/display-map/values.json`. A value that changes keeps its old text
-//    readable for ever through PERSISTED_ALIASES.
+//  - `tests/fixtures/display-map/values.json` is the append-only history of every English value each key below was ever
+//    stored as. A value that changes keeps its old text readable for ever through PERSISTED_ALIASES; a key release 1
+//    acts on (marked `actedOn` there) is never reworded, since release 1 could not act on the new text.
+//  - A string longer than MAX_STORED_LENGTH is no persisted message: shown as it is, never matched (R1 M-1).
 //  - A later version may store the coded form instead: `hr:<key>`, plus `?<name>=<value>&…` for the placeholders of
 //    the key's English template, each value percent-encoded (encodeURIComponent). Matched against the WHOLE string, with
 //    no trimming. A code whose key is in this version's catalog and supplies every placeholder of its English template
@@ -80,10 +82,16 @@ export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
 /**
  * Old values of the keys above, readable for ever (F-26). APPEND ONLY; NEVER REMOVE A LINE.
  *
- * When the English of a key above changes, its old value joins this table in the same change (the value fixture's
- * test fails until it does). An exact key's alias is its old text; an interpolated key's alias is its old template,
- * whose `{name}` placeholders the current template must also have, tried after every current template. The module
- * refuses to load with an alias that is another key's value or alias, or that belongs to a key not above.
+ * When the English of a key above changes, the new value is appended to the key's history in the value fixture and
+ * the old one to this table, in the same change (the fixture's test fails until both are). An exact key's alias is its
+ * old text, with no placeholder; an interpolated key's alias is its old template, holding every `{name}` placeholder of
+ * the current template (one more is harmless: it is not read), tried after every current template. The module refuses
+ * to load with an alias that:
+ *  - is another key's value or alias, or belongs to a key not above;
+ *  - breaks the placeholder rule just named;
+ *  - has the shape of a code (the code branch would answer first);
+ *  - is a template with no text of its own besides its placeholders (it would read any string);
+ *  - is plain text that an interpolated key's pattern reads (it would take that key's rows).
  *
  * Empty: no released value has ever changed (v0.1.8 to v0.1.66). The one old form not here is the pre-i18n
  * unsupported-type wording, a hand-written pattern in `renderer/lib/displayMap.ts` (its literal would trip the
@@ -99,6 +107,14 @@ export type PersistedMessage =
   | { readonly kind: 'unknownCode' }
 
 const UNKNOWN_CODE: PersistedMessage = { kind: 'unknownCode' }
+
+/**
+ * The longest stored string that can be a persisted message, in UTF-16 units (R1 M-1; part of F-26). A longer one is
+ * shown as it is: the patterns never see it, so a crafted value cannot hold main for seconds (two lazy captures are
+ * quadratic) or overflow the stack (a code of millions of characters). Today's longest English is under 400 units, so a
+ * later writer's message or code fits with room for its values.
+ */
+const MAX_STORED_LENGTH = 4096
 
 /**
  * The coded form, `^hr:<key>(\?<name>=<value>(&<name>=<value>)*)?$` over the whole string (D-6): <key> has the shape of
@@ -117,15 +133,22 @@ function placeholdersOf(template: string): string[] {
   return [...new Set(names)]
 }
 
+/** Whether `template` has text of its own once its placeholders are removed (not only spaces). */
+function hasOwnText(template: string): boolean {
+  return /\S/.test(template.split(PLACEHOLDER_SPLIT_RE).filter((_part, i) => i % 2 === 0).join(''))
+}
+
 interface TemplatePattern {
   readonly key: MessageKey
   readonly re: RegExp
   /** The placeholder of each capture group, in template order. */
   readonly names: readonly string[]
+  /** The placeholders the key's current template has: the only values a match reads. */
+  readonly read: ReadonlySet<string>
 }
 
 /** A `^…$` pattern for `template`: the text escaped, each `{name}` a lazy capture. */
-function templatePattern(key: MessageKey, template: string): TemplatePattern {
+function templatePattern(key: MessageKey, template: string, read: ReadonlySet<string>): TemplatePattern {
   const names: string[] = []
   const source = template
     .split(PLACEHOLDER_SPLIT_RE)
@@ -135,7 +158,7 @@ function templatePattern(key: MessageKey, template: string): TemplatePattern {
       return '(.+?)'
     })
     .join('')
-  return { key, re: new RegExp(`^${source}$`), names }
+  return { key, re: new RegExp(`^${source}$`), names, read }
 }
 
 /** A code's message: the catalog's own key with every placeholder of its English supplied, else an unknown code. */
@@ -165,9 +188,9 @@ function codeMessage(catalog: Readonly<Record<string, string>>, key: string, que
 
 /**
  * Build the reader of stored strings from a catalog, the two key sets and an alias table. The module builds the one
- * the app uses from `en`, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS and PERSISTED_ALIASES. Throws when an alias or a
- * value has two owners, an alias belongs to no key of the two sets, or an interpolated alias names a placeholder its
- * current template lacks: each would make a stored value read as the wrong message, or as none.
+ * the app uses from `en`, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS and PERSISTED_ALIASES. Throws on every alias the
+ * PERSISTED_ALIASES comment refuses, on a value two keys share, and on a current template with no text of its own:
+ * each would make a stored value read as the wrong message, or as none.
  */
 export function buildPersistedMessageParser(
   catalog: Readonly<Record<MessageKey, string>>,
@@ -189,45 +212,61 @@ export function buildPersistedMessageParser(
     owner.set(text, key)
   }
 
+  const refuse = (alias: string, key: MessageKey, why: string): never => {
+    throw new Error(`persisted-messages: the alias ${JSON.stringify(alias)} of ${key} ${why}`)
+  }
   const exact = new Map<string, MessageKey>()
   for (const key of exactKeys) {
     claim(entries[key]!, key)
     exact.set(entries[key]!, key)
   }
   const current = interpolatedKeys.map((key) => {
-    claim(entries[key]!, key)
-    return templatePattern(key, entries[key]!)
+    const template = entries[key]!
+    claim(template, key)
+    if (!hasOwnText(template)) {
+      throw new Error(`persisted-messages: the template ${JSON.stringify(template)} of ${key} has no text of its own besides its placeholders`)
+    }
+    return templatePattern(key, template, new Set(placeholdersOf(template)))
   })
+  const exactAliases: Array<[string, MessageKey]> = []
   for (const key of exactKeys) {
     for (const alias of aliases[key] ?? []) {
       claim(alias, key)
+      if (CODE_RE.test(alias)) refuse(alias, key, 'has the shape of a code')
+      if (placeholdersOf(alias).length > 0) refuse(alias, key, 'holds a placeholder, and its key is an exact one')
       exact.set(alias, key)
+      exactAliases.push([alias, key])
     }
   }
   const old = interpolatedKeys.flatMap((key) =>
     (aliases[key] ?? []).map((alias) => {
       claim(alias, key)
-      const names = new Set(placeholdersOf(entries[key]!))
-      const unknown = placeholdersOf(alias).filter((name) => !names.has(name))
-      if (unknown.length > 0) {
-        throw new Error(`persisted-messages: the alias ${JSON.stringify(alias)} of ${key} names {${unknown.join('}, {')}}, which its template does not have`)
-      }
-      return templatePattern(key, alias)
+      if (CODE_RE.test(alias)) refuse(alias, key, 'has the shape of a code')
+      if (!hasOwnText(alias)) refuse(alias, key, 'has no text of its own besides its placeholders')
+      const names = new Set(placeholdersOf(alias))
+      const missing = placeholdersOf(entries[key]!).filter((name) => !names.has(name))
+      if (missing.length > 0) refuse(alias, key, `lacks {${missing.join('}, {')}}, which its current template has`)
+      return templatePattern(key, alias, new Set(placeholdersOf(entries[key]!)))
     })
   )
   const patterns = [...current, ...old]
+  for (const [alias, key] of exactAliases) {
+    const taker = patterns.find(({ re }) => re.test(alias))
+    if (taker) refuse(alias, key, `is text the pattern of ${taker.key} reads`)
+  }
 
   return (raw: string): PersistedMessage | null => {
+    if (raw.length > MAX_STORED_LENGTH) return null
     const code = CODE_RE.exec(raw)
     if (code) return codeMessage(entries, code[1]!, code[2])
     const key = exact.get(raw)
     if (key !== undefined) return { kind: 'message', key, params: {} }
-    for (const { key: patternKey, re, names } of patterns) {
+    for (const { key: patternKey, re, names, read } of patterns) {
       const m = re.exec(raw)
       if (!m) continue
       const params: Record<string, string> = {}
       names.forEach((name, i) => {
-        if (!Object.hasOwn(params, name)) params[name] = m[i + 1]!
+        if (read.has(name) && !Object.hasOwn(params, name)) params[name] = m[i + 1]!
       })
       return { kind: 'message', key: patternKey, params }
     }

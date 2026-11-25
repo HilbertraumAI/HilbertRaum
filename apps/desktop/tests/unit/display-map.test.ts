@@ -308,16 +308,21 @@ describe('localizeServerCopy in every registered language (D-L4)', () => {
 
 // ---- T2.12 (W-69, F-26): persisted message values and the coded form ----------------------------
 // Release 1 is the oldest version that will ever read a workspace, so what it makes of a stored message can never be
-// fixed in the field. tests/fixtures/display-map/values.json holds the English each display-mapped message is stored
-// as (v0.1.66's released catalog; `main.engine.filesUnreadable` from #1012, after it), locked by the golden manifest.
-// A later version may store the coded form instead: `hr:<key>`, plus `?<name>=<value>&…` (each value
-// percent-encoded) for the placeholders of the key's English template.
+// fixed in the field. tests/fixtures/display-map/values.json is the append-only history of the English each
+// display-mapped message was ever stored as, oldest first (its `provenance` says where each value comes from), locked
+// by the golden manifest. A later version may store the coded form instead: `hr:<key>`, plus `?<name>=<value>&…` (each
+// value percent-encoded) for the placeholders of the key's English template.
 
 const VALUES_FIXTURE = join(__dirname, '..', 'fixtures', 'display-map', 'values.json')
 const valuesFixture = JSON.parse(readFileSync(VALUES_FIXTURE, 'utf8')) as {
-  frozenAt: string | null
-  values: Record<string, string>
+  messages: Record<string, { actedOn?: boolean; history: string[] }>
+  provenance: string
 }
+/** How every history row's failure says to change the fixture (R2 M-1/M-2/M-4: append, never edit, never remove). */
+const APPEND_ONLY =
+  'then update the fixture’s line in tests/fixtures/golden-fixtures.sha256; never remove a key, a value or an alias'
+/** F-26's length cap: a longer stored string is no persisted message (R1 M-1). */
+const CAP = 4096
 
 /** A stored row written from `template`: each `{name}` filled with a sample, and the params that fill it. */
 function rowFrom(template: string): { text: string; params: Record<string, string> } {
@@ -334,32 +339,122 @@ function coded(key: string, params: MessageParams = {}): string {
   return query ? `hr:${key}?${query}` : `hr:${key}`
 }
 
-describe('the English a message is stored as never stops reading as its key (F-26)', () => {
-  it('the value fixture holds exactly the display-mapped keys', () => {
-    expect(Object.keys(valuesFixture.values).sort()).toEqual([...DISPLAY_MAP_KEYS, ...INTERPOLATED_MAP_KEYS].sort())
+describe('the English a message was ever stored as never stops reading as its key (F-26)', () => {
+  it('the history lists exactly the display-mapped keys', () => {
+    expect(
+      Object.keys(valuesFixture.messages).sort(),
+      `append a key added to the map to tests/fixtures/display-map/values.json with its one value (its English), ${APPEND_ONLY}`
+    ).toEqual([...DISPLAY_MAP_KEYS, ...INTERPOLATED_MAP_KEYS].sort())
   })
 
-  it('every stored value is the current English or an alias, and still reads as its key with its values', () => {
-    const problems = Object.entries(valuesFixture.values).flatMap(([key, stored]): string[] => {
+  it('each history ends with the current English, and its earlier values are exactly the key’s aliases', () => {
+    const problems = Object.entries(valuesFixture.messages).flatMap(([key, { actedOn, history }]): string[] => {
       const current = (en as Record<string, string>)[key]
-      const aliases: readonly string[] = PERSISTED_ALIASES[key as MessageKey] ?? []
-      if (current !== stored && !aliases.includes(stored)) {
-        const editFixture =
-          valuesFixture.frozenAt === null
-            ? ' or, only before the release-1 tag, put the new value into tests/fixtures/display-map/values.json and its sha256 into tests/fixtures/golden-fixtures.sha256'
-            : ` (the fixture is frozen at ${valuesFixture.frozenAt}, so the alias is the only fix)`
+      if (history.at(-1) !== current) {
+        if (actedOn === true) {
+          return [`${key}: en.ts now says ${JSON.stringify(current)}. Release 1 acts on this key; never reword it, add a new key instead.`]
+        }
         return [
-          `${key}: stored rows hold ${JSON.stringify(stored)}, en.ts now says ${JSON.stringify(current)}. ` +
-            `Fix: add ${JSON.stringify(stored)} to PERSISTED_ALIASES['${key}'] in src/shared/persisted-messages.ts,${editFixture}.`
+          `${key}: en.ts now says ${JSON.stringify(current)}, the history ends with ${JSON.stringify(history.at(-1))}. ` +
+            `Fix: append ${JSON.stringify(current)} to the history of ${key} in tests/fixtures/display-map/values.json and ` +
+            `${JSON.stringify(history.at(-1))} to PERSISTED_ALIASES['${key}'] in src/shared/persisted-messages.ts, ${APPEND_ONLY}.`
         ]
       }
-      const row = rowFrom(stored)
-      const read = parsePersistedMessage(row.text)
-      return read?.kind === 'message' && read.key === key && JSON.stringify(read.params) === JSON.stringify(row.params)
-        ? []
-        : [`${key}: a row stored as ${JSON.stringify(row.text)} reads as ${JSON.stringify(read)}`]
+      const earlier = history.slice(0, -1)
+      const aliases: readonly string[] = PERSISTED_ALIASES[key as MessageKey] ?? []
+      return [
+        ...earlier
+          .filter((value) => !aliases.includes(value))
+          .map((value) => `${key}: ${JSON.stringify(value)} was stored once, so append it to PERSISTED_ALIASES['${key}'] again; ${APPEND_ONLY}.`),
+        ...aliases
+          .filter((alias) => !earlier.includes(alias))
+          .map((alias) => `${key}: the alias ${JSON.stringify(alias)} is not in the key’s history in values.json; list it there before the current value, ${APPEND_ONLY}.`)
+      ]
     })
     expect(problems).toEqual([])
+  })
+
+  it('every value in a history still reads as its key, with its values', () => {
+    const problems = Object.entries(valuesFixture.messages).flatMap(([key, { history }]) =>
+      history.flatMap((stored) => {
+        const row = rowFrom(stored)
+        const read = parsePersistedMessage(row.text)
+        return read?.kind === 'message' && read.key === key && JSON.stringify(read.params) === JSON.stringify(row.params)
+          ? []
+          : [`${key}: a row stored as ${JSON.stringify(row.text)} reads as ${JSON.stringify(read)}`]
+      })
+    )
+    expect(problems).toEqual([])
+  })
+
+  // R2 M-5: release 1 cannot read a reworded value of a key it acts on (scanDetected, the retry offer, the photo remedy,
+  // the default title, the slow-read upsert), and the coded form instead is unreadable for v0.1.66 and older.
+  it('a key release 1 acts on keeps its one value', () => {
+    const reworded = Object.entries(valuesFixture.messages)
+      .filter(([, { actedOn, history }]) => actedOn === true && history.length !== 1)
+      .map(([key]) => `${key}: release 1 acts on this key; never reword it, add a new key instead`)
+    expect(reworded).toEqual([])
+  })
+})
+
+// R1 M-1: a stored string longer than the cap is no persisted message, so it is shown as it is. Without the cap a
+// crafted 1 MB value kept the two-placeholder template's pattern busy for 12 s, in main for every failed row of a
+// document listing, and a 7 M-char code overflowed the stack.
+describe('a stored string longer than 4,096 units is no persisted message (F-26)', () => {
+  it('a 1 MB string crafted against the two-placeholder template is none, well under 50 ms', () => {
+    const [head, middle] = en['main.benchmark.warnRecommendationLowered'].split(/\{\w+\}/)
+    const crafted = head! + middle!.repeat(Math.ceil(1_048_576 / middle!.length))
+    const started = performance.now()
+    const read = parsePersistedMessage(crafted)
+    const elapsed = performance.now() - started
+    expect(read).toBeNull()
+    expect(elapsed).toBeLessThan(50)
+    expect(classifyServerCopy(tDe, crafted)).toEqual({ text: crafted, recognized: false })
+  })
+
+  it('a 7 M-char string of the code’s shape is none, without a throw', () => {
+    const long = `hr:a${'.a'.repeat(3_500_000)}`
+    expect(() => parsePersistedMessage(long)).not.toThrow()
+    expect(parsePersistedMessage(long)).toBeNull()
+    expect(displayMapKey(long)).toBeNull()
+  })
+
+  it('every value in a history, filled with long values, fits as English and as a code; the cap is 4,096 units', () => {
+    const long = 'v'.repeat(256)
+    const problems = Object.entries(valuesFixture.messages).flatMap(([key, { history }]) =>
+      history.flatMap((stored) => {
+        const params: Record<string, string> = {}
+        const english = stored.replace(/\{(\w+)\}/g, (_m, name: string) => (params[name] = long))
+        return [english, coded(key, params)].flatMap((text) => {
+          const read = parsePersistedMessage(text)
+          return text.length <= CAP && read?.kind === 'message' && read.key === key
+            ? []
+            : [`${key}: ${text.length} units read as ${JSON.stringify(read)}`]
+        })
+      })
+    )
+    expect(problems).toEqual([])
+    const shell = t('en', 'main.ingest.unsupportedType', { ext: '' }).length
+    const ofLength = (n: number): string => t('en', 'main.ingest.unsupportedType', { ext: 'x'.repeat(n - shell) })
+    expect(ofLength(CAP)).toHaveLength(CAP)
+    expect(displayMapKey(ofLength(CAP))).toBe('main.ingest.unsupportedType')
+    expect(displayMapKey(ofLength(CAP + 1))).toBeNull()
+  })
+})
+
+// R2 M-6: release 1 reads a code only for a key and placeholders of the code's shape. A later key such as `Main.x`, or a
+// placeholder such as `{file_name}` (which `t()` allows), could never be coded for release 1, so every key of this
+// catalog and every placeholder of its English must have that shape.
+describe('every key of the catalog can be written as a code (F-26)', () => {
+  it('each key, with every placeholder of its English supplied, reads back as that key', () => {
+    const outside = Object.entries(en as Record<string, string>).flatMap(([key, value]) => {
+      const params = Object.fromEntries([...value.matchAll(/\{(\w+)\}/g)].map(([, name]) => [name!, 'x']))
+      const read = parsePersistedMessage(coded(key, params))
+      return read?.kind === 'message' && read.key === key
+        ? []
+        : [`${key} {${Object.keys(params).join('}, {')}}: a key or placeholder outside the code's shape can never be coded for release 1`]
+    })
+    expect(outside).toEqual([])
   })
 })
 
@@ -420,10 +515,41 @@ describe('an old value kept in the alias table reads as its key (F-26)', () => {
   it.each<[string, Partial<Record<MessageKey, readonly string[]>>]>([
     ['equals another key’s current value', { 'main.rag.noContext': [en['main.rag.reindexNeeded']] }],
     ['equals another key’s alias', { 'main.rag.noContext': ['An old line.'], 'main.rag.reindexNeeded': ['An old line.'] }],
-    ['names a value the current template does not have', { 'main.ingest.unsupportedType': ['Old ({extension}).'] }],
-    ['belongs to a key the map does not hold', { 'common.cancel': ['Abort'] }]
+    // R2 M-3: an old template must hold every placeholder of the current one, or the re-render shows a literal `{ext}`.
+    ['lacks a placeholder of the current template', { 'main.ingest.unsupportedType': ['An older wording of the file type failure.'] }],
+    ['belongs to a key the map does not hold', { 'common.cancel': ['Abort'] }],
+    // R2 M-3: an exact key's alias is plain text; with a placeholder it could only ever match itself.
+    ['belongs to an exact key and holds a placeholder', { 'main.rag.noContext': ['An older {thing} answer.'] }],
+    // R1 m-7 + R2 m-6: three aliases that can never be read as written.
+    ['has the shape of a code (the code branch answers first)', { 'main.rag.noContext': ['hr:main.rag.noContext'] }],
+    ['has no text of its own besides its placeholders (it would read any string)', { 'main.ingest.unsupportedType': ['{ext}'] }],
+    [
+      'is plain text another key’s current template reads (it would take that key’s rows)',
+      { 'main.rag.noContext': [t('en', 'main.ingest.unsupportedType', { ext: '.xyz' })] }
+    ],
+    [
+      'is plain text another key’s old template reads',
+      { 'main.ingest.unsupportedType': ['An older wording ({ext}).'], 'main.rag.noContext': ['An older wording (.xyz).'] }
+    ]
   ])('refuses, when the module loads, an alias that %s', (_why, aliases) => {
     expect(() => buildPersistedMessageParser(en, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, aliases)).toThrow(/alias/)
+  })
+
+  it('refuses a current template with no text of its own besides its placeholders, too', () => {
+    const catalog = { ...en, 'main.ingest.unsupportedType': '{ext}' }
+    expect(() => buildPersistedMessageParser(catalog, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, {})).toThrow(/text of its own/)
+  })
+
+  // R2 M-3, the other direction: a placeholder the current template no longer has is harmless (`t()` ignores it).
+  it('accepts an old template with a placeholder the current one lacks, and reads only the current placeholders', () => {
+    const parse = buildPersistedMessageParser(en, DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS, {
+      'main.ingest.unsupportedType': ['An older wording ({ext}, {mime}).']
+    })
+    expect(parse('An older wording (.heic, image/heic).')).toEqual({
+      kind: 'message',
+      key: 'main.ingest.unsupportedType',
+      params: { ext: '.heic' }
+    })
   })
 })
 

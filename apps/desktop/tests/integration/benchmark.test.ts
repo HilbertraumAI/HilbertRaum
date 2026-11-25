@@ -581,6 +581,13 @@ describe('buildWarnings', () => {
     expect(upsertSlowReadWarning(stored, 42)).toEqual([...others, t('en', 'main.benchmark.warnSlowRead', { mbps: 42 })])
     expect(upsertSlowReadWarning(stored, 480)).toEqual(others)
   })
+
+  // R1 m-5: a repeated or undecodable extra parameter makes the code one this version cannot read (shown as C02), so it
+  // is not the slow-read warning, and it stays beside the fresh one.
+  it('upsertSlowReadWarning keeps a coded slow-read line this version cannot read', () => {
+    const unreadable = ['hr:main.benchmark.warnSlowRead?mbps=55&x=1&x=2', 'hr:main.benchmark.warnSlowRead?mbps=55&x=%E0']
+    expect(upsertSlowReadWarning(unreadable, 42)).toEqual([...unreadable, t('en', 'main.benchmark.warnSlowRead', { mbps: 42 })])
+  })
 })
 
 // ---- runBenchmark + persistence + downstream reads ------------------------------
