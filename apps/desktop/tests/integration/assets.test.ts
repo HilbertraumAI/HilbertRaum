@@ -548,10 +548,10 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
   // a real copy (its files and their bytes are in the set), so the pre-spawn check hashes what a drive would hold.
   describe('F-24 golden install markers: what release 1 reads (T2.10, W-62)', () => {
     const { copy, record, vectors, relations } = MARKER_GOLDENS
-    /** A copy of the set's engine with `marker` as its install marker (none, or a folder at its name): the copy's folder. */
-    const goldenCopy = (marker: Buffer | null | 'folder'): string => {
+    /** A copy of the set's engine (plus a vector's own `files`) with `marker` as its install marker (none, or a folder at its name): the copy's folder. */
+    const goldenCopy = (marker: Buffer | null | 'folder', files: Record<string, string> = {}): string => {
       const dir = tempDir('hilbertraum-golden-marker-')
-      for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(dir, name), bytes)
+      for (const [name, bytes] of Object.entries({ ...copy.files, ...files })) writeFileSync(join(dir, name), bytes)
       if (marker === 'folder') mkdirSync(runtimeMarkerPath(dir))
       else if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
       return dir
@@ -573,7 +573,7 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     })
 
     it.each(vectors.map((v) => [v.name, v] as const))('%s: the shared reading and the pre-spawn check', async (_name, v) => {
-      const dir = goldenCopy(markerOf(v))
+      const dir = goldenCopy(markerOf(v), v.files)
       const state = readRuntimeMarkerState(dir)
       expect(state.kind).toBe(v.app)
       if (state.kind === 'marker') expect({ version: state.marker.version, backend: state.marker.backend }).toEqual({ version: v.version, backend: v.backend })
@@ -596,8 +596,11 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
       const plan = planRuntimeDownload(root, build, r.pin)
       mkdirSync(plan.extractTo, { recursive: true })
       for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(plan.extractTo, name), bytes)
-      writeRuntimeMarker(plan.extractTo, { version: r.marker.version, backend: r.marker.backend, os: 'win', arch: copy.arch })
-      expect(compareRuntimeVersions(r.marker.version, r.pin)).toBe(r.order)
+      // Round 3: a row with no `marker` is the copy with no marker file, which has no version to order.
+      if (r.marker) {
+        writeRuntimeMarker(plan.extractTo, { version: r.marker.version, backend: r.marker.backend, os: 'win', arch: copy.arch })
+        expect(compareRuntimeVersions(r.marker.version, r.pin)).toBe(r.order)
+      } else expect(r.order).toBeUndefined()
       expect(runtimeInstallRelation(plan)).toBe(r.relation)
       expect(runtimeInstallCurrent(plan)).toBe(r.installCurrent)
     })

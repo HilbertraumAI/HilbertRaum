@@ -1541,21 +1541,32 @@ what a later release may change freely and what only behind `min_app_version` or
   dropped, not listed; a `role` that is no string (a number, a block) is a bad value, not a new role;
   one id space: a usable manifest
   always keeps its id over a same-id newer one, and among newer ones the first in walk order wins;
-  the walk sorts each folder by code unit; `default_for_role` picks among usable manifests, else the
+  of two or more usable manifests of one id the first in walk order is the model and every later one
+  is dropped with a "duplicate id" log line, whatever either holds; the walk goes depth first and sorts
+  each folder's entries, files and folders together, by code unit of the name (`a/z.yaml` before
+  `b.yaml`, `B.yaml` before `a.yaml`); `default_for_role` picks among usable manifests, else the
   first usable one of the role; `speculative_decoding` and `disable_prompt_cache` outside chat stay
   rejected; CRLF line ends and a leading byte-order mark are read past
   ([`data-contracts.md`](data-contracts.md), "A manifest for a newer HilbertRaum").
 - **The AI engine (F-24)**, #516/#842/#843/#873: pins only from the app's bundled
-  `runtime-sources.yaml`; the version relation orders `bNNNNN` and dotted tags (`older` → the update is
-  offered; `newer` → never replaced, started anyway; any other shape → `unknown`, reported, never
-  updated); a reinstall replaces with the pin whatever the relation; the yaml validator is whole-file;
+  `runtime-sources.yaml`; the version relation orders two tag shapes of the marker's and the pin's
+  `version`, each read with blanks around it trimmed and case-sensitive: a build counter, `b` and one or
+  more digits (`b9585`), and a dotted release, an optional `v` and one or more digit runs joined by single
+  dots, any number of parts (`v1.8.6`, `3.8.1`, `v1.8`); both tags must have the same shape; parts compare
+  as whole numbers (`b10000` above `b9585`, `3.10.0` above `3.8.1`), and a missing trailing part counts as
+  zero (`v1.8` is older than `v1.8.6`, `v1.8.6.1` newer); `older` → the update is offered; `newer` →
+  never replaced, started anyway; anything else (another shape, `B99999`, a suffix such as `b9585-rc1`, a
+  build tag against a dotted pin, no marker that reads) → `unknown`, reported, never updated; a reinstall
+  replaces with the pin whatever the relation; the yaml validator is whole-file;
   the install marker is read as one of absent, unreadable, damaged or a marker (#1028); and §6.7.
 - **Skills (F-25)**, #846, with W-65: app skills read from the drive's `app-skills/` only; `kind` is the
   closed set `instruction` / `tool`, checked before `compatibility.minAppVersion`, so a new kind is
   invalid whatever version it declares, except W-65's typed case: a skill that fails validation but
   declares a well-formed `minAppVersion` above the app is counted as made for a newer version; a
-  `minAppVersion` that is not plain `MAJOR.MINOR.PATCH` (a suffix, a fourth part, `1.0`) makes the skill
-  invalid before the gate is asked; the gate's fail-open covers an app version it cannot read only, and
+  `minAppVersion` that is not plain `MAJOR.MINOR.PATCH` (a suffix, a `+build`, a fourth part, a leading
+  `v`, `1.0`) makes the skill invalid before the gate is asked, while a leading zero in a part is plain
+  and compares as a number (`0.01.66` is `0.1.66`; unlike a manifest's minimum, where it counts as
+  newer); the gate's fail-open covers an app version it cannot read only, and
   a pre-release app is older than its own release; frontmatter keys release 1 does not know are
   ignored; `skills.disabled_reason` records why a row is off, and the reconcile re-enables only
   `min_app_version` on a known app version; a vanished or invalid folder marks its row unavailable,
@@ -1565,19 +1576,24 @@ what a later release may change freely and what only behind `min_app_version` or
 
 | Set | What it holds | Verdicts | Run by |
 |---|---|---|---|
-| `f23-manifests/` | 47 single files and two held as base64 (CRLF, a byte-order mark), six scenario trees (id space both ways round, walk order, `default_for_role`), two flat-read probes | accepts / lists / drops / ignores at `0.1.66`, at `0.1.66-beta.1` and at an unknown version; what the scripts do at each | `manifest.test.ts`, `committed-catalog.test.ts`, `script-execution.test.ts` |
+| `f23-manifests/` | 48 single files and two held as base64 (CRLF, a byte-order mark), seven scenario trees (id space both ways round, walk order, two usable files of one id, `default_for_role`), two flat-read probes | accepts / lists / drops / ignores at `0.1.66`, at `0.1.66-beta.1` and at an unknown version; what the scripts do at each | `manifest.test.ts`, `committed-catalog.test.ts`, `script-execution.test.ts` |
 | `f24-runtime-sources/` | 19 whole yaml files | accepts (with the families it yields) / drops (the whole file) | `runtime-sources.test.ts` |
-| `f24-markers/` | 33 marker vectors of one engine copy, base64 where the repo's byte nets refuse the bytes; nine version-relation rows | per reader: the shared reading, the pre-spawn check, both `fetch-runtime` twins in both modes; the record every writer writes; the relation, the install skip and the twins' choice | `assets.test.ts`, `script-execution.test.ts` |
-| `f25-skills/` | 19 skill folders, five reconcile sequences (and T2.14's `unavailable-reasons.json`) | the parse and the gate, the discovery code, the row a reconcile leaves, at three app versions | `skills-registry.test.ts` |
+| `f24-markers/` | 37 marker vectors of one engine copy (a vector may add a file to the copy), base64 where the repo's byte nets refuse the bytes; ten version-relation rows | per reader: the shared reading, the pre-spawn check, both `fetch-runtime` twins in both modes (the `.sh` twin's own where it differs); the record every writer writes; the relation, the install skip and the twins' choice | `assets.test.ts`, `script-execution.test.ts` |
+| `f25-skills/` | 22 skill folders, five reconcile sequences (and T2.14's `unavailable-reasons.json`) | the parse and the gate, the discovery code, the row a reconcile leaves, at three app versions | `skills-registry.test.ts` |
 
 A verdict in these sets never changes: a later release adds files and lines only. As built and frozen
-(Δ-53, Δ-54):
+(Δ-53, Δ-54, and T2.10's round 3):
 - "a map without the program" is damaged at the pre-spawn check and in a Kit build (`fetch-runtime
   --commercial`), but a marker to the shared reading and to the twins outside commercial mode;
 - a marker with an empty `binaries` map, or none, is tolerated at the start and fetched again by the
   twins only with `--commercial`; both twins read past a byte-order mark and a marker spread over
   lines, except that the `.sh` twin with `--commercial` finds no recorded hash in a pretty-printed
   marker and fetches the copy again (the `.ps1` twin keeps it);
+- the `.sh` twin finds a required file's hash past a `binaries` map nested after the top-level one, so it
+  skips that copy in both modes as the `.ps1` twin does; but it takes the recorded names for its
+  gone-file check (#998) from the last map on the line, split at commas, so a gone file whose name holds
+  a comma, or that only the top-level map records when a nested map follows it, goes unnoticed by it (it
+  skips the copy; the `.ps1` twin fetches it again; the app refuses it at the start as `missing`);
 - in the yaml, a new `arch` or `backend` value inside a family block is accepted (a build no Kit
   selects, or, listed first for its `os`, that `os`'s default); a new `os` value is refused;
 - the scripts skip a `role` that is no string as "needs a newer HilbertRaum", where the app drops the
@@ -1603,7 +1619,11 @@ rules for changing a manifest"):
   whose weights may be on the drive; app-owned chat manifests are refreshed all or nothing (§6.3);
 - an app-owned manifest or skill is never renamed or given a new id in place (W-62 (a)):
   `prepare-drive` copies without deleting, so the old and the new file would both stay on a refreshed
-  drive as a duplicate id; a retired file leaves a Kit only through §6.3's owned-hash removal.
+  drive as a duplicate id; a retired file leaves a Kit only through §6.3's owned-hash removal. The duty
+  rests on the duplicate rule above (the golden scenario `s7-two-usable-one-id`): of two usable files of
+  one id, release 1 runs the one whose path comes first in its walk and logs the other on every discovery,
+  so a renamed manifest whose new path sorts after the old one is never read by release 1, and one that
+  sorts before it silently takes the old one's place; neither is chosen by which file is newer.
 
 **Release rules for the AI engine (F-24).** The marker rules are in [`data-contracts.md`](data-contracts.md)
 (the engine install marker, #1028): `binaries` stays a map of relative path (`/`) to lower-case SHA-256
@@ -1611,9 +1631,11 @@ hex of every file of the copy, the program first (a map without the program make
 copy at its start); anything new goes into a new top-level field; no key named `version`, `backend`,
 `os`, `arch` or `binaries` below the top level; those four stay strings and `version` keeps the
 upstream tag shapes; the marker stays one line of UTF-8 JSON, without a byte-order mark or blanks,
-with no `{`, `}`, `"`, `,` or `\` inside a key or value, under 64 KiB (the app refuses none of these;
-release 1's twins fetch the engine again for a marker over 64 KiB, and the `.sh` twin with
-`--commercial` for one spread over lines; they read past a byte-order mark). In `runtime-sources.yaml`:
+with no `{`, `}`, `"`, `,` or `\` inside a key or value, under 64 KiB (the app refuses none of these at a
+start, up to its 1 MiB cap; release 1's twins fetch the engine again for a marker over 64 KiB, and the
+`.sh` twin with `--commercial` for one spread over lines; they read past a byte-order mark and past
+structural characters inside a string; a comma in a recorded name or a nested `binaries` map hides a
+gone file from the `.sh` twin's check, as listed above and in `data-contracts.md`). In `runtime-sources.yaml`:
 families are added as new top-level keys and build fields as new keys; never a new `os` or `arch`
 value inside an existing family block (a new `os` value makes release 1 refuse the whole file, and so
 run no engine); one block release 1 refuses disables every engine it reads from that file. The
@@ -1634,7 +1656,8 @@ install relies on** (T8.5c's reviews, F-24's amendment): a later version
 `kind` reaches release 1 only as a user skill; one that declares a well-formed
 `compatibility.minAppVersion` (exactly `MAJOR.MINOR.PATCH`) above release 1 is counted as made for a
 newer version, any other is invalid there. A `minAppVersion` is always plain `MAJOR.MINOR.PATCH`:
-release 1 calls a skill with a suffixed or four-part minimum invalid, for ever. New frontmatter keys
+release 1 calls a skill with a suffixed, `+build`, `v`-prefixed or four-part minimum invalid, for ever,
+and reads a part with a leading zero as its number. New frontmatter keys
 freely. A new `disabled_reason` value is left alone by release 1 (the row stays off); only
 `min_app_version` is ever switched back on.
 

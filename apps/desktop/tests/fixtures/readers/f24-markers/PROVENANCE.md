@@ -11,10 +11,21 @@ sheet): such bytes are base64 here.
 As built and frozen (Δ-53, Δ-54): "a map without the program" is damaged at the pre-spawn check and in a Kit
 build (`--commercial`), a marker to the shared reading and to the twins outside commercial mode; a marker with
 no map, or an empty one, is fetched again only with `--commercial`; both twins read past a byte-order mark.
-One vector differs between the twins, given under `sh`: a pretty-printed marker is fetched again by the .sh
-twin with `--commercial` (its hash lookup reads one line) and kept by the .ps1 twin.
+Where the twins differ, the `.sh` twin's verdict is given under `sh`: a pretty-printed marker is fetched again
+by the .sh twin with `--commercial` (its hash lookup reads one line) and kept by the .ps1 twin (and round 3's
+two below).
 
 Round 2 (after the Fable QA) added 15 vectors (no map; pretty-printed; nested os/arch/binaries; structural
 characters in a string; a missing or escaping recorded file; a number field; a list; an empty file; a control
 byte in an unknown string; a folder; the 64 KiB pair; over 1 MiB; no marker) and `relations`, the version
-relation; no earlier verdict changed. Locked by `../../golden-fixtures.sha256`.
+relation; no earlier verdict changed.
+
+Round 3 (after the QA's re-check 1) measured every vector on the `.sh` leg too (Git Bash), and W-4: the `.sh`
+twin skips "nested os, arch and binaries" in both modes (its hash lookup reaches the top-level map). It added
+four vectors (a comma in a recorded name, its file there and gone; structural characters in a string before
+the map; a nested map after the top-level one with a recorded file gone), a vector's optional `files` (files
+it adds to the copy), and the relation row "no marker" (no `marker`, no `order`). Two of the new vectors carry
+an `sh` entry: the `.sh` twin takes its recorded names for the gone-file check from the last map on the line,
+split at commas, so it skips a copy whose comma-named file, or whose file recorded only before a nested map,
+is gone (the `.ps1` twin fetches it again, the app refuses it at the start as `missing`). No earlier verdict
+changed. Locked by `../../golden-fixtures.sha256`.

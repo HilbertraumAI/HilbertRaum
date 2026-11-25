@@ -12,6 +12,8 @@ As built: a `minAppVersion` that is not plain `MAJOR.MINOR.PATCH` (a suffix, a f
 skill invalid before the gate is asked; the gate's fail-open covers an app version it cannot read only.
 Round 2 (after the Fable QA) added six folders (`g25-min-suffix`, `g25-min-four-parts`, `g25-unknown-keys`,
 `g25-missing-title-min-above`, `g25-kind-unknown-min-malformed`, `g25-folder-not-id`) and a fifth sequence
-(an unknown `disabled_reason`); no earlier verdict changed. `unavailable-reasons.json` is T2.14 round 2's
+(an unknown `disabled_reason`); no earlier verdict changed. Round 3 (after the QA's re-check 1) added three
+folders: a `v`-prefixed and a `+build` minimum, both invalid at every version, and a leading-zero minimum
+(`0.01.66`), valid and compared as numbers; no earlier verdict changed. `unavailable-reasons.json` is T2.14 round 2's
 addition beside `verdicts.json` (the reason a reconcile gives for an unavailable row), over this set's folders.
 Locked by `../../golden-fixtures.sha256`.

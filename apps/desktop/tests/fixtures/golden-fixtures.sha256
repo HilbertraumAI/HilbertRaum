@@ -1,5 +1,5 @@
 3c0adc9a5b3c9eff68ff08412a4e3824b64a6a03416608fa737c174a5150dabb  display-map/values.json
-2a37ae769c813a73e6fdea7bd4792aa49daf428f98964ab326f289d60acac2df  readers/f23-manifests/PROVENANCE.md
+f627765b04fe007efc8e514c7713875146810b33c745a33edbb1030372c87710  readers/f23-manifests/PROVENANCE.md
 03807dda11f5e87c2cdf837a243d7fd07fc5540a2b9c2ca3542f15f328b774c8  readers/f23-manifests/flat-read/nested-all-first.yaml
 1e335fd0e8bc370ad9b78101b3e8f7ca9eaeb9ac805711af7bbb9483a48f6234  readers/f23-manifests/flat-read/nested-key-first.yaml
 c7cf920714209a126fe65c6e9afcca775857e4b3791ad9f99f6b02386d93ace1  readers/f23-manifests/scenarios/s1-one-id-space/a-newer.yaml
@@ -18,6 +18,8 @@ bcba97609bfc1e8874b7366b14d7bbdbb7377f5dccf75c50b49c5ffd82d797ae  readers/f23-ma
 900ba8ca05545618c53f65991b0b5c10b23336dc3a7281c741ad61b0f66ac6ae  readers/f23-manifests/scenarios/s5-two-flagged/b.yaml
 c550a4d45fd600c4e39564461d3f056ecc1f505895ade6422cb27ec63b43422e  readers/f23-manifests/scenarios/s6-usable-first/a-usable.yaml
 519c38cbd812722a174044aba0758fd7dd28feb882784b3911f3905dcd5bdb8a  readers/f23-manifests/scenarios/s6-usable-first/b-newer.yaml
+e9c0c3acfd1367556ffaff204381b1de13ab9538b7f6818c65b571e3ef922be5  readers/f23-manifests/scenarios/s7-two-usable-one-id/a/z.yaml
+52673d3f8392372cc260d398edbad1ffecff5224ca6b5f58bf8dde16d6abaa9d  readers/f23-manifests/scenarios/s7-two-usable-one-id/b.yaml
 b7c5def4a8393a70f49a57056449639764086f2da27fd89345fd4d16c862bbd1  readers/f23-manifests/single/a01-base.yaml
 999f7058371815446c7a682cf404037bc3571566df6806a62c4d6e2daaa4d614  readers/f23-manifests/single/a02-unknown-keys.yaml
 7294d80eedf989258140e8cf766c132e7f4862addffad30b8641d61ba73c0379  readers/f23-manifests/single/a03-min-equal.yaml
@@ -43,6 +45,7 @@ c5e1b78e350c646a92ce41c99a539c0c947876ef0f907b65424e4b57349188f6  readers/f23-ma
 7943740db2b264016e4c6fe9073a309e483dbdc73f949e5fb11f1d71fbb93356  readers/f23-manifests/single/d10-not-yaml.yaml
 81d2cf66f60edd7f8eb7ff8d9bf290974e066692a9f66797ee2bbc25e373eac5  readers/f23-manifests/single/d11-not-a-mapping.yaml
 a8908ed026c2eb13f8ddc127280eac9768d1fade55b17c1f16c0821aaed171f6  readers/f23-manifests/single/d12-role-null.yaml
+66e6be3531af945fb849d7e35bca987574c0a82f8b98a7e32cae50fc6a4fa980  readers/f23-manifests/single/d13-new-enum-value.yaml
 f25dcf940d5e72b3da78ef9fa4fb790a4e90a95325bd59feaef1841b85a5c78a  readers/f23-manifests/single/i01-notes.txt
 01d764a60a91ad7e06649ad7aaa18b4c7491aa653a0886e89b7b143f629a2a7a  readers/f23-manifests/single/i02-readme.md
 9349d43188fd4fccbaafef4ac0eb12cae07f0b4c4345b3b81e2b9386365caa00  readers/f23-manifests/single/i03-manifest.json
@@ -65,9 +68,9 @@ a5f73ed6e1a96fda09612f9d58c7cc7aa63f275eac5bac213efd4d5758e4d35a  readers/f23-ma
 92f647616023365c8a4469d7353d269567c81d458b630ad644e89c97ddb69a20  readers/f23-manifests/single/l16-min-huge.yaml
 1714d56fcb0ed9b7b53391867bd1ba12343202b7637b6e48bbf6e1583da5b0ab  readers/f23-manifests/single/l17-min-padded.yaml
 935468db83984f3b39ca6c5fd94af42f3f76b0c8bc0f2ac4ac94983532fdd97f  readers/f23-manifests/single/runtime-sources.yaml
-0c089ee932532ce8690a954ff93ad09cef5b2d487579e2c35e3a899b20d1dd63  readers/f23-manifests/verdicts.json
-279cec0c5852c88550aa3be6a7e9ae249d3d2b24a35f1b08bcc0a1ef97582f2f  readers/f24-markers/PROVENANCE.md
-6b6ec14b9548812288e86e3c3fc6b16f5e28552b1a213cdb7fd349ce8bddc4b6  readers/f24-markers/vectors.json
+11c79e40b67f81531d2cdfc9698a258d0eef83de2c7aa94db152b420f132706c  readers/f23-manifests/verdicts.json
+57f359c33f94342db6df63ac242f03cd5b4856a76f047af547b3df75a29c859e  readers/f24-markers/PROVENANCE.md
+b0b35ccfba67041697bb0dc13cd30e0e0ff8da6fb5c99510dd479a424c59741a  readers/f24-markers/vectors.json
 0cc9156f0212311d3d0fee10246d4b47ce44ba1b7208b65e90e6e9b81717ed74  readers/f24-runtime-sources/PROVENANCE.md
 872182874aa8968c7a725e066da5ae684ec733fea0647497c4003fb23f7fcd92  readers/f24-runtime-sources/a1-base.yaml
 39504bfd19f924cccff6ace1fdf2f5d26c225a6128c06a1b6bebe4a67fd9c782  readers/f24-runtime-sources/a2-new-family.yaml
@@ -89,7 +92,7 @@ bfcfa6db6e093ac91e7f449e7911ee1d10ca992afda5093afd3c0f4dfc16480d  readers/f24-ru
 ebd86b9e0f33bd87d662714276a949969b299f222e976c615ce47d6f457ef9eb  readers/f24-runtime-sources/d8-kiwix-bad-executable.yaml
 095cfab9951633b6ae3aa878468ac26168cdc22410e5134e4777c82892b15443  readers/f24-runtime-sources/d9-not-yaml.yaml
 407b6d33aced8333132d50eb9533a90d5c6d5eb10b6bdb538003c5933c0392b6  readers/f24-runtime-sources/verdicts.json
-46c08dab6dce0471f32f8a3d16b34d2327275c55ef3ecf490546b962bb8d8581  readers/f25-skills/PROVENANCE.md
+1d3e182aa4b9ecfdc74a8d8572e1be53eed1987476cee75443e5afd628a76906  readers/f25-skills/PROVENANCE.md
 6f46265b8985e33e341ba92f73399afaadd5b2fa2c13dcdc6dcbde6c1e0a83f5  readers/f25-skills/skills/.g25-dot-folder/SKILL.md
 1db5d83842c7405d73f3ee5cf034f35233781d279ee29a807e9a05d51acb8ce1  readers/f25-skills/skills/G25_Bad_Name/SKILL.md
 5d5fc90437bdde3b3d9bf6215f5ed71bf5fe99ca39c82113d9c1cfc10b9d8cd7  readers/f25-skills/skills/g25-base/SKILL.md
@@ -101,16 +104,19 @@ ac5819d38184388c22cc573b855301e49da05ccaf942fdc96f94862fefba540a  readers/f25-sk
 1b16758eeecffb06d75cd8389811fdb8f8c3256a31683d90ca87b8b28b32deab  readers/f25-skills/skills/g25-kind-unknown/SKILL.md
 213ca8bc77466b195377d11bc46cce208fd5faa0195bd6bb2c55d1d5b9c9a0db  readers/f25-skills/skills/g25-min-above/SKILL.md
 b544e11a5b8cdf67d3871973f64add5c468d4a4dfa2f828d1850ae87528e3bbc  readers/f25-skills/skills/g25-min-below/SKILL.md
+6c95670bcc964e3baa7e812877c94f5e28d9819239148edfc4b6e01ab4286643  readers/f25-skills/skills/g25-min-build/SKILL.md
 a50d52c990adfad1f9ffec973a0a788b07c33bfc9fe32be7dbe0d5b76ae1b85b  readers/f25-skills/skills/g25-min-equal/SKILL.md
 79df62c69b70b3c5d0a6be6593e3c9464ce790e7500ae824e31a8a23cf7c77a5  readers/f25-skills/skills/g25-min-four-parts/SKILL.md
+9e2facc1286f977137d2c7706c4b12e3142f439decb047f34299aecc162189c7  readers/f25-skills/skills/g25-min-leading-zero/SKILL.md
 72deceec5c427d58d7f84ed4f5a06cad049f1f0a6a3ebca1dfd2e694d1acc845  readers/f25-skills/skills/g25-min-malformed/SKILL.md
 a95dde3974338c438e7186b9a9cccb8f1e3c9274b805ec6b251aaa99d7caf156  readers/f25-skills/skills/g25-min-suffix/SKILL.md
+2b48dfc889cc68471e5fe6decb33a831e86e7632ac12f5cd1c09b8e24a4618f6  readers/f25-skills/skills/g25-min-v-prefix/SKILL.md
 41901888276a14baaae899b7cf91ebc6f1d8a6588f79fa931ca04178f80d8377  readers/f25-skills/skills/g25-missing-title-min-above/SKILL.md
 4615f74ef19376b1fa20899cbc53bf71d16c18a789e44cfc39bd45b4af922571  readers/f25-skills/skills/g25-no-skill-md/notes.md
 65de78aeb1da5eb89f90c1d5e34da171486ed7270ffb0cc0eea9e66752aa5697  readers/f25-skills/skills/g25-tool-kind/SKILL.md
 a4687f86664f5449541be99cee1ffa4d3ee7786e573bc96498c4b48ca064e933  readers/f25-skills/skills/g25-unknown-keys/SKILL.md
 c316fbfc665a064bf55301a14c449d088fd1950cb66cc47b802589068498532f  readers/f25-skills/unavailable-reasons.json
-9fabb1e8c9856c3ffdc5c0c8474335f45cd558021e07c68fd43fa04809644a42  readers/f25-skills/verdicts.json
+9070de78d6ffe8ba762226c4c1098255bdd7c86d2d095e86abce266a0dcf6ed2  readers/f25-skills/verdicts.json
 8595e29829b81ccb7bf5d8a7c63796acfca14967b718ad588bf25277b28343ec  readers/v0.1.60/open-database.cjs
 9965663bcf3c4eec8eefe941d2c86c8a445852c118c723fe1e8ad98bf94d8fba  readers/v0.1.60/open-database.provenance.json
 b2a3cf89ba74cd81e19aaaea30740e19c466fe9298fa0b10c4b95d6c2ac085cb  schema-meta/f10-writer-vectors.json

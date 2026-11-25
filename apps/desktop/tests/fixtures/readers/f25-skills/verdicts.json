@@ -223,6 +223,49 @@
         "reason": null
       },
       "why": "the row takes the declared id, not the folder name"
+    },
+    {
+      "folder": "g25-min-v-prefix",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a minAppVersion with a leading v is not plain MAJOR.MINOR.PATCH: the skill is invalid at every app version (no typed verdict, though v0.2.0 is above the app)"
+    },
+    {
+      "folder": "g25-min-build",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a minAppVersion with +build metadata is not plain MAJOR.MINOR.PATCH: the skill is invalid at every app version (the gate would read its core, 0.2.0, as above the app)"
+    },
+    {
+      "folder": "g25-min-leading-zero",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "at": {
+        "0.1.66-beta.1": {
+          "discovery": "valid",
+          "gate": "needsNewerApp",
+          "row": {
+            "enabled": false,
+            "reason": "min_app_version"
+          }
+        },
+        "": {
+          "discovery": "valid",
+          "gate": "compatible",
+          "row": {
+            "enabled": true,
+            "reason": null
+          }
+        }
+      },
+      "why": "a leading zero in a part is still plain MAJOR.MINOR.PATCH for a skill and compares as a number: 0.01.66 is 0.1.66, met by the app and not by its pre-release (unlike a manifest minimum, where a leading zero counts as newer)"
     }
   ],
   "sequences": [

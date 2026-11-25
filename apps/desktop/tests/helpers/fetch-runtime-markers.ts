@@ -69,6 +69,8 @@ export interface MarkerGolden {
   absent?: true
   /** A folder at the marker path (round 2). */
   folder?: true
+  /** Files this vector adds to the copy, name to text, beside the copy's own (round 3: a name holding a comma). */
+  files?: Record<string, string>
   /** `readRuntimeMarkerState(dir).kind`. */
   app: 'marker' | 'damaged' | 'absent'
   /** The marker's own version and backend, when `app` is `marker`. */
@@ -89,10 +91,11 @@ export interface MarkerGolden {
 /** Round 2: the version relation of an installed engine against the pin (F-24). */
 export interface MarkerRelation {
   name: string
-  marker: { version: string; backend: string }
+  /** What the copy's marker records; absent: the copy has no marker file (round 3). */
+  marker?: { version: string; backend: string }
   pin: string
-  /** `compareRuntimeVersions(marker.version, pin)`. */
-  order: -1 | 0 | 1 | null
+  /** `compareRuntimeVersions(marker.version, pin)`; absent with no marker, which has no version to order. */
+  order?: -1 | 0 | 1 | null
   /** `runtimeInstallRelation`. */
   relation: 'older' | 'current' | 'newer' | 'unknown'
   /** `runtimeInstallCurrent` (the install skip: version and backend equal). */

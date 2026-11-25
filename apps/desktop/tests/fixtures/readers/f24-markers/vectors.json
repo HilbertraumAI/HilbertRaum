@@ -5,8 +5,8 @@
     "preSpawn": "verifyBinaryBeforeSpawn (src/main/services/binary-verifier.ts), enforced, for the program",
     "twins": "fetch-runtime.{sh,ps1} (marker_readable, $ReadInstallMarker) on a drive whose pin matches and whose files are there: \"skip\" (read as the pinned install) or \"refetch\"; default mode and --commercial. `sh`, where given, is the .sh twin's verdict where it differs from the .ps1 twin's"
   },
-  "parts": "a vector is its parts joined: `text` as UTF-8, `base64` decoded, `repeat` repeated `times` times. Bytes the repo hygiene nets refuse in a text file (a NUL, a byte-order mark, raw control bytes) are held as base64. `absent`: no file at the marker path; `folder`: a folder there.",
-  "relationsWhy": "the version relation: compareRuntimeVersions(installed, pin) = order, runtimeInstallRelation = relation, runtimeInstallCurrent (the install skip) = installCurrent, and the twins on a drive pinned to `pin` holding the copy with that marker: \"skip\" (the pinned install), \"keep\" (newer than the pin, kept) or \"refetch\"",
+  "parts": "a vector is its parts joined: `text` as UTF-8, `base64` decoded, `repeat` repeated `times` times. Bytes the repo hygiene nets refuse in a text file (a NUL, a byte-order mark, raw control bytes) are held as base64. `absent`: no file at the marker path; `folder`: a folder there. `files` (round 3): files the vector adds to the copy, name to text, beside the copy's own.",
+  "relationsWhy": "the version relation: compareRuntimeVersions(installed, pin) = order, runtimeInstallRelation = relation, runtimeInstallCurrent (the install skip) = installCurrent, and the twins on a drive pinned to `pin` holding the copy with that marker: \"skip\" (the pinned install), \"keep\" (newer than the pin, kept) or \"refetch\". A row with no `marker` (round 3) is the copy with no marker file, and has no `order`",
   "copy": {
     "family": "llama_cpp",
     "version": "b9585",
@@ -620,6 +620,89 @@
       },
       "absent": true,
       "why": "a bundle placed by hand, or a drive older than the marker: tolerated at spawn, fetched again by both twins"
+    },
+    {
+      "name": "a comma inside a recorded name, its file there",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"lib,1.dll\":\"a8688fc6430812f40a85d21d02907ccc1df6d1c65618d124a88dc0130a5899d9\"}}"
+        }
+      ],
+      "files": {
+        "lib,1.dll": "lib bytes"
+      },
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "a file name may hold a comma: the app and the .ps1 twin read the name and find the file; the .sh twin splits its name lookup at the comma and never looks for that file, which changes nothing while the file is there"
+    },
+    {
+      "name": "a comma inside a recorded name whose file is gone",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"lib,1.dll\":\"a8688fc6430812f40a85d21d02907ccc1df6d1c65618d124a88dc0130a5899d9\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "missing",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "sh": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "the same marker with the comma-named library gone: the app refuses the copy at its start (missing) and the .ps1 twin fetches it again; the .sh twin, whose name lookup splits the name at its comma, does not notice the gone file and skips the copy (a writer duty keeps commas out of names)"
+    },
+    {
+      "name": "structural characters in a string before the map",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"note\":\"a}b,c\\\\d\\\"binaries\\\":{\",\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "a brace, a comma, a backslash and an escaped quote spelling \"binaries\":{ inside a string before the map change nothing for any reader: the .sh lookups look only after the last real \"binaries\":{"
+    },
+    {
+      "name": "a nested binaries map after the top-level one, a recorded file gone",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"gone.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"signature\":{\"binaries\":{\"llama-server.exe\":\"ed25519\"}}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "missing",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "sh": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "W-4: the .sh twin still finds the top-level hash past a nested map (as in \"nested os, arch and binaries inside a later field\"), but takes the recorded names from the last map on the line, the nested one: a library the top-level map records that is gone goes unnoticed by it and the copy is skipped; the .ps1 twin fetches it again and the app refuses it at its start (missing)"
     }
   ],
   "relations": [
@@ -766,6 +849,17 @@
         "commercial": "refetch"
       },
       "why": "a missing part counts as zero"
+    },
+    {
+      "name": "no marker",
+      "pin": "b9585",
+      "relation": "unknown",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "the copy's files with no marker: no version to order (no `order`), the relation is unknown (reported, never updated), not current, and the twins fetch the pin"
     }
   ]
 }

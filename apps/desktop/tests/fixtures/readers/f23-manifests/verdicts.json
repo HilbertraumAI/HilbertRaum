@@ -520,6 +520,17 @@
           "": "skip"
         },
         "why": "a quoted minimum with blanks around it is not exactly MAJOR.MINOR.PATCH: newer (no trimming, unlike role)"
+      },
+      {
+        "file": "d13-new-enum-value.yaml",
+        "id": "g23-d13-new-enum-value",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a new value of a closed enum (speculative_decoding: eagle3) without min_app_version: release 1 refuses the value and drops the file, as the release rule says; the scripts, which read role and min_app_version only, use it"
       }
     ]
   },
@@ -667,6 +678,20 @@
       "newer": [],
       "dropped": [
         "b-newer.yaml"
+      ]
+    },
+    {
+      "dir": "s7-two-usable-one-id",
+      "why": "two usable manifests of one id (a renamed app-owned file beside the old one, W-62 (a)): the first in walk order is the model, whatever either holds, and every later one is logged as a duplicate; the walk is depth first with files and folders sorted together, so a/z.yaml comes before b.yaml",
+      "usable": [
+        {
+          "id": "g23-two-usable",
+          "file": "a/z.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [
+        "b.yaml"
       ]
     }
   ],

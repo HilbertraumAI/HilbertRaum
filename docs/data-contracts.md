@@ -2837,7 +2837,7 @@ whole renderer-visible surface.
   fails a damaged or unreadable marker with its own line, and only an absent one lets an optional family
   count as absent. No reader writes anything new to the drive: an older build reads the same files.
   **Frozen for every later writer** (release 1 reads markers this way for life, the in-field update plan's
-  F-24; a writer that breaks a rule gets its copy refused by release 1 as damaged engine files):
+  F-24; what release 1 does with a marker that breaks a rule, as built, is the last item):
   - `binaries` stays a map from the file's path relative to the copy (`markerBinaryKey`: `/` separators)
     to that file's **lower-case SHA-256 in hex**, and it records every file of the copy, the program
     first. A value never becomes an object, a list or another digest;
@@ -2852,12 +2852,39 @@ whole renderer-visible surface.
     `backend`, `os`, `arch` or `binaries` anywhere but the top level** (review round 2, L-2; code review CR-4).
     Both twins read the whole object with a JSON reader of their own and judge only the top-level fields, and
     the `.sh` skip decision takes the version and backend from that reader (CR-4), so a nested one is no
-    problem for them; but the `.sh` twin still finds the recorded names and hashes with `sed`, which takes the
-    last `"binaries":{` on the line and splits the map at its commas, and the builders' native pre-flight
-    (`build-commercial-drive.{sh,ps1}`, left to the update plan's P3) still takes the last `"version"` and
-    `"backend"` on the line. A later writer that breaks one of these rules is not refused by the app, but
-    release 1's `fetch-runtime` then fetches that engine again on every run (the safe side), and the builder's
-    pre-flight may report a mismatch the canonical gate does not.
+    problem for them. The `.sh` twin still finds the recorded names and hashes with `sed`, on one line at a
+    time: the hash of a required file (`--commercial`) is the 64-hex value after that file's name in the
+    last `"binaries":{` of the line that reaches the name before a `}` (so a nested map after the top-level
+    one that records no SHA-256 for the file leaves the top-level hash found), and the recorded names (the
+    #998 check that every recorded file is there) come from the last `"binaries":{…}` of the line, split at
+    its commas. The builders' native pre-flight (`build-commercial-drive.{sh,ps1}`, left to the update
+    plan's P3) still takes the last `"version"` and `"backend"` on the line, so it may report a mismatch the
+    canonical gate does not.
+  - **What release 1 does with a marker that breaks one of these rules** (as built, frozen in the update plan's
+    golden markers, `tests/fixtures/readers/f24-markers/`, T2.10). A marker the app reads as damaged (a value
+    that is no SHA-256, a field that is no string, a file over 1 MiB) stops the engine at a start with the
+    reinstall offer, and both twins fetch it again on every run. For the rest:
+    - over 64 KiB (and up to 1 MiB): the app reads it; both twins fetch the engine again on every run;
+    - a byte-order mark in front: every reader reads past it (the twins skip the copy as installed);
+    - blanks or line breaks between tokens: every reader but one reads it; the `.sh` twin with `--commercial`
+      finds no recorded hash (its lookup reads one line) and fetches the engine again on every run, while it
+      skips the copy in default mode and the `.ps1` twin skips it in both;
+    - a `{`, `}`, `,`, `\` or escaped `"` inside a string before or after the map: no reader changes its verdict;
+    - a `,` inside a recorded name: the app and the `.ps1` twin read the name; the `.sh` twin splits it, so it
+      never looks for that file. With the file there nothing changes; with the file gone the `.ps1` twin fetches
+      the engine again, the app refuses the copy at its start (`missing`), and the `.sh` twin skips it as
+      installed;
+    - a `binaries` map nested in a later field (after the top-level one): the twins skip the copy in both modes;
+      the `.sh` twin takes the recorded names from the nested map, so a file the top-level map records that is
+      gone goes unnoticed by it (skipped), where the `.ps1` twin fetches the engine again and the app refuses
+      the copy at its start (`missing`);
+    - an empty `binaries` map, or none: tolerated at a start (a hash-less marker); the twins skip the copy, and
+      fetch it again only with `--commercial`;
+    - a map that does not record the program: refused at a start (`marker-damaged`); the twins skip the copy,
+      and fetch it again only with `--commercial`.
+    In every case the app's start check reads the top-level map. Only the damaged cases and the size cap make
+    both scripts fetch the engine again on every run, and the `.sh` twin's two blind spots (a comma in a
+    name, a nested map) leave a gone file to the app's start check.
 
   `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two

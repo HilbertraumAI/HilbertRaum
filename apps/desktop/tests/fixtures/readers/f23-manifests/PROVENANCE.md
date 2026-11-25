@@ -14,6 +14,9 @@ text, not from the code: the plan's Appendix B (F-23), `docs/model-policy.md` ("
 - `flat-read/`: two manifests that prove the scripts' flat-read parity row can fail.
 
 Round 2 (T2.10 fix round 2, after the Fable QA of the set from the docs only) added `a13`, `l17`, `escaped`,
-`s5`, `s6` and the second flat-read probe; no earlier verdict changed. Release 1 reads every file a later
+`s5`, `s6` and the second flat-read probe; no earlier verdict changed. Round 3 (after the QA's re-check 1) added
+`d13` (a new value of the closed enum `speculative_decoding` without `min_app_version`: dropped) and the scenario
+`s7-two-usable-one-id` (two usable files of one id: the first in walk order is the model, the other is logged),
+and ran the escaped files through the `.sh` twins too; no earlier verdict changed. Release 1 reads every file a later
 release puts on a drive, for ever: a verdict here never changes. A later release adds files and lines only.
 Locked by `../../golden-fixtures.sha256`.

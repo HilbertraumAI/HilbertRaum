@@ -335,7 +335,10 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   §15). A missing, blank or non-string `role`, or a missing `id` / `display_name`, is still invalid. Such
   entries share the models' id space, and a manifest this app can use ALWAYS keeps its id, whatever the walk
   order (F-847-4): a same-id entry for a newer HilbertRaum is reported as a duplicate and not listed (among
-  entries for a newer HilbertRaum, the first in walk order wins). A role this build does not know includes a
+  entries for a newer HilbertRaum, the first in walk order wins). Of two or more USABLE manifests of one id,
+  the first in walk order (depth first, each folder's files and folders together in code-unit order of
+  their names, as for `default_for_role` above) is the model, and every later one is reported as a
+  duplicate and dropped, whatever either file says. A role this build does not know includes a
   typo in a hand-written manifest (`role: Chat`): it reads "Needs a newer HilbertRaum" too, since the two
   cannot be told apart. The sell gate counts every such manifest as a problem: a Kit ships its own app.
   Builds up to v0.1.65 reject these manifests, so there they still vanish.
@@ -506,7 +509,10 @@ can never change in the field. So every later release keeps these rules (the rec
 - **Never repoint a hash in place; retire a model with `download.withdrawn`**, never by deleting a
   manifest whose weights may be on the drive. App-owned chat manifests are refreshed all or nothing.
 - **Never rename an app-owned manifest or give it a new id in place:** `prepare-drive` copies without
-  deleting, so both files would stay on a refreshed drive as a duplicate id.
+  deleting, so both files would stay on a refreshed drive as a duplicate id. Release 1 then runs the one
+  whose path comes first in its walk and logs the other each time it reads the folder (above), so which file it uses
+  depends on the two names, never on which is newer: a new name that sorts after the old one is never
+  read by release 1.
 - **Key order for the scripts.** `fetch-models` and `verify-models` read a manifest flat, first match
   wins (they run with no Node): no key nested in a block may come before a top-level key of the same
   name (`local_path`, `sha256`, `url`, `size_bytes`, `license_url`, `runtime`, `format`, `license`,

@@ -1478,12 +1478,12 @@ for (const leg of SCRIPT_LEGS) {
     // pinned install and "refetch" that it could not. fetch-runtime itself is not changed (it is release 1's reader).
     describe('fetch-runtime reads the golden install markers as release 1 does (T2.10, W-62)', () => {
       const { copy, record, vectors, relations } = MARKER_GOLDENS
-      /** A drive pinned to the golden copy (its version, or `pin`), holding the copy's files and `marker` (or a folder there). */
-      const goldenDrive = (marker: Buffer | null | 'folder', pin = copy.version): { root: string; dir: string } => {
+      /** A drive pinned to the golden copy (its version, or `pin`), holding the copy's files (plus a vector's own) and `marker` (or a folder there). */
+      const goldenDrive = (marker: Buffer | null | 'folder', pin = copy.version, files: Record<string, string> = {}): { root: string; dir: string } => {
         const root = scratchTarget(REAL_SHA, (y) => y.replace(`  version: ${copy.version}\n`, `  version: ${pin}\n`))
         const dir = join(root, ...copy.extractTo.split('/'))
         mkdirSync(dir, { recursive: true })
-        for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(dir, name), bytes)
+        for (const [name, bytes] of Object.entries({ ...copy.files, ...files })) writeFileSync(join(dir, name), bytes)
         if (marker === 'folder') mkdirSync(runtimeMarkerPath(dir))
         else if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
         return { root, dir }
@@ -1499,11 +1499,11 @@ for (const leg of SCRIPT_LEGS) {
 
       it.each(vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
         const env = v.shLocale === 'utf8' && leg.ext === 'sh' ? { LC_ALL: UTF8_LOCALE } : undefined
-        // Round 2: one vector is read differently by the .sh twin, which the data gives under `sh`.
+        // Round 2: a vector the .sh twin reads differently carries its verdict under `sh`.
         const want = leg.ext === 'sh' && v.sh ? v.sh : v.twins
         const marker = v.absent ? null : v.folder ? 'folder' : markerBytes(v)
         for (const mode of ['default', 'commercial'] as const) {
-          expect(verdictOf(goldenDrive(marker, v.pin).root, mode, { env }), mode).toBe(want[mode])
+          expect(verdictOf(goldenDrive(marker, v.pin, v.files).root, mode, { env }), mode).toBe(want[mode])
         }
       })
 
@@ -1511,7 +1511,8 @@ for (const leg of SCRIPT_LEGS) {
       it.each(relations.map((r) => [r.name, r] as const))('the version relation: %s', (_name, r) => {
         for (const mode of ['default', 'commercial'] as const) {
           const { root, dir } = goldenDrive(null, r.pin)
-          writeRuntimeMarker(dir, { version: r.marker.version, backend: r.marker.backend, os: copy.os, arch: copy.arch, binaries: record.binaries })
+          // Round 3: a row with no `marker` is the copy with no marker file.
+          if (r.marker) writeRuntimeMarker(dir, { version: r.marker.version, backend: r.marker.backend, os: copy.os, arch: copy.arch, binaries: record.binaries })
           expect(verdictOf(root, mode), mode).toBe(r.twins[mode])
         }
       })
