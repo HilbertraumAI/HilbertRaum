@@ -11,6 +11,7 @@ import {
   openDatabaseWithStamp,
   parseLastWriter,
   setStampAppVersion,
+  stampLastWriter,
   type Db
 } from '../../src/main/services/db'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
@@ -307,6 +308,30 @@ describe('schema_meta and the last_writer stamp (app-update T2.2, F-10)', () => 
 
   // T2.2 fix round (review 2, minor): SQLite reports an upsert a trigger skipped with RAISE(IGNORE) as done, and COMMIT
   // succeeds; only a read-back tells. Such a stamp is no stamp: the open says so with its own code.
+  // T2.2 fix round 2 (re-check 1, both reviews): the lock's retry calls the stamp on the session's live handle. On a
+  // handle a caller holds a transaction on, the stamp's BEGIN would throw and its ROLLBACK end the CALLER's transaction.
+  it('a stamp asked for inside a transaction the caller holds writes nothing and leaves it alone: `stamp-in-transaction`', () => {
+    const db = openDatabase(freshPath('schema-meta-in-transaction'))
+    try {
+      db.exec("UPDATE schema_meta SET value = '9.9.9;later' WHERE key = 'last_writer'")
+      db.exec('BEGIN')
+      db.prepare("INSERT INTO settings (key, value_json, updated_at) VALUES ('caller-row', '1', 'now')").run()
+      const codes: string[] = []
+      expect(stampLastWriter(db, { onStampFailed: (code) => codes.push(code) })).toEqual({
+        written: false,
+        previous: '9.9.9;later',
+        code: 'stamp-in-transaction'
+      })
+      expect(codes).toEqual(['stamp-in-transaction'])
+      expect(db.isTransaction).toBe(true) // still the caller's
+      db.exec('COMMIT')
+      expect(db.prepare("SELECT value_json FROM settings WHERE key = 'caller-row'").get()).toEqual({ value_json: '1' })
+      expect(metaRows(db)).toEqual([{ key: 'last_writer', value: '9.9.9;later' }])
+    } finally {
+      db.close()
+    }
+  })
+
   it('a trigger that skips the write (RAISE(IGNORE)) is no stamp: `stamp-ignored`, the old value kept, the open goes on', () => {
     const p = freshPath('schema-meta-ignored')
     openDatabase(p).close()

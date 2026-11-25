@@ -1480,6 +1480,9 @@ const STAMP_REST = /^[\x21-\x7e]+$/
 export const STAMP_NO_APP_VERSION = 'no-app-version'
 /** The failure code of a stamp SQLite reported as done that did not store the value (a trigger's `RAISE(IGNORE)`). */
 const STAMP_IGNORED = 'stamp-ignored'
+/** The failure code of a stamp asked for on a handle inside a transaction its caller holds: nothing written, the
+ *  caller's transaction left as it was (the stamp's own BEGIN would throw, and its ROLLBACK end the caller's). */
+const STAMP_IN_TRANSACTION = 'stamp-in-transaction'
 
 /** The app version the stamp names ({@link setStampAppVersion}); empty until it is set. */
 let stampAppVersion = ''
@@ -1529,7 +1532,7 @@ function storedLastWriter(db: Db): string | null {
 
 /**
  * What an open did with the `last_writer` stamp: written, or not (with a content-free code: SQLite's result code and fixed
- * description, a Node error code, `no-app-version` or `stamp-ignored`). `previous` is the value found BEFORE the overwrite (null when
+ * description, a Node error code, `no-app-version`, `stamp-ignored` or `stamp-in-transaction`). `previous` is the value found BEFORE the overwrite (null when
  * there was none), for the unlock line (P3) and the migration framework (P10): after the open the stored value is always
  * this build's own.
  */
@@ -1559,6 +1562,8 @@ export function stampLastWriter(db: Db, options: OpenDatabaseOptions = {}): Last
   }
   const value = `${stampAppVersion};${LAST_WRITER_APPLIED_THROUGH}`
   if (!STAMP_FIELD.test(stampAppVersion) || value.length > LAST_WRITER_MAX_LENGTH) return failed(STAMP_NO_APP_VERSION)
+  // The lock's retry runs on the session's live handle: never inside a transaction someone else holds on it.
+  if (db.isTransaction) return failed(STAMP_IN_TRANSACTION)
   let ignored = false
   try {
     db.exec('BEGIN')
