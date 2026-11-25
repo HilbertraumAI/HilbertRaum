@@ -66,12 +66,18 @@ export function denyReading(p: string): void {
   throw new Error('denyReading: the file is still readable (are the tests running as root?)')
 }
 
-/** Undo {@link denyReading}. */
+/** Undo {@link denyReading}. A file the code under test removed meanwhile (the engine job removes a copy whose marker
+ *  stays unreadable, T8.5c round 3) has nothing left to undo: elsewhere its ENOENT is ignored, as the `icacls` result
+ *  already is on Windows. Any other failure still throws. */
 export function allowReading(p: string): void {
   if (process.platform === 'win32') {
     spawnSync('icacls', [p, '/remove:d', EVERYONE], { windowsHide: true })
   } else {
-    chmodSync(p, 0o644)
+    try {
+      chmodSync(p, 0o644)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
   }
 }
 

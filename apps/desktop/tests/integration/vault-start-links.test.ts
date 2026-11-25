@@ -85,7 +85,8 @@ function plant(path: string, text: string): string {
   return path
 }
 
-describe('a junction Node reads as a plain folder is still a link to the start (T2.16, R1 B-1)', () => {
+// Windows only: elsewhere `UNSEEN_JUNCTIONS` is empty, and a group with no rows fails ("No test found in suite").
+describe.runIf(isWindows)('a junction Node reads as a plain folder is still a link to the start (T2.16, R1 B-1)', () => {
   for (const [label, make, can] of UNSEEN_JUNCTIONS) {
     // The R2-3 rows of workspace-vault-format-guard, for the two forms `lstat` cannot see: both store folders such a
     // junction to a folder elsewhere. Before, the start's sweep overwrote and removed the `*.tmp` and `*.parse*` files

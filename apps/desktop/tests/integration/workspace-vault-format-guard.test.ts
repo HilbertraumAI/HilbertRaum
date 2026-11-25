@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -34,7 +35,8 @@ import {
   shredFile,
   stageRekey,
   unlockEncryptedVault,
-  vaultFormatVerdict
+  vaultFormatVerdict,
+  vaultPathsFrom
 } from '../../src/main/services/workspace-vault'
 import {
   ENCRYPTION_REQUIRED,
@@ -1224,7 +1226,14 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       ? ([['a name rooted on the working folder’s drive', '\\{root}\\workspace\\hilbertraum.sqlite.enc.new']] as Array<[string, string]>)
       : [])
   ])('a journal that names the stage by %s, the working folder at the drive root: it never vouches for a crash leftover (L-5)', (_case, spelled) => {
-    const vp = workspaceWithMarker('fmtguard-l5')
+    // The workspace by its real path, as `process.cwd()` answers after the chdir below. On macOS the temp folder is
+    // reached through a link (`/var` is `/private/var`): spelled through it, the entry resolved against the working folder
+    // lay outside the workspace by its text, so the start never vouched for it there, L-5's fix or not, and the row
+    // proved nothing.
+    const made = workspaceWithMarker('fmtguard-l5')
+    const root = realpathSync.native(made.root)
+    const real = (path: string): string => join(root, relative(made.root, path))
+    const vp: FreshVaultPaths = { ...vaultPathsFrom({ configPath: real(dirname(made.descriptorPath)), dbPath: real(made.dbPath) }), root }
     writeFileSync(stagedOf(vp), leftoverStage())
     const rootOnDrive = vp.root.slice(parse(vp.root).root.length)
     rekeyJournal(vp, 1, [spelled.replace('{root}', rootOnDrive)])
