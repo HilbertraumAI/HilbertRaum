@@ -1025,7 +1025,7 @@ function lstatOrAbsent(path: string): BigIntStats | null {
 
 /** #1014: the file a descriptor opened on a `file` name is still the file `lstat` saw (the same device and file id, a
  *  regular file, no second link): the name was not swapped for a link between the two calls. */
-function sameShreddableFile(named: BigIntStats, opened: BigIntStats): boolean {
+export function sameShreddableFile(named: BigIntStats, opened: BigIntStats): boolean {
   return opened.isFile() && opened.nlink <= 1n && opened.ino === named.ino && opened.dev === named.dev
 }
 

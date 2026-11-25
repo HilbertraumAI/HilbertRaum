@@ -103,6 +103,7 @@ import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
+import { writeStartupLine } from './services/updates/update-log'
 import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
@@ -255,6 +256,20 @@ function initBackend(): void {
     preparedDrive: paths.isPreparedDrive,
     detectedFromAppLocation: !driveRoot.fromOverride && driveRoot.root !== undefined
   })
+  // #842: the app's own copy of the manifests, never the launcher's override: the engine pins (the update log's
+  // startup line below, the engine steps further down), and the OCR installer's second list (per file, #841).
+  const bundledManifestsDir = resolveBundledManifestsDir({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath()
+  })
+  // App-update W-14 (F-11): one startup line in a prepared drive's `updates/update.log` (the app version, the engine
+  // pins, the drive-release record, the drive format, the SQLite version). Here: after logging exists, so a skip is
+  // reported, and before the policy and the workspace's start, so a start that throws there leaves this line and the
+  // failed-start line. It never throws; a read-only or full drive only skips it. The perf mark times it (R3).
+  const updateLogT0 = performance.now()
+  writeStartupLine(paths, { appVersion: app.getVersion(), bundledManifestsDir })
+  perfMark('update_log_startup', { ms: perfMs(updateLogT0) })
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
@@ -388,13 +403,7 @@ function initBackend(): void {
   // #847 (a+): every manifest discovery compares `min_app_version` with this one value; set before the first.
   setManifestAppVersion(app.getVersion())
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
-  // #842: the app's own copy, never the launcher's override — the engine pins, and the OCR installer's
-  // second list (per file, #841).
-  const bundledManifestsDir = resolveBundledManifestsDir({
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    appPath: app.getAppPath()
-  })
+  // `bundledManifestsDir`: the app's own copy (#842), resolved once before the update log's startup line.
   log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
   // #986: an engine install swaps its folders by rename; a kill, an unplug or a crash between the
   // renames leaves `<os>.new`/`<os>.old` beside the install. Finish or roll that back NOW, before
@@ -1256,7 +1265,12 @@ app.whenReady().then(() => {
   // #1024: a start that throws still answers the gate. The runner logs the failure by its code (never the message, which
   // names the drive's paths), removes what the partial start registered, and registers the failure state: the gate
   // says why and what helps, in its language, and offers "Copy details for support" (`backend-start.ts`).
-  const startFailure = runBackendStart(initBackend, { trustedSenders, isDev, paths: () => backendPaths })
+  const startFailure = runBackendStart(initBackend, {
+    trustedSenders,
+    isDev,
+    appVersion: app.getVersion(),
+    paths: () => backendPaths
+  })
   // #1024 review M-2: everything after the back end runs inside `runWindowStart`. A throw here (the app's own renderer
   // files, the menu, the window) used to open no window at all while this process held the single-instance lock, so
   // every later launch only "focused" a window that did not exist. Now: a native error box with fixed text in main's

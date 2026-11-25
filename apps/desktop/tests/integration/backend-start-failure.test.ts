@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 // #1024: a back-end start that throws. `initBackend` (main/index.ts) builds everything and registers the IPC handlers at
@@ -49,6 +49,7 @@ import { IPC } from '../../src/shared/ipc'
 import type { WorkspaceStateInfo } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { denyNewFolders } from '../helpers/unreadable-dir'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
@@ -57,8 +58,9 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 /** What the failure state answers on, and nothing more: the gate's state, and the "Copy details for support" pair. */
 const FAILURE_CHANNELS = [IPC.getLogTail, IPC.getWorkspaceState, IPC.writeClipboard].sort()
 
-/** The runner's dependencies as `index.ts` hands them over (the paths are the seam for the update plan's P6). */
-const deps = { trustedSenders: ANY_SENDER, isDev: false, paths: () => null }
+/** The runner's dependencies as `index.ts` hands them over (the paths are the seam for the update plan's P6; the
+ *  version goes into the failed-start line of `update.log`, W-14). */
+const deps = { trustedSenders: ANY_SENDER, isDev: false, appVersion: '0.1.66', paths: () => null }
 
 /** The first two steps of `initBackend` over `root`: resolve the layout, create its four folders. */
 function startOver(root: string): () => void {
@@ -238,5 +240,102 @@ describe('a back-end start that throws answers the gate with the failure state (
     expect(registerSpy).toHaveBeenCalledWith(
       expect.objectContaining({ paths: layout, isDev: true, failure: { cause: 'other', code: null } })
     )
+  })
+})
+
+// App-update W-14 (F-11; decision row 3): a start that throws on a prepared drive appends its failed-start line to
+// `<drive>/updates/update.log`, the one trace of it that outlives the quit before an unlock. The line is the golden's
+// (tests/fixtures/readers/f11-update-log/vectors.json, written by hand; the token rules are tests/unit/update-log.test.ts).
+// Best-effort: the drive may be what failed, and nothing about the line may stop the runner from serving the gate.
+interface F11Golden {
+  emit: { start_failed: { base: { now: string }; vectors: Array<{ name: string; line: string }> } }
+}
+const F11 = JSON.parse(
+  readFileSync(join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f11-update-log', 'vectors.json'), 'utf8')
+) as F11Golden
+/** The golden's failed-start line, with this machine's OS token (the golden's are written on win32). */
+const failedStartLine = (name: string): string =>
+  F11.emit.start_failed.vectors.find((v) => v.name === name)!.line.replace(/^r1-app win32 /, `r1-app ${process.platform} `)
+
+/** A prepared drive at `root` (config/drive.json = {}), resolved as the start resolves it. */
+function preparedLayout(root: string): ReturnType<typeof resolvePaths> {
+  mkdirSync(join(root, 'config'), { recursive: true })
+  writeFileSync(join(root, 'config', 'drive.json'), '{}')
+  return resolvePaths({ envRoot: root, fallbackRoot: root })
+}
+const updateLog = (root: string): string => join(root, 'updates', 'update.log')
+
+/** Run with the golden's clock, so the line's time is the golden's. */
+function atGoldenTime<T>(run: () => T): T {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(F11.emit.start_failed.base.now))
+  try {
+    return run()
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
+describe('a back-end start that throws on a prepared drive leaves its failed-start line in update.log (W-14, F-11)', () => {
+  it('a file where a folder should be: the line with the cause, the code and the system call (golden f01)', () => {
+    const root = tempRoot('backend-start-update-log')
+    const layout = preparedLayout(root)
+    writeFileSync(join(root, 'workspace'), 'not a folder')
+    const failure = atGoldenTime(() => runBackendStart(startOver(root), { ...deps, paths: () => layout }))
+    expect(failure).toEqual({ cause: 'other', code: 'EEXIST' })
+    expect(readFileSync(updateLog(root))).toEqual(Buffer.from(`\n${failedStartLine('f01')}\n`, 'utf8'))
+  })
+
+  it('a drive root whose path holds non-ASCII text: the line is the same, and holds no byte of the path', () => {
+    const root = join(tempRoot('backend-start-non-ascii'), 'Ärger 日本', 'HilbertRaum')
+    mkdirSync(root, { recursive: true })
+    const layout = preparedLayout(root)
+    writeFileSync(join(root, 'workspace'), 'not a folder')
+    atGoldenTime(() => runBackendStart(startOver(root), { ...deps, paths: () => layout }))
+    const bytes = readFileSync(updateLog(root))
+    expect(bytes).toEqual(Buffer.from(`\n${failedStartLine('f01')}\n`, 'utf8'))
+    expect(bytes.every((b) => b < 0x80)).toBe(true)
+  })
+
+  // POSIX root ignores a folder's mode, so it cannot be refused a folder there (`denyNewFolders` would throw).
+  it.skipIf(process.getuid?.() === 0)(
+    'a prepared drive that refuses new folders: no line, the skip in app.log, and the gate still answers',
+    async () => {
+      const root = tempRoot('backend-start-update-log-refused')
+      const layout = preparedLayout(root)
+      const undo = denyNewFolders(root)
+      let failure
+      try {
+        failure = runBackendStart(startOver(root), { ...deps, paths: () => layout })
+      } finally {
+        undo()
+      }
+      expect(failure).toEqual({ cause: 'drive_not_writable', code: process.platform === 'win32' ? 'EPERM' : 'EACCES' })
+      expect(existsSync(join(root, 'updates'))).toBe(false)
+      expect((await gateState()).state).toBe('start_failed')
+      const skip = (await copiedLines()).find((l) => l.includes('Update log: line skipped'))
+      expect(skip).toBeDefined()
+      expect(JSON.parse(skip!.slice(skip!.indexOf('{')))).toMatchObject({ event: 'start-failed', reason: 'write-failed', syscall: 'mkdir' })
+      expectNoPath(skip!, root)
+    }
+  )
+
+  it('a root that is no prepared drive gets no update.log', () => {
+    const root = tempRoot('backend-start-not-prepared')
+    const layout = resolvePaths({ envRoot: root, fallbackRoot: root })
+    writeFileSync(join(root, 'workspace'), 'not a folder')
+    expect(runBackendStart(startOver(root), { ...deps, paths: () => layout })).toEqual({ cause: 'other', code: 'EEXIST' })
+    expect(existsSync(join(root, 'updates'))).toBe(false)
+  })
+
+  // Review L-1 with the new line: nothing in the catch may throw out of it, the layout getter included.
+  it('a layout getter that throws: the runner still returns the failure', () => {
+    const start = (): void => {
+      throw new TypeError('a fault')
+    }
+    const throwingPaths = (): never => {
+      throw new Error('no layout')
+    }
+    expect(runBackendStart(start, { ...deps, paths: throwingPaths })).toEqual({ cause: 'other', code: null })
   })
 })
