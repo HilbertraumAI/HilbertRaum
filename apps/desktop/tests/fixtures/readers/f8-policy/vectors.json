@@ -594,6 +594,124 @@
       "why": "C2, O-9: and it does not make the block invalid"
     },
     {
+      "name": "updates twice at the top level, an empty block last",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},\"updates\":{}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (review R1-5 (a)): the last updates block wins, as JSON.parse and loadPolicy read a duplicate key (O-6)"
+    },
+    {
+      "name": "updates twice at the top level, an admin's block last",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{},\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (a)): O-6, the other way round"
+    },
+    {
+      "name": "allow_user_install spelt with a JSON escape, false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_\\u0069nstall\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (b)): a name is compared after its JSON escapes are decoded (RFC 8259 §7), so this is allow_user_install"
+    },
+    {
+      "name": "max_version spelt with a JSON escape",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"\\u0031.0.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.0.0",
+      "file": "read",
+      "why": "Round 2 (R1-5 (b)): a value too: the cap is 1.0.0"
+    },
+    {
+      "name": "max_version twice, junk last",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1.5.0\",\"max_version\":\"latest\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (c)): the last max_version wins (O-6), and it is junk"
+    },
+    {
+      "name": "max_version twice, a release last",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"latest\",\"max_version\":\"1.5.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.5.0",
+      "file": "read",
+      "why": "Round 2 (R1-5 (c), the converse): the last one wins (O-6), so a duplicate is not junk in itself"
+    },
+    {
+      "name": "one byte-order mark, then whitespace, then an admin's block",
+      "class": "file",
+      "parts": [{ "base64": "77u/" }, { "text": "\r\n  {\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (d)): the one leading mark is skipped (O-2), and JSON allows whitespace before the value"
+    },
+    {
+      "name": "whitespace, then one byte-order mark, then an admin's block",
+      "class": "file",
+      "parts": [{ "text": " " }, { "base64": "77u/" }, { "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "Round 2 (R1-5 (d)): only a mark at the very start is skipped (O-2), and U+FEFF is not JSON whitespace (RFC 8259 §2)"
+    },
+    {
+      "name": "allow_user_install with a trailing space in its name, false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install \":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (e)): names are exact (O-7), so a misspelt key blocks nothing"
+    },
+    {
+      "name": "max_version with a major of 300 digits",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1" }, { "repeat": "0", "times": 299 }, { "text": ".0.0\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (h)): 304 characters, over the 256-character cap (O-10) whatever the digits"
+    },
+    {
+      "name": "an admin's block pretty-printed with CRLF line ends",
+      "class": "file",
+      "parts": [{ "text": "{\r\n  \"updates\": {\r\n    \"allow_user_install\": false\r\n  }\r\n}\r\n" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (i)): CR LF is JSON whitespace (RFC 8259 §2), and Windows editors write it"
+    },
+    {
+      "name": "a dangling link at policy.json on a root with no drive.json",
+      "class": "file",
+      "link": "dangling",
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "none",
+      "why": "Round 2 (R1-5 (f), decided as built): a dangling link reads as absent, as loadPolicy follows links (O-5), and absent on a root with no drive.json is none (O-1)"
+    },
+    {
+      "name": "a folder at policy.json on a prepared drive",
+      "class": "file",
+      "folder": true,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "Round 2 (R1-5, decided): a folder at the name is unreadable either way (O-5); the folder vector above is its twin on a root with no drive.json"
+    },
+    {
       "name": "the DIY posture (prepare-drive's default)",
       "class": "posture",
       "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false,\"allow_local_api\":false},\"workspace\":{\"encryption_required\":true,\"allow_plaintext_dev_mode\":false},\"models\":{\"allow_unverified_models\":false,\"require_manifest\":true,\"require_sha256_match\":true}}" }],

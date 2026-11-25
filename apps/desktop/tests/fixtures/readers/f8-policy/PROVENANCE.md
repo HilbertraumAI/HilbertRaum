@@ -22,5 +22,13 @@ file in a temporary `config/`, and holds `loadPolicy` (dev and packaged) to its 
 prepare-drive execution rows (`script-orchestration.test.ts`) read `writers.kit`. Locked by
 `../../golden-fixtures.sha256`.
 
-Round 2 (after the Fable review): not yet run. Fable is out until 2026-11-29; the negative vectors C14 asks for,
-written from the spec by a reviewer who has not read the reader, are added here then, each with its source.
+Round 2 (2026-11-25, after the first Fable review of F-8, finding R1-5 and its disposition): thirteen vectors, C14's
+reviewer vectors, hand-written from the review's text (the reviewer ran each on a copy of the reader, outside this
+tree) and the disposition, with the O-answers and RFC 8259 as sources, before any run here and never from this
+reader's output; each names its source in `why`. `updates` and `max_version` twice, both ways round (the last wins,
+O-6); a key and a value spelt with JSON escapes (RFC 8259 §7); one byte-order mark then whitespace, read, and
+whitespace then a mark, unreadable (O-2; U+FEFF is not JSON whitespace, RFC 8259 §2); a key with a trailing space
+(O-7); a 300-digit major (O-10's length cap); CRLF line ends; and the two file tokens the disposition decided as
+built: a dangling link at `policy.json` reads as absent (`none` on a root without `drive.json`, `unreadable` on a
+prepared drive; O-1, O-5), and a folder at the name is `unreadable` either way. The review's (g) (no config folder)
+and (j) (deep nesting) stay unpinned, as it allows. Every earlier vector is unchanged, byte for byte.

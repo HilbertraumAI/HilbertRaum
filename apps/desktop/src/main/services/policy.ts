@@ -11,14 +11,24 @@ import type {
   WorkspacePolicy
 } from '../../shared/types'
 
-// Privacy / offline policy loader (spec §3.5, §3.6, §6, §7.10).
+// Privacy / offline policy loader (spec §3.5, §3.6, §6, §7.10) and the update policy reader (F-8).
+// Two readers of `config/policy.json`, whose answers for a missing or damaged file differ on purpose.
 //
-// Reads `config/policy.json` and `config/drive.json` (both OPTIONAL — developer
+// `loadPolicy` reads `config/policy.json` and `config/drive.json` (both OPTIONAL — developer
 // runs fall back to defaults) and merges them over DEFAULT_POLICY, where **update
 // checks and telemetry are off** and model downloads are policy-permitted but gated
 // behind the user's `allowNetwork` setting (default ON) plus a per-download confirmation
-// (architecture.md "In-app model downloader"). The module is pure + resilient: a
-// missing or malformed file degrades to safe defaults plus a warning, never a throw.
+// (architecture.md "In-app model downloader"). It is pure + resilient and FAIL-SAFE: a
+// missing or malformed file degrades to safe defaults plus a warning, never a throw, and
+// on a provisioned drive a packaged build's defaults are STRICT_POLICY (M-4).
+//
+// `readUpdatePolicy` (after loadPolicy, below) reads the `updates` keys that decide whether a
+// signed update may be installed. A missing or damaged file keeps the install ALLOWED and is
+// reported as "unreadable" ("none" on a root that never had one), with no warning (G-14's
+// exception; docs/app-updates.md §8.1). The two differ because loadPolicy's keys guard model
+// integrity and the network ceiling, which a lost file must never loosen, while an `updates`
+// block is a management control, not a security boundary: a damaged policy must never block
+// the signed repair.
 //
 // Policy precedence (LOCKED): a (future signed) policy.json is AUTHORITATIVE — it can
 // only RESTRICT, never expand, what the user setting permits. The effective network

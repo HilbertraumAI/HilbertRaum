@@ -32,6 +32,11 @@ const F8_KIT = (
     writers: { kit: { updates: Record<string, unknown> } }
   }
 ).writers.kit
+/** The policy.json bytes each twin wrote with no posture flag and with the dev flag before the update keys existed (R1-4). */
+const POLICY_BYTES = JSON.parse(repoText('apps', 'desktop', 'tests', 'fixtures', 'prepare-drive-policy-bytes.json')) as Record<
+  'ps1' | 'sh',
+  Record<'diy' | 'dev', string>
+>
 /** A committed model outside the default set: --with-assets must leave it alone. */
 const OTHER_ID = String(MANIFEST_DOCS.find((d) => !DEFAULT_IDS.includes(String(d.doc.id)) && d.doc.download)!.doc.id)
 /** One model of the Kit's bundled set (#766), so the builder's step 2 plans a fetch and passes. */
@@ -91,6 +96,21 @@ for (const leg of SCRIPT_LEGS) {
       expect(written).toStrictEqual(buildPolicyJson(posture))
       expect('updates' in written).toBe(posture.kit === true)
       if (posture.kit) expect(written.updates).toStrictEqual(F8_KIT.updates)
+    })
+
+    // F-8 (the T3.1 review, R1-4): without the Kit switch each twin writes the very bytes it wrote before the update keys
+    // existed (tests/fixtures/prepare-drive-policy-bytes.json, from the twins of 7c969583). The parsed-JSON rows above
+    // cannot see a change of whitespace, key order or the final newline; this one can.
+    it.each<[string, string[], 'diy' | 'dev']>([
+      ['no posture flag writes the DIY policy.json byte for byte as before the update keys', [], 'diy'],
+      ['the dev flag writes the dev policy.json byte for byte as before the update keys', ['Dev'], 'dev']
+    ])('%s', (_title, flags, posture) => {
+      const root = scriptRoot('orch-bytes-')
+      const r = leg.run(preparer, [f('Target'), root, ...flags.map(f)])
+      expect(r.status, outputOf(r)).toBe(0)
+      // latin1 gives one character per byte, so this is a byte compare whose failure diffs as text.
+      const written = readFileSync(join(root, 'config', 'policy.json')).toString('latin1')
+      expect(written).toBe(Buffer.from(POLICY_BYTES[leg.ext][posture], 'utf8').toString('latin1'))
     })
 
     // M22: the .ps1 writes its config through .NET, which resolves a relative path against the PROCESS directory, and that
