@@ -899,8 +899,9 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
 // comment for an import as it takes a string: the word `import`, then a quote (`an audio import's row; the engines'`),
 // or words, `from` and a quote. The shim then lands after the last such match. Inside an array literal the build fails
 // (`Expected "(" but found "__cjs_mod__"`: T2.12's persisted-messages.ts). Inside a comment or a string the build passes
-// with the shim commented out, so main has no `require` and `tesseract.ts`'s `require.resolve` of the OCR worker script
-// throws into its fallback (the integration base's bundle: a class-member JSDoc of transcriber/cli.ts). So the row reads
+// with the shim commented out, so main had no `require` and `tesseract.ts`'s bare `require.resolve` of the OCR worker
+// script threw into its fallback (the integration base's bundle: a class-member JSDoc of transcriber/cli.ts; that call no
+// longer needs the shim, see the next row). So the row reads
 // what the plugin reads: every module the main bundle takes in (src/main/index.ts and every relative value import under
 // it), as esbuild hands it on, against the plugin's own regex from the installed electron-vite. The only matches
 // allowed are the module's own import and export-from declarations (Rollup drops or hoists them to the chunk's head).
@@ -971,6 +972,49 @@ describe('repo hygiene — in the main bundle, only import declarations match th
       offenders,
       'reword each so the word "import" is not followed by a quote, or by words, "from" and a quote (e.g. "a row of an audio import")'
     ).toEqual([])
+  })
+
+  // App-update P2 exit (owner call 2026-11-25): main must not NEED the shim either. The shim binds `require`,
+  // `__filename` and `__dirname` for the whole chunk, and the row above can only keep it at the chunk's head. A main
+  // module that reads one of them bare breaks again the day the shim lands wrong: in 0.1.66 tesseract.ts's bare
+  // `require.resolve` threw, and the OCR worker was started from inside app.asar instead of app.asar.unpacked. A module
+  // that needs one declares it itself from `import.meta.url`, as index.ts and ocr/rasterizer.ts do for `__dirname`
+  // (`createRequire(import.meta.url)` for `require`). Read on the TypeScript source, so a comment or a string never counts.
+  it('no main module reads a CommonJS global (require, __dirname, __filename) it does not declare itself', () => {
+    const cjsGlobals = new Set(['require', '__dirname', '__filename'])
+    const offenders: string[] = []
+    for (const file of mainModules()) {
+      const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+      const declared = new Set<string>()
+      const reads: ts.Identifier[] = []
+      const visit = (n: ts.Node): void => {
+        if (ts.isIdentifier(n) && cjsGlobals.has(n.text)) {
+          const p = n.parent
+          const named = (p as { name?: ts.Node }).name === n
+          if (
+            named &&
+            (ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isFunctionDeclaration(p) || ts.isBindingElement(p) ||
+              ts.isImportClause(p) || ts.isImportSpecifier(p) || ts.isNamespaceImport(p))
+          ) {
+            declared.add(n.text)
+          } else if (
+            !(named && (ts.isPropertyAccessExpression(p) || ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p) ||
+              ts.isMethodDeclaration(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p))) &&
+            !(ts.isQualifiedName(p) && p.right === n)
+          ) {
+            reads.push(n)
+          }
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(source)
+      for (const id of reads) {
+        if (declared.has(id.text)) continue
+        const line = source.getLineAndCharacterOfPosition(id.getStart(source)).line + 1
+        offenders.push(`${relative(DESKTOP_ROOT, file).split('\\').join('/')}:${line}: ${id.text}`)
+      }
+    }
+    expect(offenders, 'declare it from import.meta.url, e.g. createRequire(import.meta.url).resolve(…)').toEqual([])
   })
 })
 
