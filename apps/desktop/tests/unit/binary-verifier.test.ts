@@ -21,7 +21,8 @@ import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixt
 // T3.12 fix round (R1 M-4, R2 m-1): the `stat` or the read of ONE recorded file fails with an injected error code
 // (`readFaults.at`). No portable file system path fails with EIO, or with a hold, on demand. The pass-through
 // `node:fs/promises` and `node:fs` mocks (the repo's fault-injection rule, as sha256-file-close.test.ts) hand every other
-// call, and every other path, to the real function.
+// call, and every other path, to the real function. Fix round 2 (R1 N-1 = R2 N-1): the install marker's own `stat` and
+// read are `statSync` and `readFileSync` (`readRuntimeMarkerState`), faulted the same way at the marker's path.
 const readFaults = vi.hoisted(() => ({
   at: null as null | { path: string; phase: 'stat' | 'read'; code: string | null },
   /** The error a failing call gives: with `code`, or (null) with none at all. */
@@ -50,7 +51,17 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return actual.createReadStream(path, { ...(options ?? {}), fs: { open: actual.open, read, close: actual.close } } as ReadOptions)
   }
-  const mocked = { ...actual, createReadStream }
+  const statSync = ((...args: Parameters<typeof actual.statSync>) => {
+    const fault = readFaults.at
+    if (fault?.phase === 'stat' && String(args[0]) === fault.path) throw readFaults.error(fault.code)
+    return actual.statSync(...args)
+  }) as typeof actual.statSync
+  const readFileSync = ((...args: Parameters<typeof actual.readFileSync>) => {
+    const fault = readFaults.at
+    if (fault?.phase === 'read' && String(args[0]) === fault.path) throw readFaults.error(fault.code)
+    return actual.readFileSync(...args)
+  }) as typeof actual.readFileSync
+  const mocked = { ...actual, createReadStream, statSync, readFileSync }
   return { ...mocked, default: mocked }
 })
 
@@ -540,6 +551,24 @@ describe("every file the copy's own marker records (#1012)", () => {
         expect(await verifyBinaryBeforeSpawn(bin)).toBe('missing-other')
       }
     )
+
+    // T3.12 fix round 2 (R1 N-2): a file that turns out gone only when it is read (EIO passes the `stat`) ends the check
+    // of a caller that refuses missing-other (the engines) at that read, as a gone file does at the `stat` pass (round 7):
+    // a bad sector no longer costs the whole copy again on every rung, probe and helper spawn. A caller that starts on
+    // missing-other (the knowledge-pack tools) still hashes the rest, so a changed file after it still wins. Observable:
+    // the file after it in the check's order (the program first, then `LICENSE` before the lower-case names) is changed.
+    it.each([
+      { caller: 'a caller that refuses missing-other (the engines)', opts: {}, verdict: 'missing-other' },
+      { caller: 'a caller that starts on it (the knowledge-pack tools)', opts: { startsOnMissingOther: true }, verdict: 'mismatch' }
+    ] as const)('a read error of the medium while the copy is hashed, for $caller: $verdict', async ({ opts, verdict }) => {
+      initBinaryVerification(false)
+      const dir = tmp()
+      const bin = join(dir, 'kiwix-serve.exe')
+      writeCopy(dir, { 'kiwix-serve.exe': 'serve', LICENSE: 'licence text', 'kiwix-search.exe': 'search' })
+      writeFileSync(join(dir, 'kiwix-search.exe'), 'another search')
+      readFaults.at = { path: join(dir, 'LICENSE'), phase: 'read', code: 'EIO' }
+      expect(await verifyBinaryBeforeSpawn(bin, opts)).toBe(verdict)
+    })
   })
 })
 
@@ -779,6 +808,64 @@ describe('an install marker that is there but cannot be read as one (#1028)', ()
     const { bin, whole } = copyIn(dir)
     writeFileSync(runtimeMarkerPath(dir), cut(whole))
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-dev')
+  })
+
+  // T3.12 fix round 2 (R1 N-1 = R2 N-1): the marker itself, by the code its `stat` or read fails with. The shared reader
+  // (`readRuntimeMarkerState`) keeps calling every failure but a missing file `unreadable` for its other callers; the
+  // pre-spawn check sorts that code. A read error of the medium (EIO: a bad sector under the marker) or a name the OS
+  // refuses never heals by waiting, so "try again" at every start was a dead end: the record is damaged (`marker-damaged`,
+  // the engines' "Install again"). A hold, or a code nothing here knows, stays `unreadable`, retried (review R-2). None is
+  // kept for the session: the next attempt reads the marker again.
+  describe('a marker whose stat or read fails, by its error code (T3.12 fix round 2)', () => {
+    afterEach(() => {
+      readFaults.at = null
+    })
+    const CODES: Array<[string | null, BinaryVerifyResult]> = [
+      ['EIO', 'marker-damaged'],
+      ['ERR_INVALID_ARG_VALUE', 'marker-damaged'],
+      ['ENAMETOOLONG', 'marker-damaged'],
+      ['ELOOP', 'marker-damaged'],
+      ['EINVAL', 'marker-damaged'],
+      ['EBUSY', 'unreadable'],
+      ['EPERM', 'unreadable'],
+      ['EACCES', 'unreadable'],
+      ['EAGAIN', 'unreadable'],
+      ['EMFILE', 'unreadable'],
+      ['ENFILE', 'unreadable'],
+      ['UNKNOWN', 'unreadable'], // libuv's code for an error it does not map (Windows): R2 N-2's real-media row measures it
+      [null, 'unreadable'] // an error with no code at all
+    ]
+    it.each((['stat', 'read'] as const).flatMap((phase) => CODES.map(([code, verdict]) => ({ phase, code, verdict }))))(
+      'its $phase fails with $code: $verdict, and the next attempt reads it again',
+      async ({ phase, code, verdict }) => {
+        initBinaryVerification(false)
+        const dir = tmp()
+        const { bin } = copyIn(dir)
+        readFaults.at = { path: runtimeMarkerPath(dir), phase, code }
+        expect(await verifyBinaryBeforeSpawn(bin)).toBe(verdict)
+        readFaults.at = null
+        expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+      }
+    )
+
+    // The check reads the marker again once the files are hashed (a copy swapped in meanwhile leaves no verdict). The call
+    // reads it the first time before its first wait, so a fault set right after the call hits the second read only. There a
+    // read error of the medium is the same damaged record; a hold is this attempt's `unreadable`; a marker gone meanwhile
+    // (a reinstall's delete) is the copy that changed, `unreadable` (at the first read it would walk on: `skip-legacy`).
+    it.each([
+      ['EIO', 'marker-damaged'],
+      ['EBUSY', 'unreadable'],
+      ['ENOENT', 'unreadable']
+    ] as const)('its read after the files are hashed fails with %s: %s, and the next attempt reads it again', async (code, verdict) => {
+      initBinaryVerification(false)
+      const dir = tmp()
+      const { bin } = copyIn(dir)
+      const during = verifyBinaryBeforeSpawn(bin)
+      readFaults.at = { path: runtimeMarkerPath(dir), phase: 'read', code }
+      expect(await during).toBe(verdict)
+      readFaults.at = null
+      expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+    })
   })
 })
 

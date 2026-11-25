@@ -5,7 +5,6 @@ import {
   NESTED_NET_FOLDERS,
   fileErrorCode,
   markerBinaryKey,
-  readRuntimeMarker,
   readRuntimeMarkerState,
   recordedFilePath,
   type RuntimeInstallMarker,
@@ -34,9 +33,11 @@ import { sha256File } from './models'
 // the program alone, which is then all that is checked. Every recorded file is first looked at with one
 // `stat`: a copy its caller refuses for a missing file (a program or library gone; for the engines, any
 // file) is not hashed at all. Otherwise files are hashed one at a time, the program first, stopping at
-// the first difference. A file that cannot be read just now is `unreadable` (review R-2); one the drive fails to read
+// the first difference (and, for a caller that refuses `missing-other`, at the first file that turns out gone: T3.12 fix
+// round 2). A file that cannot be read just now is `unreadable` (review R-2); one the drive fails to read
 // (EIO) counts as missing, by what it is, and a recorded name the OS refuses is `marker-damaged` (T3.12 fix round,
-// `readFailure`).
+// `readFailure`). The marker itself, when the drive fails to read it or the OS refuses its name, is `marker-damaged`
+// too (fix round 2, `markerReadFailed`).
 //
 // ROLLOUT (non-breaking — the gate must never spuriously drop a real drive to MockRuntime):
 //   - DEV / un-initialised → NOT enforced ⇒ `skip-dev` (no hashing, no FS). The on-drive
@@ -85,7 +86,8 @@ import { sha256File } from './models'
  *    probe gives no answer, the start ladder sees no GPU evidence), and the next attempt reads again.
  *  - `marker-damaged` (#1028): the copy's install marker is there but cannot be read as one (cut short,
  *    garbled, a folder at its path), or it records files of the copy but not the program asked about
- *    (T3.12 fix round: in the program's own folder, any map without it), or a name the OS refuses.
+ *    (T3.12 fix round: in the program's own folder, any map without it), or a name the OS refuses; or (fix round 2)
+ *    the drive fails to read the marker itself (EIO), or the OS refuses the marker's own name.
  *    With the record gone nothing can be checked, so every seam refuses it: the engines as damaged
  *    files, the knowledge-pack tools like a missing program or library (owner call 2026-11-23).
  */
@@ -223,11 +225,30 @@ function readFailure(err: unknown): 'absent' | 'marker-damaged' | 'unreadable' {
 const NAME_REFUSED: ReadonlySet<string> = new Set(['ERR_INVALID_ARG_VALUE', 'ENAMETOOLONG', 'ELOOP', 'EINVAL'])
 
 /**
+ * T3.12 fix round 2 (R1 N-1 = R2 N-1): what a marker that is there but cannot be read says, by its code (`code` of
+ * `readRuntimeMarkerState`'s `unreadable`, which keeps that answer for its other callers). At the pre-spawn check a read
+ * error of the medium (EIO: a bad sector under the marker) or a name the OS refuses (`NAME_REFUSED`) never heals by
+ * waiting, so "try again" at every start would be a dead end: the record is damaged, `marker-damaged` (the engines'
+ * "Install again", never cached). A hold, or a code nothing here knows (Windows may give `UNKNOWN` for a bad sector),
+ * stays `unreadable`: refused this attempt, read again by the next (review R-2). At the walk and at the re-read after
+ * the hash alike.
+ */
+function markerReadFailed(code: string | null): 'marker-damaged' | 'unreadable' {
+  if (code === 'EIO') return markerDamaged('drive-read-failed')
+  if (code !== null && NAME_REFUSED.has(code)) return markerDamaged('name-refused')
+  log.warn('Could not read an engine install marker before spawn — refusing this attempt (will re-check next spawn)', {
+    code: code ?? 'read-failed'
+  })
+  return 'unreadable'
+}
+
+/**
  * #1028: the copy's install marker is there but is no marker (`fault`, `RuntimeMarkerFault`), or it records
- * files but not the program (`program-unrecorded`), or (T3.12 fix round) a name the OS refuses (`name-refused`).
+ * files but not the program (`program-unrecorded`), or (T3.12 fix round) a name the OS refuses (`name-refused`),
+ * or (fix round 2) the drive fails to read the marker itself (`drive-read-failed`).
  * Refused, never cached (`RECHECKED`). Logs fixed words only: no path, no marker text.
  */
-function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded' | 'name-refused'): 'marker-damaged' {
+function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded' | 'name-refused' | 'drive-read-failed'): 'marker-damaged' {
   log.warn('An engine install marker is there but cannot be read as one — refusing to spawn (the copy counts as damaged; checked again next spawn)', {
     code: 'marker-damaged',
     fault
@@ -242,8 +263,9 @@ function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded' | 'name-
  * then checks every file of the copy that marker records (`keysToVerify`, #1012): first one
  * `stat` each, where the first missing program or library ends the check as `missing` with
  * nothing hashed; then the present files are hashed one at a time, the program first, stopping
- * at the first difference. Other missing files give `missing-other`: at once, with nothing hashed,
- * for a caller that refuses it anyway (the engines, code review round 7); only once nothing present
+ * at the first difference. Other missing files give `missing-other`: at once, with nothing (more) hashed,
+ * for a caller that refuses it anyway (the engines, code review round 7; fix round 2: also a file found gone only when
+ * it is read, which ends the hashing there); only once nothing present
  * differs for one that starts on it (`startsOnMissingOther`, the knowledge-pack tools — a changed
  * file must still win). A file or marker that can't be read right now resolves `unreadable` (the cache
  * layer won't persist it); a recorded file the drive fails to read counts as missing, by what it is; a
@@ -264,14 +286,11 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
     // #1028: nor is one that is there but is no marker (cut short by an interrupted copy, garbled, a folder
     // at its path): `marker-damaged`. A `cpu/` net's own marker in either state never falls back to the
     // family's, which records nothing of the net (no writer puts `cpu/` keys there), or not what is there now.
+    // T3.12 fix round 2: a marker the drive fails to read, or whose name the OS refuses, is `marker-damaged` as well
+    // (`markerReadFailed`): it never heals by waiting.
     const state = readRuntimeMarkerState(candidate)
     if (state.kind === 'absent') continue
-    if (state.kind === 'unreadable') {
-      log.warn('Could not read an engine install marker before spawn — refusing this attempt (will re-check next spawn)', {
-        code: state.code ?? 'read-failed'
-      })
-      return 'unreadable'
-    }
+    if (state.kind === 'unreadable') return markerReadFailed(state.code)
     if (state.kind === 'damaged') return markerDamaged(state.fault)
     markerDir = candidate
     marker = state.marker
@@ -360,6 +379,10 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
           missingCode = true
           break
         }
+        // T3.12 fix round 2 (R1 N-2): a caller that refuses `missing-other` (the engines) refuses this copy whatever the
+        // rest hashes to, so it stops here, as at the `stat` pass (round 7): a bad sector no longer costs the whole copy
+        // again on every rung, probe and helper spawn. Only a caller that starts on it hashes on: a changed file must win.
+        if (!startsOnMissingOther) break
         continue
       }
       if (actual.toLowerCase() !== file.expected.toLowerCase()) {
@@ -372,7 +395,11 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
   // An install that put a new copy in place while this ran (#986's swap, a #532 reinstall, a script
   // re-run) mixed two copies into one hash: that says nothing about either. Not cached, so the next
   // spawn judges the new copy by its own marker instead of a tamper verdict sticking for the session.
-  if (JSON.stringify(readRuntimeMarker(markerDir)) !== JSON.stringify(marker)) {
+  // T3.12 fix round 2 (N-1): a marker that cannot be read here is sorted as at the walk (`markerReadFailed`); one gone or
+  // damaged meanwhile is the copy that changed.
+  const after = readRuntimeMarkerState(markerDir)
+  if (after.kind === 'unreadable') return markerReadFailed(after.code)
+  if (after.kind !== 'marker' || JSON.stringify(after.marker) !== JSON.stringify(marker)) {
     log.warn('The engine copy changed while it was being verified — refusing this attempt (will re-check next spawn)')
     return 'unreadable'
   }
@@ -400,7 +427,8 @@ export interface VerifyBinaryOptions {
    * decision Q2). The present files are then still hashed, so a changed one is `mismatch`, and the
    * `missing-other` it starts on is kept for the session like `ok`, at the same trust. Without it (the
    * engines, which refuse `missing-other` as damaged files) that verdict comes right after the `stat`
-   * pass, with nothing hashed, and is re-checked on every attempt.
+   * pass, with nothing hashed (or, T3.12 fix round 2, at the read that finds the file gone, with nothing more
+   * hashed), and is re-checked on every attempt.
    */
   startsOnMissingOther?: boolean
 }
