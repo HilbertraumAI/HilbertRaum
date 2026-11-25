@@ -4533,19 +4533,17 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
 **Files set aside when a workspace is created (T2.7's security round, owner: keep and document)**
 - On a build that allows no plaintext workspace (a Kit's commercial policy among them), creating a
   workspace never adopts a database it finds on the drive. When there is no
-  workspace yet but `workspace/` holds a leftover `hilbertraum.sqlite` (with `-wal` and `-shm`) or
-  `hilbertraum.sqlite.recovery`, the create moves them aside first: the working file and its two
-  companions together to `hilbertraum.sqlite.quarantine` (`-wal`, `-shm`), or, when one of those names
+  workspace yet but `workspace/` holds a leftover `hilbertraum.sqlite` (with `-wal`, `-shm` or
+  `-journal`) or `hilbertraum.sqlite.recovery`, the create moves them aside first: the working file and
+  its companions together to `hilbertraum.sqlite.quarantine` (`-wal`, `-shm`, `-journal`), or, when one of those names
   is taken, to the first free `hilbertraum.sqlite.quarantine-<n>` (n from 1 to 64); the `.recovery` to
   `hilbertraum.sqlite.recovery.quarantine`, then `…recovery.quarantine-<n>`. Nothing set aside is ever
   overwritten; with no free name the create fails and writes nothing. They may be the only copy of an
   earlier workspace on the drive, so keep them unless you are sure you don't need them: they do no harm,
   and nothing in the app reads, removes or vouches for them. They are **not encrypted**: copy them
-  somewhere you trust (an SQLite tool opens the `.quarantine` file with its `-wal` and `-shm` beside
-  it); deleting them, after quitting HilbertRaum, is permanent (`troubleshooting.md`, "Files named
-  `….quarantine` in the workspace folder"). A rollback journal there (`hilbertraum.sqlite-journal`, which
-  only a later version could leave) is not set aside with them: the create's new database has SQLite
-  delete it (app-updates.md §7.7, the line on WAL mode).
+  somewhere you trust, all together (an SQLite tool opens the `.quarantine` file with its `-wal`, `-shm`
+  and `-journal` beside it); deleting them, after quitting HilbertRaum, is permanent (`troubleshooting.md`,
+  "Files named `….quarantine` in the workspace folder").
 
 **The vault guard (T2.9)**
 - A file of a newer version that cannot be read at the moment of the check (another program holds it)

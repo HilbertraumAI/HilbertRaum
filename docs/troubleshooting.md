@@ -726,7 +726,8 @@ HilbertRaum to get the create step back: until then every unlock says "Could not
 
 ## Files named `….quarantine` in the workspace folder
 
-`workspace/hilbertraum.sqlite.quarantine` (with `-wal` and `-shm` beside it), or
+`workspace/hilbertraum.sqlite.quarantine` (with `-wal`, `-shm` or `-journal` files of the same name
+beside it), or
 `hilbertraum.sqlite.recovery.quarantine`, or the same names ending `-1`, `-2` and so on, were set aside
 when a workspace was created on this drive. There was no workspace yet, but a database file from an
 earlier one (or one a person or another program left there) was in the workspace folder, and the app
@@ -738,8 +739,8 @@ workspace on this drive: its chats, documents and settings. They do no harm wher
 current workspace does not use them, and nothing in HilbertRaum reads or removes them.
 
 **These files are not encrypted**, so anyone with the drive can read them. To keep the data safe,
-copy them somewhere you trust (an SQLite tool opens the `.quarantine` file, with its `-wal` and `-shm`
-beside it). Only if you are sure you will never need that data, quit HilbertRaum and delete them from
+copy them all together somewhere you trust (an SQLite tool opens the `.quarantine` file, with the
+`-wal`, `-shm` and `-journal` files beside it). Only if you are sure you will never need that data, quit HilbertRaum and delete them from
 the `workspace/` folder. Deleting is permanent: the app keeps no other copy.
 
 ---

@@ -1899,8 +1899,8 @@ the vault and its start path (T2.7) led to these rules, as built in `workspace-v
 - **A new workspace adopts nothing it finds.** The create refuses to open a database name
   (`hilbertraum.sqlite`, `-wal`, `-shm`) that is a link or has a second name (`createMayOpenDatabase`).
   On a build that allows no plaintext workspace it opens no database it finds: a leftover working file
-  with its `-wal` and `-shm` is moved aside together, to the first of `hilbertraum.sqlite.quarantine`,
-  `….quarantine-1` … `-64` free for all three, and a leftover `.recovery` to the first free
+  with its `-wal`, `-shm` and `-journal` is moved aside together, to the first of
+  `hilbertraum.sqlite.quarantine`, `….quarantine-1` … `-64` free for all four, and a leftover `.recovery` to the first free
   `hilbertraum.sqlite.recovery.quarantine[-<n>]` (`setLeftoversAside`). Nothing set aside is ever
   overwritten, and with no free name the create fails and writes nothing. A create that fails after its
   open removes the fresh database it made itself, and only when none of the three names held anything

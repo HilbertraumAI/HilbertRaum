@@ -2355,9 +2355,9 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   `.enc`, since SQLite would play it back into that fresh copy at the open's first read (pages of a
   later session mixed into the snapshot, or "damaged" on an intact `.enc`). The one exception is an
   unlock that has just rolled `.recovery` forward: the copy it decrypts is then that kept working file,
-  and SQLite plays the journal back into it at the open. A create that opens a new database beside a
-  journal has SQLite delete it, unshredded (the create sets the working file, its `-wal` and `-shm`
-  aside, not the journal). A later version runs the working database in WAL mode in every session and
+  and SQLite plays the journal back into it at the open. A create on a build that allows no plaintext
+  workspace sets the journal aside with the working file, its `-wal` and `-shm` (the line on names,
+  below: since P2's docs round, before which SQLite deleted it unshredded at the create's open). A later version runs the working database in WAL mode in every session and
   never relies on a `-journal` surviving a release-1 start or unlock: a session it ends mid-transaction
   in another journal mode is lost in release 1, as the line above says of any session that ended
   without a lock, or comes back without that transaction.
@@ -2367,9 +2367,9 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   Proof: `integration/workspace-vault.test.ts`, "a hot -journal a rollback-mode session left beside an
   intact .enc: the unlock removes it first and opens the snapshot, never damaged (F-27 R1 M-2)" and "a
   torn working file with its own hot -journal, kept as .recovery: the unlock rolls it forward and leaves
-  the journal for SQLite to play back (F-27 R1 M-2)"; no row has a create beside a journal (SQLite's
-  delete of one beside an empty database was run on Node 24.13.0 in P2's docs round). [F-27 R1 M-2,
-  m-12]
+  the journal for SQLite to play back (F-27 R1 M-2)" and "a working database with a hot -journal, its
+  -wal and -shm, no key file (%s): the create sets all four aside together and deletes nothing".
+  [F-27 R1 M-2, m-12; T2.D S-b]
 
 **File names in the workspace**
 
@@ -2432,7 +2432,7 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   name, a link as the link, and created anew, `openWriteTemp`),
   `hilbertraum.sqlite.enc.new.tmp` and `rekey-journal.json.tmp` (removed at every start and unlock),
   at a create on a build that allows no plaintext workspace, a leftover `hilbertraum.sqlite` with its
-  `-wal` and `-shm` moved together to the first suffix free for all three (`.quarantine`, then
+  `-wal`, `-shm` and `-journal` moved together to the first suffix free for all four (`.quarantine`, then
   `.quarantine-<n>`, n from 1 to 64) and a `hilbertraum.sqlite.recovery` to the first free
   `hilbertraum.sqlite.recovery.quarantine[-<n>]` (never over anything there; with none free the create
   fails and writes nothing; `setLeftoversAside`),
@@ -2449,7 +2449,7 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   `app.1.log.enc.tmp` (replaced when the log rotates, unless in
   a newer frame, and removed when a journal's `remove` list names a file of that name), and a plain
   `app.log` or `app.1.log` (shredded on an encrypted workspace). And `workspace/hilbertraum.sqlite-journal`
-  (shredded by an unlock, or deleted by SQLite at a create: the line on WAL mode, above).
+  (shredded by an unlock, or set aside by a create: the line on WAL mode, above).
   Code: `main/services/workspace-vault.ts` `openWriteTemp`, `encryptFile`, `decryptFile`,
   `setLeftoversAside`, `recoverPendingRekey`, `clearRekeyJournal`,
   `quarantineName`, `settleRekeyJournal`, `writeVaultDescriptor`, `writeWorkingCopyLostMarker`,
@@ -2502,7 +2502,7 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
 - **Chunk ids do not survive a release-1 re-index.** Every release-1 re-index of a document ("Re-index",
   OCR, "Re-index for deep index", "Re-index all") deletes its `embeddings`, `chunks`, `tree_nodes` (with their edges),
   `extraction_records` and statements and invoices, sets its `tree_status` and `extract_status` to
-  `stale`, and writes the chunks again under new random ids. The text can differ from before: an OCR run
+  `stale` where one was set (a `NULL` stays `NULL`), and writes the chunks again under new random ids. The text can differ from before: an OCR run
   adds pages, and a re-index whose stored copy is gone imports the original file again. A later
   version's own derived data is not told. So whatever a later version derives from a document's text or
   keys by a chunk, tree node or extraction record id either hangs off `chunks(id)` or `documents(id)`
@@ -2581,10 +2581,14 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
 - **The two built-in collections exist, and "in no collection" does not survive a release-1 open.** At
   every open release 1 creates a collection of `type` `library` and one of `type` `temporary` when
   there is none, and files into the Library every `indexed` document that has no membership and a
-  `NULL` `origin_json`. A later version expresses "filed nowhere" in another way.
-  Code: `main/services/db.ts` `seedCollections`. Proof: `integration/collections.test.ts`, "seeds
-  exactly one Library and one Temporary, undeletable + idempotent on re-open" and "files indexed
-  non-generated unfiled docs into Library; skips generated + unindexed". [F-27 review m-12]
+  `NULL` `origin_json`. A later version expresses "filed nowhere" in another way. Any `origin_json`
+  that is not `NULL`, whatever its shape, keeps a document out of that backfill (it is the backfill's
+  test for a generated document): a later version that stores a new kind of origin there gives each such document
+  that must be filed a membership row itself, or accepts that release 1 shows it in no collection.
+  Code: `main/services/db.ts` `seedCollections` (`d.origin_json IS NULL`). Proof:
+  `integration/collections.test.ts`, "seeds exactly one Library and one Temporary, undeletable +
+  idempotent on re-open" and "files indexed non-generated unfiled docs into Library; skips generated +
+  unindexed". [F-27 review m-12; F-27 R2 re-check 1 n-2]
 - **Every place a document is filed is a `document_collections` row.** Release 1's "Delete project
   with its documents" deletes, with its stored copy, every document of that project that has no
   `document_collections` row for another collection (a Library member is never deleted so). A later
@@ -2621,18 +2625,24 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   `ready` over it); `evidence_review_items.decision` (`not_reviewed`, which keeps a review from being
   ready), `kind` (`block`), `block_kind` and `evidence_review_links.reviewer_relation` (none),
   `link_origin` (`reviewer`); `conversations.mode` (`chat`); `messages.role` (`system`, above);
-  `messages.truncated_cause` (`context`: "raise the context size"); `collections.type` (any type but
-  `library` and `temporary` is an ordinary project, deletable with its documents); and every
+  `messages.truncated_cause` (`context`: "raise the context size"); `documents.tree_status` and
+  `extract_status` (a value release 1 does not know reads as no tree, or no extraction, in its
+  documents list, and its re-index sets any value that is set to `stale`, a `NULL` staying `NULL`);
+  `collections.type` (a type release 1 does not know is passed on as it is, and only `library` and
+  `temporary` behave specially; whether a collection can be deleted, with its documents, is its
+  `builtin` flag, not its type); and every
   `image_sessions` row is an image session ("Clear history" deletes every row and shreds each bare
   `stored_name` in `images/`). A later version puts a new state, kind or cause into a column or table
   of its own; a document that must stay out of release 1's answers is `archived` in
   `documents.lifecycle`, the one value release 1 keeps out of search.
-  Code: `main/services/collections.ts` `docLifecycle`, `rowToCollection`; `main/services/retrieval-scope.ts`
+  Code: `main/services/collections.ts` `docLifecycle`, `rowToCollection`, `deleteCollection` (the
+  `builtin` check); `main/services/retrieval-scope.ts`
   (the `archived` exclusion); `main/services/evidence-reviews.ts` `normalizeStatus`, `normalizeDecision`,
   `normalizeItemKind`, `normalizeBlockKind`, `normalizeLinkOrigin`, `normalizeRelation`;
   `main/services/chat.ts` `rowToConversation`, `rowToMessage`, `parseTruncationCause`;
-  `main/services/vision/history.ts` `clearImageSessions`. Proof: none feeds a value release 1 does not
-  know. [F-27 R2 M-7, R1 m-7]
+  `main/services/ingestion/index.ts` `treeStatusOf`, `extractStatusOf`, `prepareDocument` (the reset to
+  `stale`); `main/services/vision/history.ts` `clearImageSessions`. Proof: none feeds a value release 1
+  does not know. [F-27 R2 M-7, R1 m-7; R2 re-check 1 n-1; R1 re-check 1 r-1, r-2]
 - **`runtime_events` is a short log, not a store.** Whenever release 1 records an event and the table
   would hold more than 5,250 rows, it deletes all but the newest 5,000, ordered by `created_at` as text
   and then rowid, whatever the event type. Its Settings → Diagnostics "Export" writes every kept row's
@@ -3046,13 +3056,11 @@ are not repeated: the engine install's (§6.7), G-43 (c) and the salvage behind 
   the registry's refresh shows a newly marked row as "Files missing" until the next reconcile (R2-3b).
 - **F-27's own list (T2.11):** a refused file whose name holds `.parse` is stored as `<id>.parse.enc`,
   which the start's sweep shreds, leaving the failed row without its copy (S-1; follow-up FU-P2-4); the
-  image history's stored names are covered in words only (S-6). P2's docs round (F-27 R1 M-2): the
-  create sets the working file, its `-wal` and `-shm` aside but not a `hilbertraum.sqlite-journal`,
-  which SQLite deletes unshredded when the create opens its new database, so a set-aside copy of a
-  session in a rollback mode lacks its journal; and after a roll-forward the journal is left for SQLite,
-  so when that unlock's open fails before SQLite plays it back, `.enc` holds the torn copy, and the
-  next unlock shreds the journal and opens that copy without it (both need a later version that broke
-  the WAL duty, §7.7).
+  image history's stored names are covered in words only (S-6). P2's docs round (F-27 R1 M-2): after a
+  roll-forward the journal is left for SQLite, so when that unlock's open fails before SQLite plays it
+  back, `.enc` holds the torn copy, and the next unlock shreds the journal and opens that copy without
+  it (it needs a later version that broke the WAL duty, §7.7). (The create's set-aside, which left the
+  journal for SQLite to delete, takes it along since that round, S-b.)
 - **Manifests and skills (T2.7's F-23/F-25 reviews):** an app skill only a later version bundles stays
   an undeletable "Files missing" row after a "Go back" (R2 m-2); the detail view describes a later
   version's skill by release 1's rules, and an unknown stored permission reads as release 1's ceiling

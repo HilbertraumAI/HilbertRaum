@@ -3375,8 +3375,8 @@ function createMayOpenDatabase(dbPath: string): boolean {
 
 /**
  * T2.7 security fix round (F-3; FU-P2-6 in P2): the suffix a create sets a leftover aside under, on a build that allows no
- * plaintext workspace ({@link setLeftoversAside}): `hilbertraum.sqlite.quarantine` with its `-wal` and `-shm` as
- * `hilbertraum.sqlite.quarantine-wal` and `-shm` (so they stay a pair a person can open), and
+ * plaintext workspace ({@link setLeftoversAside}): `hilbertraum.sqlite.quarantine` with its `-wal`, `-shm` and `-journal`
+ * as `hilbertraum.sqlite.quarantine-wal`, `-shm` and `-journal` (so they stay a set a person can open), and
  * `hilbertraum.sqlite.recovery.quarantine`; (re-check 1, N-1) then `.quarantine-<n>` (n from 1) while those are taken,
  * so nothing set aside is ever replaced. Chosen so that nothing reads, shreds or vouches for them: the start's sweep
  * removes exact names (the working file, its `.tmp`, `-wal` and `-shm`), the salvage reads the working file and
@@ -3392,8 +3392,8 @@ export const QUARANTINE_SUFFIX = '.quarantine'
  * time was later: a drive could so hand the user a database the app did not make (rows naming files to shred, settings)
  * under the user's new key. Each of those names that holds anything is moved, by its name (a link moves as the link), to
  * a {@link QUARANTINE_SUFFIX} name; none is opened. T2.7 re-check 1 (N-1; the owner: set-aside files are kept): never
- * over one set aside before. The working file with its `-wal` and `-shm` goes to the first suffix (`.quarantine`, then
- * `.quarantine-1` … `-64`, as {@link quarantineName} names the journal's) that is free for all three, and `.recovery` to
+ * over one set aside before. The working file with its `-wal`, `-shm` and `-journal` goes to the first suffix (`.quarantine`,
+ * then `.quarantine-1` … `-64`, as {@link quarantineName} names the journal's) that is free for all four, and `.recovery` to
  * the first free `.recovery.quarantine[-<n>]`; free means an `lstat` that says ENOENT. With none free, or a move that
  * fails (a hold), it throws, and the create fails with nothing of its own written. A newer build's copy never gets here:
  * the create refuses it first (#985).
@@ -3409,7 +3409,9 @@ function setLeftoversAside(vaultPaths: VaultPaths): void {
     }
     throw new Error('No free name to set a leftover workspace file aside; nothing was created')
   }
-  const sqliteTails = ['', '-wal', '-shm']
+  // T2.D round 3 (S-b): and a rollback journal (`-journal`, a later version's session in a rollback mode), which keeps
+  // the set together: left behind, SQLite deleted it unshredded when the create opened its new database at the name.
+  const sqliteTails = ['', '-wal', '-shm', '-journal']
   if (sqliteTails.some((tail) => present(`${db}${tail}`))) {
     const aside = freeAside(db, sqliteTails)
     for (const tail of sqliteTails) {

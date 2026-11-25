@@ -321,7 +321,8 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   its `-wal` is replayed.
 - The working database stays in WAL mode, and no session relies on `hilbertraum.sqlite-journal`:
   release 1's unlock shreds one before it decrypts `.enc` (unless it has just rolled `.recovery`
-  forward, whose journal SQLite then plays back), and a create has SQLite delete one; never rely on a
+  forward, whose journal SQLite then plays back), and a create sets one aside with the working file;
+  never rely on a
   `-journal` surviving a release-1 start or unlock.
 
 **File names in the workspace**
@@ -348,7 +349,8 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 - A document's title keeps its file extension: release 1 picks the parser, the MIME type and the
   stored copy's name from it on every re-index.
 - Chunk ids do not survive a release-1 re-index (new random ids, the tree, extraction records,
-  statements and invoices gone, the text possibly changed): what a later version derives from a
+  statements and invoices gone, a set `tree_status` and `extract_status` made `stale`, the text
+  possibly changed): what a later version derives from a
   document's text cascades from `chunks(id)` or `documents(id)`, or is keyed to the document and checked
   against `documents.fully_chunked`.
 - A document release 1 could not have indexed (a type it has no parser for, above its size limits,
@@ -368,7 +370,8 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   release 1, and its next scope change drops that field.
 - The built-in `library` and `temporary` collections exist, and "in no collection" does not survive a
   release-1 open: it files every unfiled `indexed` document with a `NULL` `origin_json` into the
-  Library.
+  Library. Any other `origin_json` keeps a document out of that backfill: a later version's new kind of
+  origin brings its own membership row, or the document stays in no collection in release 1.
 - Every place a document is filed is a `document_collections` row: "Delete project with its
   documents" deletes every document of the project with no row for another collection.
 - A new shape of stored JSON is a new column: release 1's re-index reads `ocr_json` as `pages` with a
@@ -377,8 +380,10 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   a later version's field only until it writes them.
 - A column release 1 reads as a closed set holds only release 1's values (`documents.lifecycle`, the
   review status, decisions and link kinds, `conversations.mode`, `messages.role` and
-  `truncated_cause`, `collections.type`, `image_sessions`): any other reads as release 1's default and
-  is overwritten when the user acts; a document kept out of release 1's answers is `archived`.
+  `truncated_cause`, `documents.tree_status` and `extract_status`, `collections.type`,
+  `image_sessions`): any other reads as release 1's default and is overwritten when the user acts; a
+  document kept out of release 1's answers is `archived`, and only `builtin` keeps a collection from
+  being deleted.
 - `runtime_events` is a short log: release 1 keeps its newest 5,000 rows by `created_at`, exports
   `message` and `metadata_json` as stored to a plaintext file, and shows an unknown type by its raw
   name; nothing a later version needs, and no content, name, path or secret, goes there.

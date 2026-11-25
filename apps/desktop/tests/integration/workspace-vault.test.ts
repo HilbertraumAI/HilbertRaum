@@ -17,7 +17,7 @@ import {
   symlinkSync,
   utimesSync
 } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { basename, join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
@@ -953,6 +953,55 @@ describe('WorkspaceController', () => {
       expect(aside.map((path) => readFileSync(path).toString('base64'))).toEqual(before)
       ctl.lock()
       expect(aside.every((path) => existsSync(path)), 'the next lock leaves them as they are').toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // T2.D round 3 (S-b; the owner's "keep the set-aside files"): a session in a rollback-journal mode (a later version's)
+  // that ended mid-transaction leaves its hot `hilbertraum.sqlite-journal` beside the working file. The create set the
+  // working file, `-wal` and `-shm` aside but not the journal, and SQLite deleted it, unshredded, when the create opened
+  // its new, empty database there: the set-aside copy lost the pages it needs. Now the journal moves with the three, to
+  // the first suffix free for all four. Case two: an earlier set-aside journal alone takes `.quarantine-journal`.
+  it.each([
+    ['nothing set aside before', '', null],
+    ['an earlier set-aside journal alone at hilbertraum.sqlite.quarantine-journal', '-1', 'EARLIER JOURNAL']
+  ])('a working database with a hot -journal, its -wal and -shm, no key file (%s): the create sets all four aside together and deletes nothing', (_case, suffix, earlier) => {
+    const vp = freshVaultPaths('vault-f3-journal')
+    const raw = openRawDb(vp.dbPath)
+    let files: Map<string, Buffer>
+    try {
+      raw.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; CREATE TABLE notes (body TEXT);')
+      raw.exec('BEGIN')
+      const insert = raw.prepare('INSERT INTO notes VALUES (?)')
+      for (let i = 0; i < 2000; i++) insert.run(`kept-${'k'.repeat(200)}${i}`)
+      raw.exec('COMMIT')
+      raw.exec("PRAGMA cache_size = 5; BEGIN; UPDATE notes SET body = 'UNCOMMITTED-' || body;")
+      files = new Map([vp.dbPath, `${vp.dbPath}-journal`].map((path) => [path, readFileSync(path)]))
+      raw.exec('ROLLBACK')
+    } finally {
+      raw.close()
+    }
+    files.set(`${vp.dbPath}-wal`, Buffer.from('wal'))
+    files.set(`${vp.dbPath}-shm`, Buffer.from('shm'))
+    for (const [path, bytes] of files) writeFileSync(path, bytes)
+    const earlierPath = `${quarantined(vp.dbPath)}-journal`
+    if (earlier !== null) writeFileSync(earlierPath, earlier)
+    const workspace = dirname(vp.dbPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(conversationCount(ctl)).toBe(0)
+      const aside = `${quarantined(vp.dbPath)}${suffix}`
+      for (const tail of ['', '-wal', '-shm', '-journal']) {
+        expect(readFileSync(`${aside}${tail}`).equals(files.get(`${vp.dbPath}${tail}`)!), `${aside}${tail}`).toBe(true)
+      }
+      expect(existsSync(`${vp.dbPath}-journal`), 'no journal is left beside the new database').toBe(false)
+      if (earlier !== null) expect(readFileSync(earlierPath, 'utf8'), 'the earlier set-aside journal').toBe(earlier)
+      ctl.lock()
+      const names = readdirSync(workspace).sort()
+      for (const tail of ['', '-wal', '-shm', '-journal']) expect(names).toContain(basename(`${aside}${tail}`))
     } finally {
       ctl.shutdown()
     }
