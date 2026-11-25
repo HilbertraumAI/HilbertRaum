@@ -791,6 +791,14 @@ export async function prepareDocument(
     // original gone too, straight to `failed`).
     const located = resolveStoredCopy(db, storeDir, row)
     let storedPath = located?.path ?? null
+    // T2.7 security follow-on (S-b): the legacy migration below writes `<copy>.enc` beside a plaintext copy, points the
+    // row at it and shreds the copy. The resolver's fallback to the recorded `stored_path` can name any file, so a plaintext
+    // copy outside the store folder (`storeHoldsFile`) is no stored copy in an encrypted workspace: the re-index takes
+    // the path for a missing one (the original re-imported into the store, or "source missing"), and nothing outside the
+    // store is written or shredded.
+    if (storedPath && cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX) && !storeHoldsFile(storeDir, storedPath)) {
+      storedPath = null
+    }
     /** The plaintext file the parser reads. */
     let parseSource: string
 
@@ -852,12 +860,9 @@ export async function prepareDocument(
         documentId
       )
       parseSource = storedPath
-      // T2.7 security fix round (F-3; FU-P2-6 in P2): shredded (and swept, #237) only when it lies inside the store
-      // folder (`storeHoldsFile`). The resolver's fallback to the recorded `stored_path` can name any file, which stays.
-      if (storeHoldsFile(storeDir, storedPath)) {
-        transients.push(storedPath)
-        op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
-      }
+      // T2.7 (F-3, S-b): a copy that gets here lies inside the store folder (checked where it was located, above).
+      transients.push(storedPath)
+      op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
       storedPath = encPath
     } else if (cipher) {
       // Encrypted stored copy: decrypt to a transient working file for the parser.
