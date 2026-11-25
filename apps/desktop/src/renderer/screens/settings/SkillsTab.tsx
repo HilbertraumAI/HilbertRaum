@@ -387,6 +387,8 @@ function SkillRow({
   const { t, lang } = useT()
   const needsReview = skill.source === 'user' && !skill.warningAck
   const isApp = skill.source === 'app'
+  // W-65 (R2-3): the folder is there, rewritten by a newer version (the main side's last reconcile says so).
+  const madeForNewerVersion = skill.unavailable && skill.unavailableReason === 'needsNewerApp'
   const rowTitle = localizedSkillTitle(skill, lang)
   const rowDesc = localizedSkillDescription(skill, lang)
   return (
@@ -398,12 +400,15 @@ function SkillRow({
       </button>
       <div className="skill-row-trailing">
         <Badge tone="neutral">{t(TRUST_LABEL[skill.trustedLevel])}</Badge>
-        {skill.unavailable && (
+        {/* W-65 (T2.14 fix round 2, review R2-3): an unavailable row whose folder now holds a skill made for a
+            newer version shows the "Needs newer app" state below (X03), never "Files missing": its files are on
+            the drive. */}
+        {skill.unavailable && !madeForNewerVersion && (
           <Badge tone="error" icon="⚠" title={t('skills.unavailable.title')}>
             {t('skills.unavailable.chip')}
           </Badge>
         )}
-        {skill.incompatible && (
+        {(skill.incompatible || madeForNewerVersion) && (
           <Badge tone="warning" icon="⚠" title={t('skills.incompatible.title')}>
             {t('skills.incompatible.chip')}
           </Badge>

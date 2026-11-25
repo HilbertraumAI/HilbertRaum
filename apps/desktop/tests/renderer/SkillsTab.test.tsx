@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { SkillsTab } from '../../src/renderer/screens/settings/SkillsTab'
 import { requestSkillDetail, clearSkillDetailRequest } from '../../src/renderer/lib/skillDetailRequest'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { t } from '../../src/shared/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -92,6 +93,29 @@ describe('SkillsTab — list + empty state', () => {
     expect(await screen.findByText('Bank statement helper')).toBeInTheDocument()
     expect(screen.getByText('Made by you')).toBeInTheDocument()
     expect(screen.getByRole('switch')).toBeChecked()
+  })
+
+  // W-65 (T2.14 fix round 2, review R2-3): an unavailable row whose folder a newer version rewrote shows the "Needs newer
+  // app" state with the incompatible-skill text (copy deck X03), never "Files missing" (its files are on the drive); an
+  // unavailable row with no reason (a vanished folder) keeps "Files missing". Both stay switched off, and Delete stays
+  // in the newer row's menu: the user now deletes knowingly.
+  it.each([
+    ['a folder a newer version rewrote', { unavailable: true, unavailableReason: 'needsNewerApp' as const }, 'Needs newer app', 'Files missing'],
+    ['a vanished folder', { unavailable: true }, 'Files missing', 'Needs newer app']
+  ])('an unavailable row for %s shows %s (W-65, R2-3)', async (_name, over, shown, absent) => {
+    const user = userEvent.setup()
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill(over)]) }))
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    const chip = screen.getByText(shown)
+    expect(chip).toHaveAttribute(
+      'title',
+      shown === 'Needs newer app' ? t('en', 'skills.incompatible.title') : t('en', 'skills.unavailable.title')
+    )
+    expect(screen.queryByText(absent)).not.toBeInTheDocument()
+    expect(screen.getByRole('switch')).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Skill actions' }))
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
   })
 
   it('marks an app skill as non-deletable (no Delete item in the overflow)', async () => {

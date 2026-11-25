@@ -3300,6 +3300,12 @@ export interface SkillInfo {
   /** True once the on-disk folder has vanished (mark-unavailable; the row is kept). */
   unavailable: boolean
   /**
+   * W-65 (app-update wave, T2.14 fix round 2, review R2-3): set on an `unavailable` row whose folder is still there
+   * but now holds a skill made for a newer version, so the Skills tab shows "Needs newer app" (copy deck X03) instead
+   * of "Files missing". Derived by the last reconcile, never stored; absent otherwise.
+   */
+  unavailableReason?: SkillUnavailableReason
+  /**
    * True when the skill declares a `compatibility.minAppVersion` NEWER than this app (§6.5): it is
    * listed but cannot be enabled/suggested/run until the app is updated. Optional/additive.
    */
@@ -3391,6 +3397,10 @@ export interface SkillPreview {
  * Counts + fixed reason codes ONLY — never folder names or package content (§22-M1). Drives the
  * Settings → Skills "N skill folders could not be read" notice.
  */
+/** W-65 (T2.14 fix round 2): why an unavailable skill row is unavailable, when more than "its folder is gone" is known.
+ *  `needsNewerApp`: its folder now holds a skill made for a newer version (the discovery code of the same name). */
+export type SkillUnavailableReason = 'needsNewerApp'
+
 export interface SkillReconcileStatus {
   errorCount: number
   errorCodes: string[]

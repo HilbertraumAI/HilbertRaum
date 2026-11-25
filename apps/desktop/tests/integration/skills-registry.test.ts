@@ -411,6 +411,53 @@ describe('skills registry — reconcile', () => {
     expect(registry.reconcileStatus()).toEqual({ errorCount: 0, errorCodes: [], needsNewerAppCount: 2 })
   })
 
+  // W-65 (T2.14 fix round 2, review R2-3): such a row also tells the Skills tab WHY it is unavailable, so it reads "Needs
+  // newer app" instead of "Files missing" (its files are on the drive). The reason is derived by each reconcile, found by
+  // the row's folder (`path`), never stored: `unavailable_at`, `enabled` and `disabled_reason` stay as F-25 has them.
+  // The next reconcile clears it when the folder validates again, when it vanishes, or on an app version the gate cannot
+  // read (fail-open: the folder is then just invalid).
+  it('the reconcile names the unavailable rows whose folder a newer version rewrote, and clears that when the folder changes (W-65, R2-3)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'mine')
+    writeSkill(dirs.userSkillsDir, 'gone')
+    writeSkill(dirs.userSkillsDir, 'broken')
+    const registry = createSkillRegistry({ getDb: () => db, ...dirs, appVersion: '0.1.66' })
+    expect(registry.reconcile().needsNewerAppRows).toEqual([])
+
+    writeSkill(dirs.userSkillsDir, 'mine', { kind: 'agent', minAppVersion: '0.2.0' }) // made for a newer version
+    rmSync(join(dirs.userSkillsDir, 'gone'), { recursive: true, force: true }) // vanished
+    writeSkill(dirs.userSkillsDir, 'broken', { kind: 'agent' }) // invalid, no newer minimum
+    expect(registry.reconcile().needsNewerAppRows).toEqual(['user:mine'])
+    expect(['user:mine', 'user:gone', 'user:broken'].map((id) => [registry.unavailableReason(id), getSkill(db, id)!.unavailableAt !== null])).toEqual([
+      ['needsNewerApp', true],
+      [null, true],
+      [null, true]
+    ])
+    // Never stored: the row's columns are the same as a vanished folder's.
+    expect(db.prepare("SELECT enabled, disabled_reason FROM skills WHERE install_id = 'user:mine'").get()).toEqual({
+      enabled: 0,
+      disabled_reason: 'unconfirmed'
+    })
+
+    // On an app version the gate cannot read, the same folder is only invalid.
+    const unknownApp = createSkillRegistry({ getDb: () => db, ...dirs, appVersion: '' })
+    expect(unknownApp.reconcile().needsNewerAppRows).toEqual([])
+    expect(unknownApp.unavailableReason('user:mine')).toBeNull()
+
+    writeSkill(dirs.userSkillsDir, 'mine') // valid again
+    expect(registry.reconcile().needsNewerAppRows).toEqual([])
+    expect(registry.unavailableReason('user:mine')).toBeNull()
+    expect(getSkill(db, 'user:mine')!.unavailableAt).toBeNull()
+
+    writeSkill(dirs.userSkillsDir, 'mine', { kind: 'agent', minAppVersion: '0.2.0' })
+    expect(registry.reconcile().needsNewerAppRows).toEqual(['user:mine'])
+    rmSync(join(dirs.userSkillsDir, 'mine'), { recursive: true, force: true }) // then the folder vanishes
+    registry.reconcile()
+    expect(registry.unavailableReason('user:mine')).toBeNull()
+    expect(getSkill(db, 'user:mine')!.unavailableAt).not.toBeNull()
+  })
+
   it('markSkillUnavailable only flips on first detection (idempotent)', () => {
     const db = freshDb()
     const dirs = makeDirs()
@@ -742,6 +789,33 @@ describe('F-25 golden skill folders: what release 1 accepts, lists, drops and ig
       if (step.userDisables) expect(setSkillEnabled(db, installId, false)).toBe(true)
       if (step.reconcileAt !== undefined) reconcileSkills(db, { ...dirs, appVersion: step.reconcileAt })
       expect(stateOf(db, installId), `step ${i + 1}`).toEqual(step.expect)
+    }
+  })
+
+  // T2.14 fix round 2 (review R2-3), an addition beside verdicts.json: the reason a reconcile gives for an unavailable row
+  // (`needsNewerApp` when its folder now holds a skill made for a newer version), next to the same F-25 columns.
+  const reasons = JSON.parse(readFileSync(join(SET, 'unavailable-reasons.json'), 'utf8')) as {
+    sequences: Array<{
+      name: string
+      folder: string
+      steps: Array<
+        Omit<F25Data['sequences'][number]['steps'][number], 'expect'> & {
+          expect: { enabled: boolean; reason: string | null; available: boolean; unavailableReason: string | null }
+        }
+      >
+    }>
+  }
+  it.each(reasons.sequences.map((q) => [q.name, q] as const))('%s (R2-3)', (_name, q) => {
+    const dirs = goldenDirs()
+    const db = freshDb()
+    const installId = `app:${q.folder}`
+    let newerRows: string[] = []
+    for (const [i, step] of q.steps.entries()) {
+      if (step.removeFolder) rmSync(join(dirs.appSkillsDir, q.folder), { recursive: true, force: true })
+      if (step.replaceWith) copyFileSync(join(SET, 'skills', step.replaceWith, 'SKILL.md'), join(dirs.appSkillsDir, q.folder, 'SKILL.md'))
+      if (step.reconcileAt !== undefined) newerRows = reconcileSkills(db, { ...dirs, appVersion: step.reconcileAt }).needsNewerAppRows
+      const unavailableReason = newerRows.includes(installId) ? 'needsNewerApp' : null
+      expect({ ...stateOf(db, installId), unavailableReason }, `step ${i + 1}`).toEqual(step.expect)
     }
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -502,6 +502,36 @@ describe('skills IPC — suggestSkills (#583)', () => {
     ipcState.handlers.clear()
     seededHarness({ app: [{ id: 'bank' }] }, { unlocked: false })
     await expect(invoke(handlers, IPC.suggestSkills, 'c1', 'bank statement')).rejects.toThrow(/locked/i)
+  })
+})
+
+// W-65 (T2.14 fix round 2, review R2-3): an unavailable row whose folder a newer version rewrote crosses the bridge with
+// its reason, from the registry's last reconcile, so the Skills tab shows "Needs newer app" instead of "Files missing";
+// a vanished folder's row carries none. Nothing about the row is stored differently.
+describe('skills IPC — the reason an unavailable skill row carries (W-65, R2-3)', () => {
+  it('listSkills and getSkill name the newer-version row, never the vanished one', async () => {
+    const w = makeSkillsWorld('skill-ipc', {
+      appVersion: '0.1.66',
+      seedUser: (dir) => ['mine', 'gone'].forEach((id) => writeSkillPackage(dir, { id }))
+    })
+    registerSkillsIpc(makeSkillsIpcContext(w))
+    const listed = async (): Promise<SkillInfo[]> => (await invoke(handlers, IPC.listSkills)).result as SkillInfo[]
+    expect((await listed()).map((s) => [s.installId, s.unavailable, s.unavailableReason])).toEqual([
+      ['user:gone', false, undefined],
+      ['user:mine', false, undefined]
+    ])
+
+    writeSkillPackage(w.userSkillsDir, { id: 'mine', kind: 'agent', minAppVersion: '0.2.0' })
+    rmSync(join(w.userSkillsDir, 'gone'), { recursive: true, force: true })
+    w.skills.reconcile() // what the next start, an import or a delete does
+    expect((await listed()).map((s) => [s.installId, s.unavailable, s.unavailableReason])).toEqual([
+      ['user:gone', true, undefined],
+      ['user:mine', true, 'needsNewerApp']
+    ])
+    const { result: one } = await invoke(handlers, IPC.getSkill, 'user:mine')
+    expect(one).toMatchObject({ unavailable: true, unavailableReason: 'needsNewerApp' })
+    const { result: other } = await invoke(handlers, IPC.getSkill, 'user:gone')
+    expect(other as SkillInfo).not.toHaveProperty('unavailableReason')
   })
 })
 

@@ -91,6 +91,7 @@ a50d52c990adfad1f9ffec973a0a788b07c33bfc9fe32be7dbe0d5b76ae1b85b  readers/f25-sk
 72deceec5c427d58d7f84ed4f5a06cad049f1f0a6a3ebca1dfd2e694d1acc845  readers/f25-skills/skills/g25-min-malformed/SKILL.md
 4615f74ef19376b1fa20899cbc53bf71d16c18a789e44cfc39bd45b4af922571  readers/f25-skills/skills/g25-no-skill-md/notes.md
 65de78aeb1da5eb89f90c1d5e34da171486ed7270ffb0cc0eea9e66752aa5697  readers/f25-skills/skills/g25-tool-kind/SKILL.md
+c316fbfc665a064bf55301a14c449d088fd1950cb66cc47b802589068498532f  readers/f25-skills/unavailable-reasons.json
 258eed673b894b186483ea109b4d18bc4f67abb6cd73bda5247b05ca5aa29be1  readers/f25-skills/verdicts.json
 8595e29829b81ccb7bf5d8a7c63796acfca14967b718ad588bf25277b28343ec  readers/v0.1.60/open-database.cjs
 9965663bcf3c4eec8eefe941d2c86c8a445852c118c723fe1e8ad98bf94d8fba  readers/v0.1.60/open-database.provenance.json
