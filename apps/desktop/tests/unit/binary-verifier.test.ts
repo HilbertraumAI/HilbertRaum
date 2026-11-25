@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -8,13 +8,51 @@ import {
   initBinaryVerification,
   invalidateBinaryVerification,
   setBinaryVerificationPosture,
-  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
+  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES,
+  type BinaryVerifyResult
 } from '../../src/main/services/binary-verifier'
 import { markerBinaryKey, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
+import { log } from '../../src/main/services/logging'
 import { sha256File } from '../../src/main/services/models'
 import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixtures'
 
 // vuln-scan 2026-06-21 item B — re-hash sidecar binaries before spawn.
+
+// T3.12 fix round (R1 M-4, R2 m-1): the `stat` or the read of ONE recorded file fails with an injected error code
+// (`readFaults.at`). No portable file system path fails with EIO, or with a hold, on demand. The pass-through
+// `node:fs/promises` and `node:fs` mocks (the repo's fault-injection rule, as sha256-file-close.test.ts) hand every other
+// call, and every other path, to the real function.
+const readFaults = vi.hoisted(() => ({
+  at: null as null | { path: string; phase: 'stat' | 'read'; code: string | null },
+  /** The error a failing call gives: with `code`, or (null) with none at all. */
+  error: (code: string | null): Error => Object.assign(new Error(`${code ?? 'an error with no code'}: injected`), code === null ? {} : { code })
+}))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const stat = async (...args: Parameters<typeof actual.stat>): ReturnType<typeof actual.stat> => {
+    const fault = readFaults.at
+    if (fault?.phase === 'stat' && String(args[0]) === fault.path) throw readFaults.error(fault.code)
+    return actual.stat(...args)
+  }
+  const mocked = { ...actual, stat }
+  return { ...mocked, default: mocked }
+})
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  type ReadOptions = Exclude<Parameters<typeof actual.createReadStream>[1], string | undefined>
+  const createReadStream = (path: Parameters<typeof actual.createReadStream>[0], options?: ReadOptions): ReturnType<typeof actual.createReadStream> => {
+    const fault = readFaults.at
+    if (fault?.phase !== 'read' || String(path) !== fault.path) return actual.createReadStream(path, options)
+    // The file opens as usual; its first read fails (the hash's read stream, `sha256File`).
+    const read = (...args: unknown[]): void => {
+      const done = args[args.length - 1] as (err: Error) => void
+      process.nextTick(() => done(readFaults.error(fault.code)))
+    }
+    return actual.createReadStream(path, { ...(options ?? {}), fs: { open: actual.open, read, close: actual.close } } as ReadOptions)
+  }
+  const mocked = { ...actual, createReadStream }
+  return { ...mocked, default: mocked }
+})
 
 afterEach(() => verifierInert())
 
@@ -448,6 +486,87 @@ describe("every file the copy's own marker records (#1012)", () => {
     for (const name of gone) rmSync(join(dir, name))
     expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe(verdict)
   })
+
+  // T3.12 fix round (R1 M-4, R2 m-1): what a failed `stat` or read of a recorded file says. A read error of the medium
+  // (EIO: a worn stick) is no hold: the copy is not what was installed, so the file counts as missing (here a library:
+  // `missing`), which the engines refuse with the reinstall offer. A name the OS refuses (a NUL in it, too long, a link loop, an invalid argument) never heals by
+  // waiting: the record is damaged. Everything else is a hold or a code nothing here knows: `unreadable`, retried (the
+  // recorded design, review R-2). None of the three is kept for the session: the next attempt reads the copy again.
+  describe('a recorded file whose stat or read fails, by its error code (T3.12 fix round)', () => {
+    afterEach(() => {
+      readFaults.at = null
+    })
+    const CODES: Array<[string | null, BinaryVerifyResult]> = [
+      ['EIO', 'missing'],
+      ['ERR_INVALID_ARG_VALUE', 'marker-damaged'],
+      ['ENAMETOOLONG', 'marker-damaged'],
+      ['ELOOP', 'marker-damaged'],
+      ['EINVAL', 'marker-damaged'],
+      ['EBUSY', 'unreadable'],
+      ['EPERM', 'unreadable'],
+      ['EACCES', 'unreadable'],
+      ['EAGAIN', 'unreadable'],
+      ['EMFILE', 'unreadable'],
+      ['ENFILE', 'unreadable'],
+      ['UNKNOWN', 'unreadable'], // libuv's code for an error it does not map (Windows)
+      [null, 'unreadable'] // an error with no code at all
+    ]
+    it.each((['stat', 'read'] as const).flatMap((phase) => CODES.map(([code, verdict]) => ({ phase, code, verdict }))))(
+      'its $phase fails with $code: $verdict, and the next attempt reads the copy again',
+      async ({ phase, code, verdict }) => {
+        initBinaryVerification(false)
+        const dir = tmp()
+        const bin = join(dir, 'llama-server.exe')
+        writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml.dll': 'ggml' })
+        readFaults.at = { path: join(dir, 'ggml.dll'), phase, code }
+        expect(await verifyBinaryBeforeSpawn(bin)).toBe(verdict)
+        readFaults.at = null
+        expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+      }
+    )
+
+    // A file the drive fails to read counts exactly like one that is not there, by what it is (the coordinator's ruling on
+    // the fix round's Q1): the library above is `missing`; a file no loader looks for is `missing-other`, which the
+    // engines refuse and the knowledge-pack tools start on (owner Q2 (b)).
+    it.each(['stat', 'read'] as const)(
+      'a read error of the medium (%s) on a file no loader looks for is missing-other, for the engines and for a caller that starts on it',
+      async (phase) => {
+        initBinaryVerification(false)
+        const dir = tmp()
+        const bin = join(dir, 'kiwix-serve.exe')
+        writeCopy(dir, { 'kiwix-serve.exe': 'serve', LICENSE: 'licence text' })
+        readFaults.at = { path: join(dir, 'LICENSE'), phase, code: 'EIO' }
+        expect(await verifyBinaryBeforeSpawn(bin, { startsOnMissingOther: true })).toBe('missing-other')
+        expect(await verifyBinaryBeforeSpawn(bin)).toBe('missing-other')
+      }
+    )
+  })
+})
+
+// T3.12 fix round (R1 m-3, R2 m-4): no throw leaves the check. One nobody foresaw (here the log line itself fails) ends
+// the verification as `unreadable`, never a rejected promise kept in the session cache, and it is dropped like
+// `unreadable`: the next attempt checks the copy again.
+describe('a throw inside the check (T3.12 fix round)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  it.each([
+    { where: 'while the copy is checked', commercial: false, level: 'info' as const },
+    { where: 'while its verdict is settled (a commercial drive)', commercial: true, level: 'warn' as const }
+  ])('$where: unreadable, and the next attempt checks the copy again', async ({ commercial, level }) => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial })
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'legacy-binary')
+    // A hash-less marker: logged while the copy is checked (info), and again on a commercial drive (warn).
+    writeRuntimeMarker(dir, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+    vi.spyOn(log, level).mockImplementationOnce(() => {
+      throw new Error('an unforeseen failure')
+    })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('unreadable')
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-legacy')
+  })
 })
 
 // #234: a hashless marker on a COMMERCIAL drive can be refused at spawn. The refusal is
@@ -660,5 +779,48 @@ describe('an install marker that is there but cannot be read as one (#1028)', ()
     const { bin, whole } = copyIn(dir)
     writeFileSync(runtimeMarkerPath(dir), cut(whole))
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-dev')
+  })
+})
+
+// T3.12 fix round (R1 M-3, R1 m-2, R2 m-1; F-24): the copy's shape, golden. vectors.json (T2.10) holds the marker's text;
+// copy-shapes.json holds what release 1's check makes of the copy beside it: the files it reads and the ones it leaves
+// alone (every later writer leans on "never refused for a file its marker does not record"), a map that records no file
+// of the copy, and names no file can have. Hand-written from the two reviews (its PROVENANCE.md), locked by
+// golden-fixtures.sha256.
+describe('F-24 golden copy shapes: which files of an engine copy release 1 checks (T3.12 fix round)', () => {
+  interface CopyShape {
+    name: string
+    files: Record<string, string>
+    binaries: Record<string, string>
+    longKeys?: Array<{ repeat: string; times: number; then: string; sha256: string }>
+    selfLinks?: string[]
+    verdict: BinaryVerifyResult
+    why: string
+  }
+  const SHAPES = JSON.parse(
+    readFileSync(join(__dirname, '..', 'fixtures', 'readers', 'f24-markers', 'copy-shapes.json'), 'utf8')
+  ) as { program: string; fields: { version: string; backend: string; os: 'win'; arch: string }; sha256: Record<string, string>; vectors: CopyShape[] }
+  const at = (dir: string, key: string): string => join(dir, ...key.split('/'))
+
+  it('every true hash the set records is the SHA-256 of its text', () => {
+    for (const [text, hash] of Object.entries(SHAPES.sha256)) expect(createHash('sha256').update(text).digest('hex'), text).toBe(hash)
+  })
+
+  it.each(SHAPES.vectors.map((v) => [v.name, v] as const))('%s', async (_name, v) => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    for (const [key, text] of Object.entries(v.files)) {
+      mkdirSync(dirname(at(dir, key)), { recursive: true })
+      writeFileSync(at(dir, key), text)
+    }
+    const links = (v.selfLinks ?? []).map((key) => at(dir, key))
+    for (const link of links) symlinkSync(link, link, process.platform === 'win32' ? 'junction' : 'file')
+    const longKeys = (v.longKeys ?? []).map((k) => [k.repeat.repeat(k.times) + k.then, k.sha256] as const)
+    writeRuntimeMarker(dir, { ...SHAPES.fields, binaries: { ...v.binaries, ...Object.fromEntries(longKeys) } })
+    try {
+      expect(await verifyBinaryBeforeSpawn(join(dir, SHAPES.program))).toBe(v.verdict)
+    } finally {
+      for (const link of links) unlinkSync(link)
+    }
   })
 })

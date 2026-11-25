@@ -232,6 +232,18 @@ describe('probeGpuDevices', () => {
     expect(await probeGpuDevices('/bin/llama-server', { spawn, platform, verify: async () => 'skip-dev' })).toBeNull()
   })
 
+  // T3.12 fix round (R2 m-4): a pre-spawn check that throws gave `[]`, which the session cache keeps and
+  // `probeAndPersistGpu` saves as "no graphics card". It is no answer: `null`, and nothing is spawned. The default check
+  // never throws (binary-verifier.test.ts); an injected one can.
+  it('a pre-spawn check that throws gives no answer (null, never "no graphics card") and spawns nothing', async () => {
+    const { spawn, calls } = probeSpawn((child) => child.emit('close', 0, null))
+    const verify = async (): Promise<never> => {
+      throw new Error('an unforeseen failure')
+    }
+    expect(await probeGpuDevices('/bin/llama-server', { spawn, verify })).toBeNull()
+    expect(calls).toHaveLength(0)
+  })
+
   // #790, the order measured on Windows (Node 24.13, Electron 43.8.3): a spawn that fails before its
   // pipes are open emits the child's ENOENT, then ENOTCONN on stdout and on stderr, then 'close'
   // with the negative errno; the child never had a PID. Unhandled, each stream error is an uncaught

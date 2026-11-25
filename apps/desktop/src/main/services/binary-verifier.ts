@@ -34,7 +34,9 @@ import { sha256File } from './models'
 // the program alone, which is then all that is checked. Every recorded file is first looked at with one
 // `stat`: a copy its caller refuses for a missing file (a program or library gone; for the engines, any
 // file) is not hashed at all. Otherwise files are hashed one at a time, the program first, stopping at
-// the first difference. A file that cannot be read is `unreadable` (review R-2).
+// the first difference. A file that cannot be read just now is `unreadable` (review R-2); one the drive fails to read
+// (EIO) counts as missing, by what it is, and a recorded name the OS refuses is `marker-damaged` (T3.12 fix round,
+// `readFailure`).
 //
 // ROLLOUT (non-breaking — the gate must never spuriously drop a real drive to MockRuntime):
 //   - DEV / un-initialised → NOT enforced ⇒ `skip-dev` (no hashing, no FS). The on-drive
@@ -70,17 +72,20 @@ import { sha256File } from './models'
  *  - `mismatch`: a recorded file differs, or a key leaves the copy's folder — a tamper; every seam refuses.
  *  - `missing`: the program or a recorded library (`.dll`, `.so`, `.so.N`, `.dylib`) is gone, and
  *    nothing present differs. The OS loader would look for it elsewhere (the working directory
- *    too), so every seam refuses; the engines with the "engine files damaged" verdict.
+ *    too), so every seam refuses; the engines with the "engine files damaged" verdict. A file the
+ *    drive failed to read (EIO) counts as gone, here and in `missing-other` (T3.12 fix round).
  *  - `missing-other`: only other recorded files are gone (a tool the app never runs, a licence
  *    text). The engines refuse it as damaged files too (owner decision Q1), so for them it comes
  *    without hashing and may hide a changed file (code review round 7); the knowledge-pack tools,
  *    which have no in-app repair, start anyway (owner decision Q2), and for them nothing present
  *    differs (`startsOnMissingOther`).
- *  - `unreadable`: a recorded file could not be read just now, or the copy changed during the
- *    check: no verdict about the copy. Seams refuse this attempt without blaming anything (the
+ *  - `unreadable`: a recorded file could not be read just now (a hold, or an error code nothing here
+ *    knows), the copy changed during the check, or the check failed unexpectedly: no verdict about the
+ *    copy. Seams refuse this attempt without blaming anything (the
  *    probe gives no answer, the start ladder sees no GPU evidence), and the next attempt reads again.
  *  - `marker-damaged` (#1028): the copy's install marker is there but cannot be read as one (cut short,
- *    garbled, a folder at its path), or it records files of the copy but not the program asked about.
+ *    garbled, a folder at its path), or it records files of the copy but not the program asked about
+ *    (T3.12 fix round: in the program's own folder, any map without it), or a name the OS refuses.
  *    With the record gone nothing can be checked, so every seam refuses it: the engines as damaged
  *    files, the knowledge-pack tools like a missing program or library (owner call 2026-11-23).
  */
@@ -186,34 +191,43 @@ function keysToVerify(binaries: Record<string, string>, markerDir: string, binPa
 }
 
 /**
- * A read error that says the file is not there (no file, or no folder on its path). A folder or another
- * non-regular file AT the path is caught before the read (round 5: the `stat` in the hashing loop). A
- * lasting deny-read ACL (EACCES / EPERM) cannot be told from an antivirus hold (Windows reports EPERM or
- * EBUSY for both), so it stays `unreadable`.
+ * What a failed `stat` or read of a recorded file says about the copy (T3.12 fix round: R1 M-4, R2 m-1):
+ *  - `absent`: the file cannot be had. The caller counts it as missing, by what the file is: `missing` for the
+ *    program or a library, `missing-other` for any other file (which the engines refuse with the "Install again" offer
+ *    and the knowledge-pack tools start on, owner Q2 (b)). Either it is not there (ENOENT; ENOTDIR: no folder on its
+ *    path), or the drive failed to read it (EIO: a worn stick, a bad sector; logged by its code): no hold, the copy is
+ *    not what was installed and a reinstall rewrites it, so never "try again in a minute". A folder or another
+ *    non-regular file AT the path is caught before the read (round 5: the `stat` in the hashing loop).
+ *  - `marker-damaged`: the OS refuses the recorded name itself (ERR_INVALID_ARG_VALUE: a NUL in it; ENAMETOOLONG;
+ *    ELOOP: a link loop at it; EINVAL). No file of the copy can be there: the record is damaged, never cached.
+ *  - `unreadable`: anything else, logged by its code only (review R-2: no verdict about the copy, refused this attempt,
+ *    not cached, read again by the next spawn). The holds (an antivirus or indexer lock, a denied read: EBUSY, EPERM,
+ *    EACCES; a lasting deny-read ACL cannot be told from a hold, Windows reports EPERM or EBUSY for both) and the
+ *    process's limits (EAGAIN, EMFILE, ENFILE) clear by waiting, and so may a code nothing here knows.
  */
-function isAbsent(err: unknown): boolean {
+function readFailure(err: unknown): 'absent' | 'marker-damaged' | 'unreadable' {
   const code = fileErrorCode(err)
-  return code === 'ENOENT' || code === 'ENOTDIR'
-}
-
-/**
- * A file that could not be read just now (e.g. a transient Windows AV/indexer lock, a denied read): no
- * verdict about the copy (review R-2: never a tamper) — refused this attempt, not cached, and the next
- * spawn reads it again once the lock clears. Logs the code only.
- */
-function readFailure(err: unknown): 'unreadable' {
+  if (code === 'ENOENT' || code === 'ENOTDIR') return 'absent'
+  if (code === 'EIO') {
+    log.warn('The drive failed to read a file the engine install marker records — counted as a missing file', { code })
+    return 'absent'
+  }
+  if (code !== null && NAME_REFUSED.has(code)) return markerDamaged('name-refused')
   log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
-    code: fileErrorCode(err) ?? 'read-failed'
+    code: code ?? 'read-failed'
   })
   return 'unreadable'
 }
 
+/** The codes with which the OS refuses a recorded name itself (`readFailure`): the marker names no file the copy can hold. */
+const NAME_REFUSED: ReadonlySet<string> = new Set(['ERR_INVALID_ARG_VALUE', 'ENAMETOOLONG', 'ELOOP', 'EINVAL'])
+
 /**
  * #1028: the copy's install marker is there but is no marker (`fault`, `RuntimeMarkerFault`), or it records
- * files of the copy but not the program (`program-unrecorded`). Refused, never cached (`RECHECKED`). Logs
- * fixed words only: no path, no marker text.
+ * files but not the program (`program-unrecorded`), or (T3.12 fix round) a name the OS refuses (`name-refused`).
+ * Refused, never cached (`RECHECKED`). Logs fixed words only: no path, no marker text.
  */
-function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded'): 'marker-damaged' {
+function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded' | 'name-refused'): 'marker-damaged' {
   log.warn('An engine install marker is there but cannot be read as one — refusing to spawn (the copy counts as damaged; checked again next spawn)', {
     code: 'marker-damaged',
     fault
@@ -231,8 +245,9 @@ function markerDamaged(fault: RuntimeMarkerFault | 'program-unrecorded'): 'marke
  * at the first difference. Other missing files give `missing-other`: at once, with nothing hashed,
  * for a caller that refuses it anyway (the engines, code review round 7); only once nothing present
  * differs for one that starts on it (`startsOnMissingOther`, the knowledge-pack tools — a changed
- * file must still win). Never throws: a file or marker that can't be read right now resolves
- * `unreadable` (the cache layer won't persist it). #1028: the walk stops at the first marker FILE it
+ * file must still win). A file or marker that can't be read right now resolves `unreadable` (the cache
+ * layer won't persist it); a recorded file the drive fails to read counts as missing, by what it is; a
+ * recorded name the OS refuses is `marker-damaged` (T3.12 fix round, `readFailure`). #1028: the walk stops at the first marker FILE it
  * finds; one that is there but is no marker resolves `marker-damaged` (not persisted either).
  */
 async function computeRawVerification(binPath: string, startsOnMissingOther: boolean): Promise<BinaryVerifyResult> {
@@ -281,10 +296,13 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
   }
   if (!binaries[markerBinaryKey(markerDir, binPath)]) {
     // #1028: every writer records the program it installs, first. A map that records files of this copy but
-    // not the program (a garbled key, a hand edit) is damaged: refused, not taken for a legacy drive. A map
-    // that records nothing of this copy (a `cpu/` net without a marker of its own, checked against a family
-    // marker that has no `cpu/` key) is the legacy case it always was.
-    if (keysToVerify(binaries, markerDir, binPath).length > 1) return markerDamaged('program-unrecorded')
+    // not the program (a garbled key, a hand edit) is damaged: refused, not taken for a legacy drive. T3.12 fix
+    // round (R1 m-2): so is any map in the program's own folder that does not record it, also one whose every key
+    // is under a nested net's folder (a net's own marker written with keys relative to the family, say): an empty
+    // map reads as none (`readRuntimeMarkerState`), so this one records files. Only a family marker one level up
+    // that records nothing of the net (a `cpu/` net without a marker of its own, over a family marker with no
+    // `cpu/` key) is the legacy case it always was.
+    if (markerDir === dir || keysToVerify(binaries, markerDir, binPath).length > 1) return markerDamaged('program-unrecorded')
     log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
     return 'skip-legacy'
   }
@@ -312,7 +330,9 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
     try {
       isFile = (await stat(file.path)).isFile()
     } catch (err) {
-      if (!isAbsent(err)) return readFailure(err)
+      // T3.12 fix round: a file the drive failed to read (EIO) is counted here like one that is not there.
+      const failure = readFailure(err)
+      if (failure !== 'absent') return failure
     }
     if (isFile) {
       present.push(file)
@@ -332,8 +352,9 @@ async function computeRawVerification(binPath: string, startsOnMissingOther: boo
       try {
         actual = await sha256File(file.path)
       } catch (err) {
-        if (!isAbsent(err)) return readFailure(err)
-        // Gone between its `stat` and its read: counted as missing, as above.
+        const failure = readFailure(err)
+        if (failure !== 'absent') return failure
+        // Gone between its `stat` and its read, or (T3.12 fix round) unread by the drive: counted as missing, as above.
         missing++
         if (file.code) {
           missingCode = true
@@ -396,6 +417,8 @@ function cacheKey(binPath: string, startsOnMissingOther: boolean): string {
  * are but EVICTED from the cache, so the next spawn reads the copy again (a self-healing AV /
  * indexer lock won't strand the session on MockRuntime; a file put back is found by the next
  * spawn or "Check again") — except, round 7, the `missing-other` of a caller that starts on it.
+ * T3.12 fix round (R1 m-3, R2 m-4): a throw nobody foresaw, in the check or in settling its verdict, ends it as
+ * `unreadable`, evicted the same way, never a rejected promise kept in the cache for the session.
  */
 export function verifyBinaryBeforeSpawn(binPath: string, opts: VerifyBinaryOptions = {}): Promise<BinaryVerifyResult> {
   if (!enforced) return Promise.resolve('skip-dev')
@@ -403,22 +426,34 @@ export function verifyBinaryBeforeSpawn(binPath: string, opts: VerifyBinaryOptio
   const key = cacheKey(binPath, startsOnMissingOther)
   const cached = cache.get(key)
   if (cached) return cached
-  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath, startsOnMissingOther).then((raw) => {
-    if (RECHECKED.has(raw) && !(raw === 'missing-other' && startsOnMissingOther)) {
-      // Don't let a transient read failure or a missing file stick for the whole session — drop
-      // it so the next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
-      if (cache.get(key) === pending) cache.delete(key)
-      return raw
-    }
-    if (raw === 'skip-legacy' && commercialPosture) {
-      if (refuseHashlessMarkers) {
-        log.warn('Sidecar binary has no recorded hash on a commercial drive — refusing to spawn (re-run fetch-runtime --commercial)')
-        return 'mismatch'
+  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath, startsOnMissingOther)
+    .then((raw) => {
+      if (RECHECKED.has(raw) && !(raw === 'missing-other' && startsOnMissingOther)) {
+        // Don't let a transient read failure or a missing file stick for the whole session — drop
+        // it so the next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
+        if (cache.get(key) === pending) cache.delete(key)
+        return raw
       }
-      log.warn('Sidecar binary has no recorded hash on a commercial drive — tolerated (spawn-time refusal not enabled)')
-    }
-    return raw
-  })
+      if (raw === 'skip-legacy' && commercialPosture) {
+        if (refuseHashlessMarkers) {
+          log.warn('Sidecar binary has no recorded hash on a commercial drive — refusing to spawn (re-run fetch-runtime --commercial)')
+          return 'mismatch'
+        }
+        log.warn('Sidecar binary has no recorded hash on a commercial drive — tolerated (spawn-time refusal not enabled)')
+      }
+      return raw
+    })
+    .catch((err: unknown): BinaryVerifyResult => {
+      if (cache.get(key) === pending) cache.delete(key)
+      try {
+        log.warn('The pre-spawn check of an engine copy failed unexpectedly — refusing this attempt (will re-check next spawn)', {
+          code: fileErrorCode(err) ?? 'check-failed'
+        })
+      } catch {
+        // The answer stands without its log line (the failure may have been the log itself).
+      }
+      return 'unreadable'
+    })
   cache.set(key, pending)
   return pending
 }

@@ -371,10 +371,11 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       // flag that blamed the GPU, raw loader lines on failed documents) — the auto-start reads it.
       healEngineLoadState(ctx)
       const firstBenchmark = prepareFirstBenchmark(ctx)
-      // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no
-      // binary), so the ladder finds a settled device list instead of racing the weight upload
-      // for the driver. `maybeAutoStartActiveModel` re-checks admission and `startModelRuntime`
-      // the epoch, so a lock landing inside that ≈1 s is handled exactly as before.
+      // #380: the auto-start waits for the session's probe (≈1 s idle, plus the first engine check
+      // before the probe's spawn, #1012: seconds on a slow stick; resolved at once with no binary),
+      // so the ladder finds a settled device list instead of racing the weight upload for the
+      // driver. `maybeAutoStartActiveModel` re-checks admission and `startModelRuntime` the epoch,
+      // so a lock landing inside that wait is handled exactly as before.
       const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(ctx))
       void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
       // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).

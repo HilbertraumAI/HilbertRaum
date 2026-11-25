@@ -29,3 +29,16 @@ an `sh` entry: the `.sh` twin takes its recorded names for the gone-file check f
 split at commas, so it skips a copy whose comma-named file, or whose file recorded only before a nested map,
 is gone (the `.ps1` twin fetches it again, the app refuses it at the start as `missing`). No earlier verdict
 changed. Locked by `../../golden-fixtures.sha256`.
+
+`copy-shapes.json` (T3.12's fix round, 2026-11-25, at `233aaa1a`) is an addition beside `vectors.json`, which
+stays byte for byte as round 3 left it. Hand-written from T3.12's two Fable reviews (R1 M-3, R1 m-2, R1 M-4,
+R2 m-1), their disposition and the plan's W-84 and F-24, not from the code's output; the true hashes were taken
+with `sha256sum` of each text. Its eight vectors hold the copy beside the marker, for the pre-spawn check alone
+(the twins read no copy shape): a file the map does not record, changed or added, is never looked at (`ok`); a
+recorded file in a subfolder that changed is `mismatch`; a main marker's keys under `cpu/`, `cpu.new/` and
+`cpu.old/` are set aside (`ok`, wrong hashes and all), and a main marker that records only such keys is
+`marker-damaged`, never `skip-legacy`; a recorded name the OS refuses (a NUL in it, a path longer than every
+system's limit, a link to itself) is `marker-damaged`. `binary-verifier.test.ts` runs them. A read error of the
+medium (EIO, now counted like a file that is not there, by what the file is) has no portable path that fails with
+it: the same file proves it, and the holds that stay `unreadable`, with an injected error code. Locked by
+`../../golden-fixtures.sha256`.

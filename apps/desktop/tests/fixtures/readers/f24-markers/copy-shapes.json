@@ -1,0 +1,146 @@
+{
+  "contract": "F-24, the engine install marker `.hilbertraum-runtime.json` and the copy beside it (plan Appendix B; W-84; docs/app-updates.md §6.7, §6.11): which files of an engine copy release 1's pre-spawn check reads, and what it makes of each. An addition beside vectors.json, which stays as T2.10 locked it.",
+  "reader": "verifyBinaryBeforeSpawn (src/main/services/binary-verifier.ts), enforced as in a packaged build, for `program` in the copy's own folder, as the engines call it (no `startsOnMissingOther`). The marker is `fields` plus the vector's `binaries`, written into that folder by the test.",
+  "layout": "`files`: the copy's files, key (`/` separators, relative to the copy's folder) to text, written as UTF-8. `binaries`: the marker's map, key to SHA-256. `longKeys` (optional): keys too long to write out, each `repeat` repeated `times` times and then `then`, with its SHA-256, added to the map. `selfLinks` (optional): keys at which the test puts a link to itself instead of a file (a junction on Windows, a symbolic link elsewhere). `sha256`: the SHA-256 of every text a map records as its true hash; any other hash in a map is wrong on purpose.",
+  "notCovered": "A read error of the medium (EIO) counts like a file that is not there, by what the file is (`missing` for the program or a library, `missing-other` for any other file); no portable file system path fails with it, so binary-verifier.test.ts proves it with an injected error code, beside the holds (`unreadable`), and T11.3a's real-media row says which code a bad sector gives on each system.",
+  "program": "llama-server.exe",
+  "fields": {
+    "version": "b12110",
+    "backend": "vulkan",
+    "os": "win",
+    "arch": "x64"
+  },
+  "sha256": {
+    "server bytes": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+    "ggml bytes": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a",
+    "vulkan bytes": "723c7d2257979a62b1b7cdebc0cf4c41c673c1ea7f386c2be942ba805c12951e",
+    "net server bytes": "8c4e0dc2629b4eadec43f0aa9a39c4fc197443dcd5437035f0f9758c3cec1822",
+    "net ggml bytes": "01f60ed72dc8c9ae91945e5e59232304574a4e7657fff314d9ef6a5d505c315f"
+  },
+  "vectors": [
+    {
+      "name": "an unrecorded file whose bytes changed",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes, changed after the install"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b"
+      },
+      "verdict": "ok",
+      "why": "a map that records the program alone (a marker written before #998) checks the program alone: release 1 never looks at a file its marker does not record, whatever its bytes (R1 M-3)"
+    },
+    {
+      "name": "an unrecorded extra file",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes",
+        "ggml-cuda.dll": "a backend a later release adds"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+      },
+      "verdict": "ok",
+      "why": "a file in the folder that the marker does not record is never looked at and never a refusal; an unrecorded library is the recorded residual (#1025), and every later writer records every file it installs (F-24's duty) (R1 M-3)"
+    },
+    {
+      "name": "a recorded file in a subfolder whose bytes changed",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes",
+        "backends/ggml-vulkan.dll": "vulkan bytes, changed after the install"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a",
+        "backends/ggml-vulkan.dll": "723c7d2257979a62b1b7cdebc0cf4c41c673c1ea7f386c2be942ba805c12951e"
+      },
+      "verdict": "mismatch",
+      "why": "every key the copy's own marker records is checked, a key in a subfolder too (a later release that lays its copy out in folders): the file differs from its record (R1 M-3)"
+    },
+    {
+      "name": "keys under cpu/, cpu.new/ and cpu.old/ in a main marker, each with a wrong hash",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes",
+        "cpu/llama-server.exe": "net server bytes",
+        "cpu.new/llama-server.exe": "net server bytes",
+        "cpu.old/ggml.dll": "net ggml bytes"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a",
+        "cpu/llama-server.exe": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "cpu.new/llama-server.exe": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "cpu.old/ggml.dll": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "verdict": "ok",
+      "why": "the three folders hold another copy (the chat engine's safety net and its swap, #986), judged by that copy's own marker: a main marker's keys under them are set aside, for every family (no writer writes one: F-24's duty) (R1 M-3)"
+    },
+    {
+      "name": "a main marker that records only files under cpu/, cpu.new/ and cpu.old/",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "cpu/llama-server.exe": "net server bytes",
+        "cpu.new/llama-server.exe": "net server bytes",
+        "cpu.old/ggml.dll": "net ggml bytes"
+      },
+      "binaries": {
+        "cpu/llama-server.exe": "8c4e0dc2629b4eadec43f0aa9a39c4fc197443dcd5437035f0f9758c3cec1822",
+        "cpu.new/llama-server.exe": "8c4e0dc2629b4eadec43f0aa9a39c4fc197443dcd5437035f0f9758c3cec1822",
+        "cpu.old/ggml.dll": "01f60ed72dc8c9ae91945e5e59232304574a4e7657fff314d9ef6a5d505c315f"
+      },
+      "verdict": "marker-damaged",
+      "why": "in the program's own folder, a map that records files but no file of this copy (a net's own marker written with keys relative to the family, say) is damaged, never the hash-less marker of a drive older than the map; only an absent or empty map is that (vectors.json, #234: tolerated) (R1 m-2)"
+    },
+    {
+      "name": "a recorded name with a NUL in it",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a",
+        "ggml\u0000.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+      },
+      "verdict": "marker-damaged",
+      "why": "the OS refuses the name itself (Node: ERR_INVALID_ARG_VALUE, on every system), so no file can ever be there: the record is damaged, with the reinstall offer; it was `unreadable`, \"try again in a minute\", on every attempt (R2 m-1)"
+    },
+    {
+      "name": "a recorded name longer than any system's path limit",
+      "files": {
+        "llama-server.exe": "server bytes",
+        "ggml.dll": "ggml bytes"
+      },
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+      },
+      "longKeys": [
+        {
+          "repeat": "b/",
+          "times": 20000,
+          "then": "ggml.dll",
+          "sha256": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+        }
+      ],
+      "verdict": "marker-damaged",
+      "why": "a path of 40,000 characters is ENAMETOOLONG on Windows (over 32,767), Linux (4,096) and macOS (1,024): the record names no file this copy can hold (R2 m-1)"
+    },
+    {
+      "name": "a recorded file that is a link to itself",
+      "files": {
+        "llama-server.exe": "server bytes"
+      },
+      "selfLinks": ["ggml.dll"],
+      "binaries": {
+        "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+        "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+      },
+      "verdict": "marker-damaged",
+      "why": "a link loop at a recorded path is ELOOP and never heals by waiting: refused as damaged with the reinstall offer, not `unreadable` (R1 M-4)"
+    }
+  ]
+}
