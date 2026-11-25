@@ -214,6 +214,114 @@ triggers that bump it on a `documents` insert, delete or change of `status`, `ti
 `corpusGeneration(db)` reads it (the skill-suggestion memo's key, `skills/scope-signals.ts`).
 Nothing reaches the workspace file, so an older build sees no change and `SCHEMA_VERSION` stays.
 
+### Workspace data: duties of every later writer (app-update F-27, W-64)
+Release 1 (the first version sold on a Kit) is the oldest version that will ever open a workspace, and
+after a "Go back" it opens one a newer version wrote. Its code cannot be changed in the field, so every
+later version keeps the rules below. **Frozen at M1.** The full text, with what release 1 does, the code
+it lives in and the test that pins it for each line, is
+[`app-updates.md`](app-updates.md) §7.7 ("Duties of every later writer of workspace data"); the two
+lists hold the same lines in the same order, and a change to one is a change to both. "The stamp" is
+the database's `PRAGMA user_version`; "the data key" is the key a version-2 descriptor wraps.
+
+**The database schema and SQLite**
+- A foreign key onto one of release 1's tables never refuses a delete: `ON DELETE CASCADE` or
+  `SET NULL`, or no key at all for data that must outlive release 1's delete.
+- No function release 1's SQLite lacks in a trigger, generated column, `CHECK` or index expression on
+  a table release 1 reads or writes.
+- Schema text release 1's SQLite cannot parse ships only with a higher stamp, and the stamp is raised
+  for nothing else: without it release 1 reads the database as damaged (#985).
+- A database file release 1's SQLite refuses to open (header byte 19 above 2, any other SQLite-level
+  format change) also carries a higher stamp.
+- Whatever the stamp: the file starts with the SQLite magic and is at least 100 bytes long, its page
+  size is a power of two from 512 to 65,536, and its schema format number is at most 4.
+- `documents.ocr_meta_json` keeps a valid `pageCount` and `textPageCount` on every row that has
+  `ocr_json`; otherwise release 1's open writes the sidecar again with its own fields only.
+- `schema_meta.last_writer` is at most 256 characters of printable ASCII with no space and a non-empty
+  field on each side of its first `;`. Release 1 overwrites it whole at every open, so it holds no
+  data of a later version and proves nothing about who wrote since. `schema_meta` keeps its columns
+  and gets no trigger.
+
+**The vault, the journal and stages**
+- A new vault format is one release 1 refuses: a descriptor `version` above 2, a new `kdf.algo`
+  value, a journal `version` above 1, a frame `HRAUMEN2` to `HRAUMEN9` (then a higher descriptor
+  version).
+- Under descriptor version 2 the key-derivation parameters stay inside release 1's bounds (key length
+  32; scrypt `N` a power of two from 1,024 to 2^22, `r` 1 to 32, `p` 1 to 16; argon2id `m` 8 to 2^21
+  KiB, `t` 1 to 64, `p` 1 to 16).
+- No new field that matters under descriptor version 2 or journal version 1: release 1 drops a field
+  it does not know when it rewrites either file.
+- A stage counts only once the version-2 descriptor that wraps its data key is on the drive: before
+  that, release 1 deletes it.
+- A journal lists only stages made under the data key the descriptor wraps: release 1 rolls a listed
+  stage forward with no key check.
+- A version-1 journal entry is the stage's full path, ends `.enc.new`, and lies inside the workspace
+  folder with no link on the way; any other entry vouches for nothing (#1014).
+- Never `.enc` and a waiting database stage under the same data key, whichever was written first:
+  release 1 deletes that stage (#1027).
+- No file named `*.enc.new` in `documents/` or `images/` that is not a stage of the stored copy
+  beside it.
+- `hilbertraum.sqlite.recovery` is a plaintext SQLite copy of the workspace that only a failed lock or
+  a crash leaves, and nothing else is ever stored under that name.
+- A session that ended without a lock (a live write-ahead log beside `.enc`) is lost at any release-1
+  start: no promise of crash recovery on a drive release 1 may still open.
+
+**File names in the workspace**
+- No stored file in `documents/` or `images/` has a name that holds `.parse` or ends `.tmp` (release
+  1's start shreds those); `repo-hygiene.test.ts` fails when a readable file type would give its stored
+  copy such a name.
+- A later version removes its own orphans: release 1 deletes only the files it knows.
+- Nothing of a later version's own under a name release 1 deletes or replaces (the write temps, the
+  quarantined journal, the lost-session marker, the rotated log: named in §7.7).
+
+**Stored messages**
+- A code (`hr:<key>?<name>=<value>&…`) names only a key release 1 knows and gives every placeholder
+  under release 1's name for it.
+- Release 1's whole catalog is a frozen namespace: a key that is ever coded is never renamed, removed
+  or given another meaning.
+- A plural key is coded with its concrete form; release 1 shows every value as given.
+- The seven messages release 1 acts on are never reworded (a new key instead):
+  `main.ingest.pdfScanDetected`, `main.ingest.imageNeedsOcr`, `main.ingest.fileTooLarge`,
+  `main.ingest.tooManyChunks`, `main.ingest.unsupportedType`, `main.chat.defaultTitle`,
+  `main.benchmark.warnSlowRead`.
+- The English a message was ever stored as stays readable: a changed value joins the alias table, and
+  no alias is ever removed.
+- A key never switches between plain text and a template (a new key instead).
+- A stored message or code fits in 4,096 UTF-16 units.
+- Release 1 originates no code, and v0.1.66 and older show a code as it is.
+- Never a coded failure whose re-index by release 1 would lose something: release 1 offers "Try
+  again" on a code it does not know.
+
+**Extractions (bank statements and invoices)**
+- The two extractor numbers only rise (release 1: bank 11, invoice 13); a number is never used again
+  for different output.
+- `extractor_version` is a plain integer, never `NULL` or a lower number on rows to keep: release 1
+  extracts those again, reuses an equal number, and serves anything else as stored (G-34 (a)).
+- Anything that hangs off a statement or invoice needs that row stamped above release 1's number
+  first.
+- A user's own choice is never kept only in `category_id`, `categorized_by_model`, `reconciled` or
+  `totals_reconciled`, which release 1 writes on a newer version's rows; a corrected figure release 1
+  should show is in the row's own column.
+- Release 1's document delete and re-index remove every statement, invoice and correction of the
+  document, at any version.
+- Corrections live in a table release 1 does not know, with no foreign key onto release 1's rows,
+  keyed by the document and a stable row identity.
+- Doubt about an invoice's text is said only through `text_quality` `'suspect'` and
+  `'suspect-confirmed'`.
+- A document's newest row (`ORDER BY created_at DESC, id DESC`, as text) is the newer version's.
+- Rows pass release 1's row schemas (dates `YYYY-MM-DD`, three-capital-letter currencies, the
+  non-empty fields, integers below 2^53, at most 10,000 rows).
+
+**Settings**
+- A value under one of release 1's settings keys is one release 1 could have written; a new meaning
+  is a new key (release 1 leaves keys it does not know).
+- A new field in `lastBenchmark`, `benchmarkHistory`, `modelPlacements` or `gpuProbe` lasts only until
+  release 1 writes that record.
+
+**Search**
+- `chunks_fts` and `messages_fts` keep their names, columns, default tokenizer, their five triggers
+  each (by name, with the `fts_rowid` and `new.kind` markers) and the `fts_rowid` columns.
+- A changed embedding or summary recipe changes the stored model id.
+
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
 `updateSettings(patch)` upserts (what each key may hold is the write gate below; who may write it through IPC is `SETTINGS_WRITERS`, see the end of this section); `seedSettings` seeds on first run. Default `allowNetwork:true`

@@ -6,6 +6,8 @@ import { dirname, join, resolve } from 'node:path'
 import * as ts from 'typescript'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
+import { supportedExtensions } from '../../src/main/services/ingestion/parsers'
+import { ENCRYPTED_DOC_SUFFIX } from '../../src/main/services/workspace-vault'
 import { I18N_DIR, catalogOf } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
@@ -1307,6 +1309,101 @@ describe('repo hygiene — every golden fixture matches the sha256 manifest (T2.
     }
     expect(problems).toEqual([])
     expect(ALWAYS_GOLDEN.every((dir) => paths.some((p) => p.startsWith(`${dir}/`)))).toBe(true) // never an empty lock
+  })
+})
+
+// App-update F-27 (W-64, rule d; docs/app-updates.md §7.7, "File names in the workspace"). At every start of an encrypted
+// workspace, before any password, `shredStalePlaintext` (workspace-vault.ts) overwrites and removes every file in
+// `workspace/documents/` and `workspace/images/` whose name passes one of two tests: it holds `.parse`, or it ends `.tmp`.
+// Those are the names of transients (a decrypted working copy, a write temp), so nothing is lost. Release 1 is the oldest
+// version that will ever open a workspace, and its sweep can never be changed in the field: a later version that stores
+// a file under a name the sweep matches loses that file at the first start after a "Go back". The stored copy of a
+// document is `<id><ext>` in a plaintext workspace and `<id><ext>.enc` in an encrypted one (`prepareDocument`,
+// ingestion/index.ts), `<id>` a UUID and `<ext>` the extension of the imported file, so a file type added to the readable
+// set (`supportedExtensions()`, the parsers' own list) is what could bring such a name in. This row fails then.
+// It reads the sweep's tests out of the function's own text (they are the frozen half) and takes the extensions from the
+// production list. Not covered: a file of a type the app refuses keeps its own extension in its stored copy, whatever it
+// is, and the image history's copies take theirs from a private table of two (`vision/history.ts`).
+describe('repo hygiene — no stored copy takes a name the start sweep shreds (app-update F-27, W-64)', () => {
+  type NameTest = { readonly method: string; readonly text: string }
+
+  /** The tests `shredStalePlaintext` applies to a file name before it shreds the file: every string-method call with one
+   *  string-literal argument (`name.includes('.parse')`) in the condition of an `if` whose branch calls `shredFile`. */
+  function sweepNameTests(vaultSource: string): NameTest[] {
+    const source = ts.createSourceFile('workspace-vault.ts', vaultSource, ts.ScriptTarget.Latest, true)
+    const tests: NameTest[] = []
+    const callsShred = (n: ts.Node): boolean => {
+      let hit = false
+      const walk = (x: ts.Node): void => {
+        if (ts.isCallExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === 'shredFile') hit = true
+        ts.forEachChild(x, walk)
+      }
+      walk(n)
+      return hit
+    }
+    const collect = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.arguments.length === 1) {
+        const arg = n.arguments[0]
+        if (ts.isStringLiteralLike(arg)) tests.push({ method: n.expression.name.text, text: arg.text })
+      }
+      ts.forEachChild(n, collect)
+    }
+    const inSweep = (n: ts.Node): void => {
+      if (ts.isIfStatement(n) && callsShred(n.thenStatement)) collect(n.expression)
+      ts.forEachChild(n, inSweep)
+    }
+    const find = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name?.text === 'shredStalePlaintext' && n.body) inSweep(n.body)
+      else ts.forEachChild(n, find)
+    }
+    find(source)
+    return tests
+  }
+
+  /** Every stored-copy name an extension list gives (plaintext and encrypted) that one of the sweep's tests matches. */
+  function storedNamesTheSweepShreds(tests: readonly NameTest[], extensions: readonly string[]): string[] {
+    const id = '0b9f6c1e-5a44-4d0c-9a57-3f6f0c1d2e7a' // a document id is a UUID: no dot in it
+    const shredded = (name: string): boolean =>
+      tests.some(({ method, text }) => {
+        if (method === 'includes') return name.includes(text)
+        if (method === 'endsWith') return name.endsWith(text)
+        if (method === 'startsWith') return name.startsWith(text)
+        throw new Error(`the sweep tests a name with .${method}(), which this row cannot apply: teach it`)
+      })
+    return extensions.flatMap((ext) => [`${id}${ext}`, `${id}${ext}${ENCRYPTED_DOC_SUFFIX}`]).filter(shredded)
+  }
+
+  const liveTests = (): NameTest[] =>
+    sweepNameTests(readFileSync(join(DESKTOP_ROOT, 'src', 'main', 'services', 'workspace-vault.ts'), 'utf8'))
+
+  it('the sweep shreds a name that holds `.parse` or ends `.tmp`, and nothing else (frozen: release 1 runs it for ever)', () => {
+    expect(liveTests()).toEqual([
+      { method: 'includes', text: '.parse' },
+      { method: 'endsWith', text: '.tmp' }
+    ])
+  })
+
+  it('no file type the app reads gives its stored copy such a name, plaintext or encrypted', () => {
+    const extensions = supportedExtensions()
+    expect(extensions.length).toBeGreaterThan(0) // never an empty list
+    expect(extensions.filter((ext) => !/^\.[a-z0-9]+$/.test(ext))).toEqual([]) // lower case, with the dot, as the store writes it
+    expect(storedNamesTheSweepShreds(liveTests(), extensions)).toEqual([])
+  })
+
+  it('the pin itself names the copy a new type would lose, and reads a changed sweep', () => {
+    const id = '0b9f6c1e-5a44-4d0c-9a57-3f6f0c1d2e7a'
+    const live = liveTests()
+    // `<id>.tmp` is swept; `<id>.tmp.enc` is not (it does not END `.tmp`): the plaintext copy is the one lost.
+    expect(storedNamesTheSweepShreds(live, ['.pdf', '.tmp'])).toEqual([`${id}.tmp`])
+    expect(storedNamesTheSweepShreds(live, ['.parsed'])).toEqual([`${id}.parsed`, `${id}.parsed${ENCRYPTED_DOC_SUFFIX}`])
+    const widened = `export function shredStalePlaintext(): void {
+      for (const name of names) if (name.includes('.parse') || name.endsWith('.tmp') || name.endsWith('.pdf.enc')) shredFile(name)
+    }`
+    expect(sweepNameTests(widened)).toHaveLength(3)
+    expect(storedNamesTheSweepShreds(sweepNameTests(widened), ['.pdf'])).toEqual([`${id}.pdf${ENCRYPTED_DOC_SUFFIX}`])
+    // A test outside the `if` that shreds, or in another function, is not the sweep's.
+    expect(sweepNameTests(`export function other(): void { if (name.endsWith('.tmp')) shredFile(name) }`)).toEqual([])
+    expect(sweepNameTests(`export function shredStalePlaintext(): void { if (name.endsWith('.enc')) keep(name) }`)).toEqual([])
   })
 })
 
