@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import * as ts from 'typescript'
 import { transformWithEsbuild } from 'vite'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
@@ -1835,5 +1835,80 @@ describe('repo hygiene — the shared unmocked-api-call hook is registered (#960
 
   it('vitest.config.ts still loads tests/setup.ts for every file', () => {
     expect(readFileSync(join(DESKTOP_ROOT, 'vitest.config.ts'), 'utf8')).toMatch(/setupFiles:\s*\[[^\]]*'\.\/tests\/setup\.ts'/)
+  })
+})
+
+// App-update W-15 (spike 8; docs/app-updates.md §8.7): the renderer's `localStorage` lives in the profile folder on the
+// user's computer (`%APPDATA%\@hilbertraum\desktop` on Windows), which every version and every Kit on that computer
+// shares and no drive carries along. Chromium recreates a store it cannot open, and an older version may meet a newer
+// one's store. So nothing whose loss changes what the app does may live there: only a UI preference that falls back to a
+// default. This is the list. A new key joins it with what it holds and why losing it is harmless; anything else
+// belongs in the workspace's settings. Read from the syntax tree: every `localStorage` use under src/renderer and
+// src/preload must be a getItem / setItem / removeItem call whose key is a string, or a constant that is one. The
+// folder `renderer/preview/` is left out: the screenshot harness, which never ships (packaging.test.ts, CODE-1).
+describe('repo hygiene — the renderer keeps only listed UI preferences in localStorage (app-update W-15)', () => {
+  /** key → what it holds, and what a lost or foreign value means. */
+  const LOCAL_STORAGE_KEYS: Record<string, string> = {
+    'hilbertraum.uiLanguage':
+      'the last resolved UI language, for the screens before unlock (the setting itself is in the workspace). Lost or not a ' +
+      'language this build has: those screens follow the OS language until the next unlock writes it again',
+    'hilbertraum.chat.listCollapsed': "'1' when the conversation list is collapsed. Lost: the list opens expanded",
+    'hilbertraum.docs.railCollapsed': "'1' when the Documents section rail is collapsed. Lost: the rail opens expanded",
+    'hilbertraum.docs.locationsMoreOpen': "'1' when the rail's \"More\" list is open. Lost: it starts closed"
+  }
+
+  it('every localStorage key is on the list, and nothing is kept in IndexedDB', () => {
+    const preview = join(DESKTOP_ROOT, 'src', 'renderer', 'preview') + sep
+    const sources = [join(DESKTOP_ROOT, 'src', 'renderer'), join(DESKTOP_ROOT, 'src', 'preload')]
+      .flatMap((dir) => filesUnder(dir, /\.tsx?$/))
+      .filter((path) => !path.startsWith(preview))
+      .map((path) =>
+        ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      )
+    const where = (n: ts.Node): string => {
+      const source = n.getSourceFile()
+      const file = relative(DESKTOP_ROOT, source.fileName).split(sep).join('/')
+      return `${file}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}`
+    }
+    // Every `const NAME = '<string>'` of those files: a key is usually such a constant, sometimes imported.
+    const constants = new Map<string, Set<string>>()
+    const uses: ts.Node[] = []
+    const indexedDb: string[] = []
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined && ts.isStringLiteralLike(n.initializer)) {
+        constants.set(n.name.text, (constants.get(n.name.text) ?? new Set()).add(n.initializer.text))
+      }
+      const named = (name: string): boolean =>
+        (ts.isPropertyAccessExpression(n) && n.name.text === name) ||
+        (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression) && n.argumentExpression.text === name) ||
+        (ts.isIdentifier(n) && n.text === name && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n))
+      if (named('localStorage')) uses.push(n)
+      if (named('indexedDB')) indexedDb.push(where(n))
+      ts.forEachChild(n, visit)
+    }
+    for (const source of sources) visit(source)
+
+    const keys = new Set<string>()
+    const unjudged: string[] = []
+    for (const use of uses) {
+      const method = use.parent
+      const call = method.parent
+      const key =
+        ts.isPropertyAccessExpression(method) &&
+        method.expression === use &&
+        ['getItem', 'setItem', 'removeItem'].includes(method.name.text) &&
+        ts.isCallExpression(call) &&
+        call.expression === method
+          ? call.arguments[0]
+          : undefined
+      const values =
+        key === undefined ? undefined : ts.isStringLiteralLike(key) ? new Set([key.text]) : ts.isIdentifier(key) ? constants.get(key.text) : undefined
+      if (values?.size === 1) keys.add([...values][0]!)
+      else unjudged.push(`${where(use)}: ${call.getText().slice(0, 80)}`)
+    }
+    expect(uses.length, 'the scan found the localStorage uses').toBeGreaterThan(0)
+    expect(unjudged, 'a localStorage use whose key this row cannot read').toEqual([])
+    expect([...keys].sort()).toEqual(Object.keys(LOCAL_STORAGE_KEYS).sort())
+    expect(indexedDb, 'IndexedDB lives in the same shared profile').toEqual([])
   })
 })

@@ -101,6 +101,54 @@ jobs:
           HILBERTRAUM_PACKED_EXE: release/win-unpacked/HilbertRaum.exe
           HILBERTRAUM_PACKED_REQUIRED: '1'
         run: npx vitest run tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts
+      # App-update W-15 (spike 8; docs/app-updates.md 8.7): every version and every Kit on one computer shares the
+      # profile %APPDATA%\@hilbertraum\desktop, and the single-instance lock is keyed on it. packaging.test.ts pins
+      # the names that path derives from; this step reads the path itself, on the exe just built: it starts the
+      # portable exe the way a user does (a scratch drive root, no profile switch) and waits for the lock's
+      # `lockfile`, which exists only while an instance holds that profile. The runner's account is throwaway, so
+      # the real profile path is free to use here; never run this on a computer someone works on. A failure names
+      # every lockfile and every new folder the start left under %APPDATA%. Blocking: the release job needs
+      # build-win.
+      - name: Check the packaged app's user-data folder (app-update W-15)
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          HILBERTRAUM_DRIVE_ROOT: ${{ runner.temp }}\userdata-check\drive
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = Join-Path $env:APPDATA '@hilbertraum\desktop'
+          $lock = Join-Path $expected 'lockfile'
+          $exe = @(Get-ChildItem apps/desktop/release/HilbertRaum-*-portable.exe)
+          if ($exe.Count -ne 1) { throw "expected one portable exe, found $($exe.Count): $($exe.Name -join ', ')" }
+          if (Test-Path -LiteralPath $lock) { throw "a lockfile exists at $lock before the start: an instance is already running" }
+          $before = @(Get-ChildItem -LiteralPath $env:APPDATA -Directory -Force | ForEach-Object { $_.Name })
+          $locksBefore = @(Get-ChildItem -LiteralPath $env:APPDATA -Filter lockfile -File -Recurse -Depth 2 -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:HILBERTRAUM_DRIVE_ROOT 'config') | Out-Null
+          Set-Content -LiteralPath (Join-Path $env:HILBERTRAUM_DRIVE_ROOT 'config\drive.json') -Value '{}' -NoNewline
+          Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+          $stub = Start-Process -FilePath $exe[0].FullName -PassThru
+          $deadline = (Get-Date).AddMinutes(5)
+          $held = $false
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path -LiteralPath $lock) { $held = $true; break }
+            if ($stub.HasExited) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          # What the start left, read while the app still runs.
+          $locks = @(Get-ChildItem -LiteralPath $env:APPDATA -Filter lockfile -File -Recurse -Depth 2 -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName } | Where-Object { $locksBefore -notcontains $_ })
+          $new = @(Get-ChildItem -LiteralPath $env:APPDATA -Directory -Force | ForEach-Object { $_.Name } | Where-Object { $before -notcontains $_ })
+          $stubState = if ($stub.HasExited) { "exited with code $($stub.ExitCode)" } else { 'running' }
+          # Stop the app: close its window first, then end whatever of it is left.
+          # (`HilbertRaum` is the unpacked app's processes; the portable exe that started it exits after them.)
+          foreach ($p in @(Get-Process -Name 'HilbertRaum' -ErrorAction SilentlyContinue)) { [void]$p.CloseMainWindow() }
+          if (-not $stub.WaitForExit(20000)) {
+            Get-Process -Name 'HilbertRaum' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            if (-not $stub.WaitForExit(20000)) { Stop-Process -Id $stub.Id -Force -ErrorAction SilentlyContinue }
+          }
+          $found = "new lockfiles under %APPDATA%: [$($locks -join '; ')]; new folders under %APPDATA%: [$($new -join '; ')]; the portable exe was $stubState"
+          if (-not $held) { throw "no lockfile appeared at $lock within 5 minutes of the start. $found" }
+          if ($locks.Count -ne 1 -or $locks[0] -ne $lock) { throw "the start left a lockfile somewhere else as well. $found" }
+          "The packaged app holds its profile at $expected. $found"
       - name: Fetch win llama.cpp runtime (Vulkan), zip for offline install
         # #102 item 1 — the mac Metal zip's Windows twin: a convenience re-host of the
         # SAME pinned upstream build the in-app engine installer fetches

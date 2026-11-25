@@ -1213,7 +1213,15 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   shipped `THIRD-PARTY-NOTICES.md` and `LICENSE.txt` against the committed files, the OCR worker
   closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
   the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
-  step itself on every PR (a workflow change first runs at a tag). Also fetches the win Vulkan runtime via
+  step itself on every PR (a workflow change first runs at a tag). Then it **checks the packaged
+  app's user-data folder** (app-update W-15, blocking): it starts the portable exe with a scratch
+  drive root and no profile switch, waits for `%APPDATA%\@hilbertraum\desktop\lockfile` (the
+  single-instance lock's file, present only while an instance holds that profile), and stops the
+  app. Every version and every Kit on one computer shares that folder
+  ([`app-updates.md`](app-updates.md) §8.7), so a build whose profile moved must not be released;
+  a failure names every new lockfile and folder the start left under `%APPDATA%`. The step uses the
+  runner's own profile, which is thrown away with the runner: never run it on a computer someone
+  works on. `packaging.test.ts` pins the names the path derives from and reads this step too. Also fetches the win Vulkan runtime via
   `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
   in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
   extracted install tree (`Compress-Archive`; root entry `win/` incl. the
@@ -1353,6 +1361,31 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    Norton, so it proves nothing). It must get past the first megabytes; cancel it then. The app's
    log then holds the line "Download trust: the system certificate store is trusted too". Before
    #564 such a download failed with "fetch failed".
+14. **The name the user-data folder derives from, in each built `app.asar` (app-update W-15).**
+   Every version and every Kit on one computer shares one profile folder
+   (`%APPDATA%\@hilbertraum\desktop` on Windows), named by the packaged `package.json`:
+   `productName` if present, else `name` ([`app-updates.md`](app-updates.md) §8.7). For each built
+   archive (`release/win-unpacked/resources/app.asar`, the `.app`'s `Contents/Resources/app.asar`,
+   `release/linux-unpacked/resources/app.asar`), from an **empty scratch folder** (the command
+   writes a file named `package.json` into the current folder, over one that is there):
+   `npx asar extract-file <path to app.asar> package.json`. **Pass** = the extracted file's `name` is
+   `@hilbertraum/desktop` and it has no `productName`. On Windows, `release.yml`'s build-win also
+   reads the path itself from a start of the built exe ("The release workflow" above): check that
+   step passed.
+15. **The portable stub's hold on the drive-root exe, after every electron-builder, NSIS or
+   Electron major bump (app-update W-21).** An update's apply waits until the exe on the drive is
+   free, by the start files' write-open probe ([`app-updates.md`](app-updates.md) §5.5, §5.6), and
+   the time it allows rests on what the stub was measured to do. Re-measure on the built portable
+   exe, 3 runs on an NTFS volume, with nothing else of HilbertRaum running:
+   `powershell -NoProfile -File scripts\release\run-hold.ps1 -Exe apps\desktop\release\HilbertRaum-<version>-portable.exe -WorkDir <scratch folder>`
+   (the script's header lists the other parameters; it starts the app with a scratch drive root and
+   a scratch profile, and deletes nothing). **Pass** (the script prints `PASS` and exits 0) = in
+   every run the unpack folder is absent when the probe first reads free, and the probe reads free
+   at most 1.5 s after the window was closed (WM_CLOSE). Record the run log's `probe_free_end`
+   line and, beside it for comparison with the first measurement (spike 1,
+   [`app-updates.md`](app-updates.md) §10.6: once the app's process was gone the stub released the
+   exe in 0.22–0.27 s and exited in 0.42–0.62 s; it exited 0.70–0.77 s after WM_CLOSE), its
+   `rename_ok` and `stub_exit` lines.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
