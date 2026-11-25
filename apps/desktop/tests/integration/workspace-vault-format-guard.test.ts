@@ -871,8 +871,9 @@ describe('what is not newer (#845)', () => {
     }
   })
 
-  // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): written by the released v0.1.65 and v0.1.50
-  // code itself, on a scratch root, with a throwaway password. The release's key schedule must hold (derive, verify,
+  // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): one per published tag from v0.1.50 to v0.1.66
+  // (sixteen; v0.1.51 was never published), each written by that tag's released code itself, on a scratch root, with a
+  // throwaway password, and locked by tests/fixtures/golden-fixtures.sha256. The release's key schedule must hold (derive, verify,
   // unwrap), a vault built around its data key must unlock and lock, and the descriptor must stay byte for byte.
   // #974: so must one an editor saved again with a UTF-8 byte-order mark in front (Windows PowerShell 5.1
   // `Set-Content -Encoding utf8`, older Notepad): it read as unreadable, and the unlock said the key file was missing.

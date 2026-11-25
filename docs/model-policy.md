@@ -498,6 +498,15 @@ can never change in the field. So every later release keeps these rules (the rec
   it, release 1 drops the file with a log line (a role it does not know alone is listed either way).
 - **`min_app_version` is exactly `MAJOR.MINOR.PATCH`.** Release 1 reads any other value as newer (a
   null or empty value is none).
+- **The minimum only as the top-level `min_app_version`.** Release 1 ignores any other spelling or
+  place (`minAppVersion`, or `min_app_version` inside a block) as an unknown key and uses the file
+  (T2.7's F-23 review 1, MJ-6).
+- **Nothing but model manifests and `runtime-sources.yaml` under `model-manifests/`** with a `.yaml` or
+  `.yml` name (any case), at any depth: release 1 reads every other such file as a manifest, and drops
+  it, or lists it under "Needs a newer HilbertRaum" when it carries `id`, `display_name` and a minimum
+  (MJ-4).
+- **No byte-order mark.** Release 1's `.sh` flat read cannot see a key on a first line that starts with
+  one (an `id` there prints empty), while the gate reader reads past it (T2.10 round 2).
 - **A newer manifest still passes the safety checks.** Release 1 drops, instead of listing, one without
   `id` or `display_name`, or one whose declared path leaves the drive. A `role` that is no string (a
   number, a block) is a bad value, not a new role: release 1 drops the file.
@@ -505,9 +514,12 @@ can never change in the field. So every later release keeps these rules (the rec
   beside the manifest release 1 uses: a usable manifest always keeps its id. Never put
   `min_app_version` on the only manifest of an id release 1 runs.
 - **`default_for_role`:** never make the flagged manifest unusable for release 1 without flagging a
-  usable replacement in the same release.
-- **Never repoint a hash in place; retire a model with `download.withdrawn`**, never by deleting a
-  manifest whose weights may be on the drive. App-owned chat manifests are refreshed all or nothing.
+  usable replacement in the same release, and a new default for a role release 1 runs only behind
+  `min_app_version`: of two usable flagged manifests release 1 picks the first in its walk (MN-4).
+- **Never repoint a hash in place; retire a model with `download.withdrawn`**, a non-empty string inside
+  `download` (release 1 drops a manifest whose `withdrawn` is `true` or a block, so an installed model
+  vanishes from its list, and ignores a top-level `withdrawn:`; MN-3), never by deleting a manifest
+  whose weights may be on the drive. App-owned chat manifests are refreshed all or nothing.
 - **Never rename an app-owned manifest or give it a new id in place:** `prepare-drive` copies without
   deleting, so both files would stay on a refreshed drive as a duplicate id. Release 1 then runs the one
   whose path comes first in its walk and logs the other each time it reads the folder (above), so which file it uses
@@ -515,9 +527,12 @@ can never change in the field. So every later release keeps these rules (the rec
   read by release 1.
 - **Key order for the scripts.** `fetch-models` and `verify-models` read a manifest flat, first match
   wins (they run with no Node): no key nested in a block may come before a top-level key of the same
-  name (`local_path`, `sha256`, `url`, `size_bytes`, `license_url`, `runtime`, `format`, `license`,
-  `status`, `withdrawn`, `bundled_on_preconfigured_drive`); `id`, `role` and `min_app_version` are
-  top-level keys at column 0. `committed-catalog.test.ts` holds that read to the YAML parser on every
+  name (`id`, `local_path`, `sha256`, `url`, `size_bytes`, `license_url`, `runtime`, `format`, `license`,
+  `status`, `withdrawn`, `bundled_on_preconfigured_drive`; the golden `nested-all-first` shows a nested
+  `id` taken too, T2.10's QA N-2); `id`, `role` and `min_app_version` are top-level keys at column 0,
+  written plain: unquoted, the value on the same line, no tag (the scripts' column-0 read does not see a
+  quoted key, a mapping indented whole or a flow-style file, and skips a block-scalar `role` or a tagged
+  minimum; MN-1). `committed-catalog.test.ts` holds that read to the YAML parser on every
   committed manifest, for every key the scripts read.
 
 **The scripts skip what their checkout's app cannot use** (W-62 (b)). Both twins of `fetch-models` and
