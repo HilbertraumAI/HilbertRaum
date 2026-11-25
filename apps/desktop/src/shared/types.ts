@@ -463,6 +463,10 @@ export interface DriveStatus {
   /** On-disk footprint of `workspace/images/` — the saved image-analysis history (#122).
    *  `0` when empty/absent; `null` when the directory could not be read. */
   imagesBytes: number | null
+  /** The app version the drive's builder recorded: `config/drive-release.json`'s valid `app_version` (F-13's
+   *  reader, read again at every call; W-16). `null` on a standalone install, and on a drive without a readable
+   *  record or whose record carries no valid version. Diagnostics shows it as "Version recorded on the drive". */
+  driveAppVersion: string | null
   platform: string
   arch: string
 }

@@ -2019,6 +2019,8 @@ export const nl: UiCatalog<'nl'> = {
   'diag.accel.gpuAvailable': '{name} (GPU beschikbaar)',
   'diag.app.title': 'App en engine',
   'diag.app.version': 'Appversie',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'onbekend',
   'diag.app.selectedModel': 'Geselecteerd model',
   'diag.app.noneSelected': 'geen model geselecteerd',

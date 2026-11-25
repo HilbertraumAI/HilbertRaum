@@ -161,6 +161,14 @@ function runtimeStatusLine(runtime: RuntimeStatus | null, { t }: LanguageBinding
   })
 }
 
+/** W-16: the app version the drive's builder recorded, shared by the card row and the copy report. The version
+ *  as written (a technical value, never translated); "not recorded" when the drive has none, an older status
+ *  object without the field included; "unknown" when the drive status could not be read, which says no fact. */
+function driveVersionLine(drive: DriveStatus | null, { t }: LanguageBinding): string {
+  if (!drive) return t('diag.app.unknown')
+  return drive.driveAppVersion ?? t('diag.app.driveVersionNone')
+}
+
 /** The one-line local-API status, shared by the card row and the copy report. Counts
  *  only — the endpoint records nothing about who called or what was asked (D1). */
 function localApiStatusLine(api: LocalApiStatus | null | undefined, { t }: LanguageBinding): string {
@@ -223,6 +231,7 @@ function engineProblemLabel(problem: EngineProblem, { t }: LanguageBinding): str
  *  language binding, so `withEnglishCopy` can build it a second time in English (#812). */
 function buildAppRuntimeReport(
   app: AppStatus | null,
+  drive: DriveStatus | null,
   runtime: RuntimeStatus | null,
   currentGpu: PerformanceSnapshot['currentGpu'],
   install: RuntimeInstallInfo | null,
@@ -234,6 +243,7 @@ function buildAppRuntimeReport(
   return [
     t('diag.app.title'),
     `${t('diag.app.version')}: ${app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}`,
+    `${t('diag.app.driveVersion')}: ${driveVersionLine(drive, tr)}`,
     `${t('diag.app.selectedModel')}: ${app?.activeModelId ?? t('diag.app.noneSelected')}`,
     `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
     `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, tr)}`,
@@ -535,6 +545,8 @@ export function DiagnosticsTab(): JSX.Element {
         <dl className="kv">
           <dt>{t('diag.app.version')}</dt>
           <dd>{app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}</dd>
+          <dt>{t('diag.app.driveVersion')}</dt>
+          <dd>{driveVersionLine(drive, i18n)}</dd>
           <dt>{t('diag.app.selectedModel')}</dt>
           <dd>{app?.activeModelId ?? t('diag.app.noneSelected')}</dd>
           <dt>{t('diag.app.profile')}</dt>
@@ -593,7 +605,9 @@ export function DiagnosticsTab(): JSX.Element {
             size="sm"
             title={t('diag.copyTitle')}
             onClick={() =>
-              copyReport(withEnglishCopy(i18n, (tr) => buildAppRuntimeReport(app, runtime, currentGpu, install, tr, engineVersions)))
+              copyReport(
+                withEnglishCopy(i18n, (tr) => buildAppRuntimeReport(app, drive, runtime, currentGpu, install, tr, engineVersions))
+              )
             }
           >
             {t('diag.copy')}

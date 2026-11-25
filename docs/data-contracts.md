@@ -563,7 +563,7 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
 (rootPath, workspacePath, modelsPath, logsPath, configPath, dbPath, isPreparedDrive).
-`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, and `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable). See `docs/drive-layout.md`.
+`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable, and `driveAppVersion`: on a prepared drive the valid `app_version` of `config/drive-release.json`, read through `updates/drive-release.ts` at every call, else `null`, Diagnostics' "Version recorded on the drive", W-16). See `docs/drive-layout.md`.
 
 ### Core IPC (Phase 1 live)
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in

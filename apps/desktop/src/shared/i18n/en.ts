@@ -2082,6 +2082,8 @@ export const en = {
   'diag.accel.gpuAvailable': '{name} (GPU available)',
   'diag.app.title': 'App & runtime',
   'diag.app.version': 'App version',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'unknown',
   'diag.app.selectedModel': 'Selected model',
   'diag.app.noneSelected': 'none selected',

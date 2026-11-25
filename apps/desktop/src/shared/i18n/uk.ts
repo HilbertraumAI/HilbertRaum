@@ -2108,6 +2108,8 @@ export const uk: UiCatalog<'uk'> = {
   'diag.accel.gpuAvailable': '{name} (GPU доступний)',
   'diag.app.title': 'Застосунок і середовище виконання',
   'diag.app.version': 'Версія застосунку',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'невідомо',
   'diag.app.selectedModel': 'Вибрана модель',
   'diag.app.noneSelected': 'не вибрано',

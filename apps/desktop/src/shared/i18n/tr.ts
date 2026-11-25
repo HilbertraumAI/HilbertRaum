@@ -1946,6 +1946,8 @@ export const tr: UiCatalog<'tr'> = {
   'diag.accel.gpuAvailable': '{name} (GPU kullanılabilir)',
   'diag.app.title': 'Uygulama ve motor',
   'diag.app.version': 'Uygulama sürümü',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'bilinmiyor',
   'diag.app.selectedModel': 'Seçili model',
   'diag.app.noneSelected': 'yok',

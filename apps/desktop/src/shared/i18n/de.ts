@@ -2101,6 +2101,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.accel.gpuAvailable': '{name} (GPU verfügbar)',
   'diag.app.title': 'App & Laufzeit',
   'diag.app.version': 'App-Version',
+  'diag.app.driveVersion': 'Auf dem Laufwerk vermerkte Version',
+  'diag.app.driveVersionNone': 'nicht vermerkt',
   'diag.app.unknown': 'unbekannt',
   'diag.app.selectedModel': 'Ausgewähltes Modell',
   'diag.app.noneSelected': 'keins ausgewählt',

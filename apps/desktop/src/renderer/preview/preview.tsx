@@ -1061,6 +1061,8 @@ overrides.getDriveStatus = async () =>
         isPreparedDrive: true,
         writable: true,
         freeBytes: 91 * 1024 * 1024 * 1024,
+        // W-16: a Kit's drive carries the version its builder recorded (Diagnostics' "Version recorded on the drive").
+        driveAppVersion: '1.0.0',
         platform: 'win32',
         arch: 'x64'
       } as unknown as DriveStatus)

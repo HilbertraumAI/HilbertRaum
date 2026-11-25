@@ -2178,6 +2178,8 @@ export const fr: UiCatalog<'fr'> = {
   'diag.accel.gpuAvailable': '{name} (GPU disponible)',
   'diag.app.title': 'Application et moteur d’exécution',
   'diag.app.version': 'Version de l’application',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'non disponible',
   'diag.app.selectedModel': 'Modèle sélectionné',
   'diag.app.noneSelected': 'aucun',

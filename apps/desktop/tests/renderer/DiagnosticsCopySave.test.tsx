@@ -4,7 +4,7 @@ import { render, screen, cleanup, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
-import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type BenchmarkResult, type DriveStatus, type RuntimeStatus } from '../../src/shared/types'
 import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
 import { t, tCount, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
@@ -104,6 +104,19 @@ function renderDiagnostics(lang?: UiLanguage) {
     </ToastProvider>
   )
   return lang ? renderInLanguage(ui, lang) : render(ui)
+}
+
+/** The `<dt>` labels of the card headed `card`, in order. */
+function labelsOn(card: string): string[] {
+  const box = screen.getByRole('heading', { name: card }).closest('.card')
+  return Array.from(box?.querySelectorAll('dt') ?? []).map((el) => el.textContent ?? '')
+}
+
+/** The `<dd>` text under `label` on the card headed `card` (labels repeat across cards). */
+function valueOn(card: string, label: string): string | null | undefined {
+  const box = screen.getByRole('heading', { name: card }).closest('.card')
+  const dt = Array.from(box?.querySelectorAll('dt') ?? []).find((el) => el.textContent === label)
+  return dt?.nextElementSibling?.textContent
 }
 
 afterEach(() => {
@@ -415,18 +428,75 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
   })
 })
 
+// W-16 (app-update plan; copy deck C10/C11): the App & runtime card names the app version the drive's builder
+// recorded (`config/drive-release.json`, read in main into `DriveStatus.driveAppVersion`) in a row right under the
+// running app's version, and its Copy report carries the same line, so support sees when the two disagree. The row
+// is always shown: "not recorded" when the drive has no readable record (a fact about the drive), "unknown" when
+// the drive could not be asked at all.
+describe('Settings → Diagnostics (advanced) — the version recorded on the drive (W-16)', () => {
+  const LABEL = 'Version recorded on the drive'
+  const recorded = (driveAppVersion: string | null) =>
+    vi.fn(async () => driveStatus({ isPreparedDrive: true, driveAppVersion }))
+
+  it('shows the recorded version in a row right under the app version', async () => {
+    stubDiagnostics({ getDriveStatus: recorded('1.2.3') })
+    renderDiagnostics()
+    await waitFor(() => expect(valueOn('App & runtime', LABEL)).toBe('1.2.3'))
+    const labels = labelsOn('App & runtime')
+    expect(labels[labels.indexOf('App version') + 1]).toBe(LABEL)
+  })
+
+  it('copies the recorded version on the line right after the app version', async () => {
+    const user = userEvent.setup()
+    stubDiagnostics({ getDriveStatus: recorded('1.2.3') })
+    renderDiagnostics()
+    await screen.findByText('HilbertRaum 0.1.20')
+    await waitFor(() => expect(valueOn('App & runtime', LABEL)).toBe('1.2.3'))
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
+    const lines = (lastCopied ?? '').split('\n')
+    const at = lines.indexOf('App version: HilbertRaum 0.1.20')
+    expect(at).toBeGreaterThan(0)
+    expect(lines[at + 1]).toBe(`${LABEL}: 1.2.3`)
+  })
+
+  it.each([
+    { name: 'a drive without a readable record', read: () => recorded(null), want: 'not recorded' },
+    {
+      name: 'a status without the field (an older object)',
+      read: () =>
+        vi.fn(async () => {
+          const older: Partial<DriveStatus> = { ...driveStatus({ isPreparedDrive: true }) }
+          delete older.driveAppVersion
+          return older
+        }),
+      want: 'not recorded'
+    },
+    {
+      name: 'a drive status read that failed',
+      read: () =>
+        vi.fn(async () => {
+          throw new Error('no drive')
+        }),
+      want: 'unknown'
+    }
+  ])('$name: the card and the report say "$want"', async ({ read, want }) => {
+    const user = userEvent.setup()
+    const getDriveStatus = read()
+    stubDiagnostics({ getDriveStatus })
+    renderDiagnostics()
+    await screen.findByText('HilbertRaum 0.1.20')
+    await waitFor(() => expect(getDriveStatus).toHaveBeenCalled())
+    await waitFor(() => expect(valueOn('App & runtime', LABEL)).toBe(want))
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
+    expect((lastCopied ?? '').split('\n')).toContain(`${LABEL}: ${want}`)
+  })
+})
+
 // #804: on screen the tab's code-built sizes join figure and unit the way the language's catalog does
 // (U+00A0 outside English and German, so a size cannot wrap between "16,0" and "GB"); the copied report
 // keeps a plain space (the #812 rows below). Compared by code point: the default normalizer folds U+00A0
 // into a plain space.
 describe('Settings → Diagnostics (advanced) — the space between a figure and its unit (#804)', () => {
-  /** The `<dd>` text under `label` on the card headed `card` (labels repeat across cards). */
-  function valueOn(card: string, label: string): string | null | undefined {
-    const box = screen.getByRole('heading', { name: card }).closest('.card')
-    const dt = Array.from(box?.querySelectorAll('dt') ?? []).find((el) => el.textContent === label)
-    return dt?.nextElementSibling?.textContent
-  }
-
   it.each([
     ['uk', NBSP],
     ['en', ' ']
@@ -458,6 +528,8 @@ describe('Settings → Diagnostics (advanced) — an English copy for support (#
       title: 'diag.app.title',
       lines: (lang) => [
         `${t(lang, 'diag.app.version')}: HilbertRaum 0.1.20`,
+        // W-16: the stub's drive has no record (`driveStatus()`'s null).
+        `${t(lang, 'diag.app.driveVersion')}: ${t(lang, 'diag.app.driveVersionNone')}`,
         `${t(lang, 'diag.app.runtime')}: ${t(lang, 'diag.app.stopped')}`
       ]
     },

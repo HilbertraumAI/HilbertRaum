@@ -2106,6 +2106,8 @@ export const pl: UiCatalog<'pl'> = {
   'diag.accel.gpuAvailable': '{name} (można użyć GPU)',
   'diag.app.title': 'Aplikacja i silnik',
   'diag.app.version': 'Wersja aplikacji',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'brak danych',
   'diag.app.selectedModel': 'Wybrany model',
   'diag.app.noneSelected': 'nie wybrano',

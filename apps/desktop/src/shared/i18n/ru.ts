@@ -2096,6 +2096,8 @@ export const ru: UiCatalog<'ru'> = {
   'diag.accel.gpuAvailable': 'Доступна видеокарта — {name}',
   'diag.app.title': 'Приложение и движок',
   'diag.app.version': 'Версия приложения',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'неизвестно',
   'diag.app.selectedModel': 'Выбранная модель',
   'diag.app.noneSelected': 'не выбрана',
