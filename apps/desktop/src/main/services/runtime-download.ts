@@ -69,6 +69,7 @@ import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
 import { holdEngineSpawns } from './runtime/spawn-gate'
+import { guardChildStdio } from './runtime/sidecar'
 import type { EngineProblemBuilds } from './runtime/engine-load'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
@@ -2045,6 +2046,12 @@ function listArchiveLinks(
     } catch {
       return resolvePromise(null)
     }
+    // #790: both pipes get an error listener before anything else (a stream error with none crashes the main process).
+    // A failed stdout leaves a listing that cannot be trusted: it is stopped, as on the deadline. A failed stdin is
+    // tar done reading before the end (past the end-of-archive blocks, or a broken archive): its exit code decides.
+    guardChildStdio(child, 'the engine archive listing', (stream) => {
+      if (stream === 'stdout') stop()
+    })
     const source = createReadStream(archivePath)
     const chunks: Buffer[] = []
     let bytes = 0
@@ -2093,8 +2100,6 @@ function listArchiveLinks(
     if (signal?.aborted) stop()
     else signal?.addEventListener('abort', stop, { once: true })
     source.on('error', stop)
-    // tar may stop reading before the end (a broken archive): the pipe then closes under the stream.
-    child.stdin?.on('error', () => undefined)
     if (child.stdin) source.pipe(child.stdin)
     child.stdout?.on('data', (chunk: Buffer) => {
       if (stopping) return
