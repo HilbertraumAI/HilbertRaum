@@ -2019,8 +2019,8 @@ export const nl: UiCatalog<'nl'> = {
   'diag.accel.gpuAvailable': '{name} (GPU beschikbaar)',
   'diag.app.title': 'App en engine',
   'diag.app.version': 'Appversie',
-  'diag.app.driveVersion': 'Version recorded on the drive',
-  'diag.app.driveVersionNone': 'not recorded',
+  'diag.app.driveVersion': 'Op de schijf vastgelegde versie',
+  'diag.app.driveVersionNone': 'niet vastgelegd',
   'diag.app.unknown': 'onbekend',
   'diag.app.selectedModel': 'Geselecteerd model',
   'diag.app.noneSelected': 'geen model geselecteerd',
@@ -2993,8 +2993,8 @@ export const nl: UiCatalog<'nl'> = {
     'Er is geen modellijst op deze schijf gevonden: de map model-manifests ontbreekt.',
   'main.models.unknown': 'Dit model staat niet meer in de modellijst van deze schijf.',
   'main.models.activeUnavailable':
-    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
-    'model on the AI Model screen.',
+    'Het model {model} is niet beschikbaar in deze versie van HilbertRaum en is daarom niet gestart. ' +
+    'Kies een ander model op het scherm AI-model.',
   'main.models.notChat': '“{name}” is geen chatmodel en kan hier dus niet worden gestart.',
   'main.models.startDamaged':
     'Het model “{name}” is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +

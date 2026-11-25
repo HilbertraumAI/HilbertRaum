@@ -1946,8 +1946,8 @@ export const tr: UiCatalog<'tr'> = {
   'diag.accel.gpuAvailable': '{name} (GPU kullanılabilir)',
   'diag.app.title': 'Uygulama ve motor',
   'diag.app.version': 'Uygulama sürümü',
-  'diag.app.driveVersion': 'Version recorded on the drive',
-  'diag.app.driveVersionNone': 'not recorded',
+  'diag.app.driveVersion': 'Sürücüde kayıtlı sürüm',
+  'diag.app.driveVersionNone': 'kayıtlı değil',
   'diag.app.unknown': 'bilinmiyor',
   'diag.app.selectedModel': 'Seçili model',
   'diag.app.noneSelected': 'yok',
@@ -2845,8 +2845,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.models.noManifests': 'Bu sürücüde model listesi bulunamadı: model-manifests klasörü eksik.',
   'main.models.unknown': 'Bu model artık bu sürücünün model listesinde yok.',
   'main.models.activeUnavailable':
-    '{model} is not available in this version of HilbertRaum, so it was not started. Choose another ' +
-    'model on the AI Model screen.',
+    '{model} modeli HilbertRaum’un bu sürümünde kullanılamıyor, bu yüzden başlatılmadı. Yapay zekâ ' +
+    'modeli ekranında başka bir model seçin.',
   'main.models.notChat': '“{name}” bir sohbet modeli değil, bu yüzden burada başlatılamaz.',
   'main.models.startDamaged':
     '“{name}” modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +

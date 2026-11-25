@@ -154,7 +154,13 @@ export const SECURITY_TEXT: readonly string[] = [
   'main.skills.incompatible',
   'skills.tool.note',
   'skills.import.note.allowedToolsIgnored',
-  'chat.packs.outcome.newer-format'
+  'chat.packs.outcome.newer-format',
+  // Copy deck part 1, P3's legal-sensitive texts (T3.9), also exact keys: the notice after unlock when the selected
+  // model is one this version can't list (C09), and the two AI engine "another program is using a file" refusals
+  // (X05, X06). The Diagnostics row's label and value (C10, C11) claim nothing and stay out.
+  'main.models.activeUnavailable',
+  'main.engine.filesUnreadable',
+  'main.engine.filesInUse'
 ]
 
 const isSecurityText = (key: string): boolean =>
