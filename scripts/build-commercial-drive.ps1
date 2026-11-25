@@ -6,7 +6,7 @@
 .DESCRIPTION
   The master pipeline that ties Phase 11 + Phase 12 + signing together. Runs, in order:
 
-    1. prepare-drive  -Force          # commercial policy (encrypted, network denied)
+    1. prepare-drive  -Force -Kit     # commercial policy (encrypted, network denied) + the Kit's updates key
     2. fetch-models   -Bundled        # the bundled set's verified weights (#766)
     3. fetch-runtime  -Os win|mac|linux  # verified llama.cpp sidecar for EVERY shipped OS
     4. package + sign + notarize      # MANUAL (secrets never in the repo) -- see below
@@ -155,7 +155,7 @@ if ($VerifyOnly) { Write-Host '(verify only -- steps 1-6 skipped)' -ForegroundCo
 if (-not $VerifyOnly) {
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
 Step 1 'Lay out the drive (commercial policy: encryption required, no phone-home)'
-$prep = @{ Target = $Target; Force = $true }
+$prep = @{ Target = $Target; Force = $true; Kit = $true }
 if ($DryRun) { $prep.DryRun = $true }
 Run 'prepare-drive.ps1' $prep
 

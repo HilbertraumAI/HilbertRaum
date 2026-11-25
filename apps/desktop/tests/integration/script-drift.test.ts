@@ -369,12 +369,23 @@ function parseShDevBranch(src: string, dev: boolean): Record<string, string> {
   return out
 }
 
+/** The policy's `updates` piece (F-8, U1 (b)): its default and its `--kit` value, read from the script's own two
+ *  assignments. The piece is spliced at the models block's close, so without `--kit` the output is byte for byte what it
+ *  was before the key existed. The `$KIT` block sits after the `$DEV` branch: `parseShDevBranch` reads that branch up to
+ *  its first `fi`. */
+function parseShKitPiece(src: string, kit: boolean): string {
+  const m = src.match(/\nPOLICY_UPDATES='([^']*)'\nif \[\[ \$KIT -eq 1 \]\]; then\n {2}POLICY_UPDATES='([^']*)'\nfi\n/)
+  expect(m, 'prepare-drive.sh POLICY_UPDATES default + $KIT branch not found').not.toBeNull()
+  return kit ? m![2] : m![1]
+}
+
 /** Parse a bash here-doc JSON body (DRIVE_JSON/POLICY_JSON), substituting the dev-mode
  *  shell vars from the script's ACTUAL branch assignments, then JSON.parse it. */
-function parseShJson(src: string, varName: string, dev: boolean): Record<string, unknown> {
+function parseShJson(src: string, varName: string, dev: boolean, kit = false): Record<string, unknown> {
   const m = src.match(new RegExp(`${varName}=\\$\\(cat <<EOF\\n([\\s\\S]*?)\\nEOF`))
   expect(m, `${varName} here-doc not found`).not.toBeNull()
   const subs: Record<string, string> = { CREATED_AT: 'x', ...parseShDevBranch(src, dev) }
+  if (kit || m![1].includes('$POLICY_UPDATES')) subs.POLICY_UPDATES = parseShKitPiece(src, kit)
   let body = m![1]
   // Longest names first so e.g. $ALLOW_LOCAL_API is never half-replaced by a prefix var.
   for (const k of Object.keys(subs).sort((a, b) => b.length - a.length)) {
@@ -478,6 +489,58 @@ describe('TS ↔ shell-script drift (config payloads)', () => {
       expect(parsed).toEqual(buildPolicyJson({ dev }))
     })
   }
+
+  // F-8, U1 (b): the Kit switch adds the Kit's updates block, in both editions of each twin. The .ps1 keeps the block in
+  // a literal of its own and adds it on one line, so its $PolicyJson literal (above) is the DIY posture unchanged.
+  for (const dev of [false, true]) {
+    it(`prepare-drive.sh --kit policy.json matches buildPolicyJson({dev:${dev},kit:true})`, () => {
+      const parsed = parseShJson(repoText('scripts/prepare-drive.sh'), 'POLICY_JSON', dev, true)
+      expect(parsed).toEqual(buildPolicyJson({ dev, kit: true }))
+    })
+
+    it(`prepare-drive.ps1 -Kit $PolicyJson + $KitPolicyUpdates matches buildPolicyJson({dev:${dev},kit:true})`, () => {
+      const src = repoText('scripts/prepare-drive.ps1')
+      const assembly = "if ($Kit) { $PolicyJson['updates'] = $KitPolicyUpdates }"
+      const code = codeLines('scripts/prepare-drive.ps1').map((l) => l.text.trim())
+      expect(code, 'the one line that adds the Kit block').toContain(assembly)
+      expect(code.indexOf(assembly), 'after both literals').toBeGreaterThan(code.findIndex((l) => l.startsWith('$KitPolicyUpdates = ')))
+      const parsed = { ...parsePsOrdered(src, '$PolicyJson', dev), updates: parsePsOrdered(src, '$KitPolicyUpdates', dev) }
+      expect(parsed).toEqual(buildPolicyJson({ dev, kit: true }))
+    })
+  }
+})
+
+// U1 (b), F-8: a DIY drive never gets the Kit block, so only the Kit builders may pass the switch. A script that runs
+// prepare-drive is a code line naming it (a help or echo line that prints the command runs nothing).
+describe('only the Kit builders give a drive the Kit policy', () => {
+  /** Code lines of `scripts/<name>` that run prepare-drive; a comment, a .ps1's `<# … #>` help block and a printed line are not. */
+  function prepareDriveRuns(name: string): string[] {
+    let inHelp = false
+    return repoText(`scripts/${name}`)
+      .split('\n')
+      .flatMap((line) => {
+        const t = line.trim()
+        if (name.endsWith('.ps1') && t.startsWith('<#')) inHelp = true
+        const notCode = inHelp || t.startsWith('#') || /^(echo|Write-Host)\b/.test(t)
+        if (inHelp && t.endsWith('#>')) inHelp = false
+        return !notCode && /prepare-drive\.(ps1|sh)\b/.test(t) ? [`${name}: ${t}`] : []
+      })
+  }
+
+  it('the two builders are the only scripts that run prepare-drive, and each passes the Kit switch on that call', () => {
+    const runs = readdirSync(join(REPO_ROOT, 'scripts'))
+      .filter((f) => /\.(ps1|sh)$/.test(f))
+      .sort()
+      .flatMap(prepareDriveRuns)
+    expect(runs).toEqual([
+      "build-commercial-drive.ps1: Run 'prepare-drive.ps1' $prep",
+      'build-commercial-drive.sh: bash "$SCRIPT_DIR/prepare-drive.sh" "${PREP[@]}"'
+    ])
+    const ps1 = codeLines('scripts/build-commercial-drive.ps1').map((l) => l.text.trim())
+    expect(ps1.filter((l) => l.startsWith('$prep = @{'))).toEqual([expect.stringMatching(/;\s*Kit = \$true\b/)])
+    const sh = codeLines('scripts/build-commercial-drive.sh').map((l) => l.text.trim())
+    expect(sh.filter((l) => l.startsWith('PREP=('))).toEqual([expect.stringMatching(/\s--kit\b/)])
+  })
 })
 
 // --- verify-models.{ps1,sh} sha256 + supported-runtime/format gates (audit M-A1) ----

@@ -1,7 +1,8 @@
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from './db'
 import { getSettings } from './settings'
+import { compareSemver, parseSemver, type Semver } from './updates/version'
 import type {
   NetworkPolicy,
   ModelsPolicy,
@@ -328,6 +329,119 @@ export function loadPolicy(
   policyCache.set(configDir, entry)
   tellUnheard(entry, onWarn)
   return loaded
+}
+
+// ---- The update policy keys (F-8: frozen in release 1; docs/app-updates.md §8.1) ------------------------------------
+//
+// `updates.allow_user_install` and `updates.max_version` decide whether a signed update may be installed. Release 1 is
+// the oldest version ever sold on a Kit and reads them for ever, so what an absent key, `true`, `false`, junk, a missing
+// file and a damaged file mean can never change after it ships (the golden: tests/fixtures/readers/f8-policy/). They have
+// their own reader, not a `PrivacyPolicy` field (P3 entry decision 6): their missing-file case is the opposite of
+// loadPolicy's. A missing or damaged policy.json keeps the signed import ALLOWED (G-14: a blocked import is a management
+// control, not a security boundary, and a damaged policy must not block the signed repair) and is shown as unreadable, so
+// an admin's typo that lifted a block is visible; a junk VALUE, by contrast, blocks (an admin's edit, shown as invalid).
+// `updates.allow_online_check` is a reserved name the Kit builders write `true`; release 1 reads no value of it, and
+// nothing here or in loadPolicy, resolveNetwork or the status line ever ORs it into the network ceiling.
+
+/** Whether the policy lets an update be installed: `managed` is `false` (UPD-POLICY-MANAGED), `invalid` junk (UPD-POLICY-INVALID). */
+export type UpdateInstallPolicy = 'allowed' | 'managed' | 'invalid'
+
+/** What became of policy.json: `none` on a root that never had one, `unreadable` when missing on a prepared drive or damaged (UPD-POLICY-UNREADABLE). */
+export type UpdatePolicyFile = 'read' | 'none' | 'unreadable'
+
+/** The update policy, as tokens only: no message, so nothing of the file can reach a log line (F-11). */
+export interface UpdatePolicy {
+  install: UpdateInstallPolicy
+  /** The `updates.max_version` cap; `null` when there is none, and whenever `install` is not `allowed`. */
+  maxVersion: Semver | null
+  file: UpdatePolicyFile
+}
+
+/** The verdict for one update: `above-max` is a version above `updates.max_version` (UPD-ABOVE-MAX-VERSION). */
+export type UpdateInstallVerdict = UpdateInstallPolicy | 'above-max'
+
+/** A policy.json larger than this is never read whole, and reads as unreadable (O-4: the drive-release record's cap). */
+const UPDATE_POLICY_MAX_BYTES = 1_048_576
+
+/** The bytes of policy.json, `'missing'`, or `'damaged'` (a folder, a read error, over the cap). Follows a link, as loadPolicy does. */
+function readUpdatePolicyBytes(policyPath: string): Buffer | 'missing' | 'damaged' {
+  let fd: number
+  try {
+    // A stat before the open: opening a FIFO planted at the name would wait for a writer, and the main process with it.
+    if (!statSync(policyPath).isFile()) return 'damaged'
+    fd = openSync(policyPath, 'r')
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'damaged'
+  }
+  try {
+    const st = fstatSync(fd)
+    if (!st.isFile() || st.size > UPDATE_POLICY_MAX_BYTES) return 'damaged'
+    // One byte past the size the stat gave: a file that grew while it was read reads as damaged, and is never read whole.
+    const buf = Buffer.alloc(st.size + 1)
+    let length = 0
+    for (let n = 1; n > 0 && length < buf.length; length += n) n = readSync(fd, buf, length, buf.length - length, null)
+    return length === buf.length ? 'damaged' : buf.subarray(0, length)
+  } catch {
+    return 'damaged'
+  } finally {
+    try {
+      closeSync(fd)
+    } catch {
+      // nothing to do: the verdict is already known
+    }
+  }
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/**
+ * Read the update policy from `<configDir>/policy.json`, from the disk at every call (never through loadPolicy's F-30
+ * cache: an admin's edit must count at the import, the hand-off and "Finish update" without a restart, even one that
+ * keeps the file's size and mtime). Never throws, never logs, and returns tokens only.
+ */
+export function readUpdatePolicy(configDir: string): UpdatePolicy {
+  const unreadable: UpdatePolicy = { install: 'allowed', maxVersion: null, file: 'unreadable' }
+  const bytes = readUpdatePolicyBytes(join(configDir, 'policy.json'))
+  if (bytes === 'missing') {
+    // O-1: a prepared drive (drive.json there) lost its policy; a root with neither file never had one.
+    return existsSync(join(configDir, 'drive.json')) ? unreadable : { install: 'allowed', maxVersion: null, file: 'none' }
+  }
+  if (bytes === 'damaged') return unreadable
+  let doc: unknown
+  try {
+    // O-2: exactly one leading byte-order mark is skipped (Windows PowerShell 5.1 writes one); a second is not JSON.
+    const text = bytes.toString('utf8')
+    doc = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+  } catch {
+    return unreadable
+  }
+  if (!isPlainObject(doc)) return unreadable // O-3: not a policy file
+  const read = (install: UpdateInstallPolicy, maxVersion: Semver | null = null): UpdatePolicy => ({ install, maxVersion, file: 'read' })
+  // Own keys only: JSON.parse keeps `__proto__` as an ordinary key, and no prototype may answer for a missing one.
+  if (!Object.hasOwn(doc, 'updates')) return read('allowed')
+  const updates = doc.updates
+  if (!isPlainObject(updates)) return read('invalid') // a present `updates` that is not an object is junk
+  // `false` blocks whatever else the block says (managed before invalid); any other non-boolean is junk and blocks too.
+  // Never `bool(value, base)`: every base this key could have is "allowed", so junk would fail open.
+  const allow = Object.hasOwn(updates, 'allow_user_install') ? updates.allow_user_install : true
+  if (allow === false) return read('managed')
+  if (allow !== true) return read('invalid')
+  if (!Object.hasOwn(updates, 'max_version')) return read('allowed')
+  const cap = parseSemver(updates.max_version)
+  return cap === null ? read('invalid') : read('allowed', cap)
+}
+
+/**
+ * The policy's verdict on an update of `version` (record §3.6 item 2): `managed` and `invalid` come before the version is
+ * known; a cap allows versions up to it in SemVer 2.0.0 order, and a version that does not parse is above any cap (O-12).
+ */
+export function updateInstallVerdict(policy: UpdatePolicy, version: string): UpdateInstallVerdict {
+  if (policy.install !== 'allowed') return policy.install
+  if (policy.maxVersion === null) return 'allowed'
+  const v = parseSemver(version)
+  return v !== null && compareSemver(v, policy.maxVersion) <= 0 ? 'allowed' : 'above-max'
 }
 
 /**

@@ -2,7 +2,7 @@
 # Build a finished, verified, sellable commercial drive (Phase 13, spec section 12.2).
 #
 # The master pipeline that ties Phase 11 + Phase 12 + signing together. Runs, in order:
-#   1. prepare-drive  --force            # commercial policy (encrypted, network denied)
+#   1. prepare-drive  --force --kit      # commercial policy (encrypted, network denied) + the Kit's updates key
 #   2. fetch-models   --bundled          # the bundled set's verified weights (#766)
 #   3. fetch-runtime  --os win|mac|linux # verified llama.cpp sidecar for EVERY shipped OS
 #   4. package + sign + notarize         # MANUAL (secrets never in the repo)
@@ -131,7 +131,7 @@ echo "  platforms: $PLATFORMS | app version: $APP_VERSION"
 if [[ $VERIFY_ONLY -eq 0 ]]; then
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
 step 1 "Lay out the drive (commercial policy: encryption required, no phone-home)"
-PREP=(--target "$TARGET" --force)
+PREP=(--target "$TARGET" --force --kit)
 [[ $DRY_RUN -eq 1 ]] && PREP+=(--dry-run)
 bash "$SCRIPT_DIR/prepare-drive.sh" "${PREP[@]}"
 

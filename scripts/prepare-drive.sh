@@ -20,9 +20,15 @@
 # knowledge-pack tools (kiwix-tools, #339 P8-3) are never fetched here — run
 # `fetch-runtime.sh --family kiwix_tools` separately once you want ZIM knowledge packs.
 #
+# --kit writes a Kit's policy.json: the posture plus an "updates" block holding
+# "allow_online_check": true, the reserved key every HilbertRaum AI Kit carries
+# (docs/app-updates.md §8.1; this version does not act on it). Only build-commercial-drive
+# passes it, at its step 1. Without it no "updates" key is written, so a DIY drive's
+# policy.json is the same as before the key existed.
+#
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
-#       [--dev] [--with-assets] [--all-models] [--accept-license]
+#       [--dev] [--kit] [--with-assets] [--all-models] [--accept-license]
 set -euo pipefail
 
 # The models --with-assets provisions by default (fast setup): the default chat model plus
@@ -44,6 +50,7 @@ TARGET=""
 DRY_RUN=0
 FORCE=0
 DEV=0
+KIT=0
 WITH_ASSETS=0
 ALL_MODELS=0
 ACCEPT_LICENSE=0
@@ -55,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
     --dev) DEV=1; shift ;;
+    --kit) KIT=1; shift ;;
     --with-assets) WITH_ASSETS=1; shift ;;
     --all-models) ALL_MODELS=1; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
@@ -109,6 +117,18 @@ else
   # Local API ships policy-DISABLED explicitly on commercial drives (owner decision O4,
   # 2026-08-18) — the drive's policy author flips it on deliberately.
   ENC_REQUIRED=true; PLAINTEXT=false; ALLOW_UNVERIFIED=false; REQUIRE_SHA=true; ALLOW_LOCAL_API=false
+fi
+
+# A Kit's policy only (--kit, passed by build-commercial-drive): the reserved update key, written
+# true (docs/app-updates.md §8.1), spliced in at the models block's close. Empty by default, so
+# without --kit POLICY_JSON is byte for byte the DIY posture; network.allow_update_checks stays
+# false either way. Kept outside the $DEV branch above.
+POLICY_UPDATES=''
+if [[ $KIT -eq 1 ]]; then
+  POLICY_UPDATES=',
+  "updates": {
+    "allow_online_check": true
+  }'
 fi
 
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -232,7 +252,7 @@ POLICY_JSON=$(cat <<EOF
     "allow_unverified_models": $ALLOW_UNVERIFIED,
     "require_manifest": true,
     "require_sha256_match": $REQUIRE_SHA
-  }
+  }$POLICY_UPDATES
 }
 EOF
 )

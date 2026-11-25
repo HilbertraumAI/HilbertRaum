@@ -30,6 +30,13 @@
   Model downloads are PERMITTED either way (still gated by the in-app allowNetwork setting +
   a per-download confirmation); update-checks + telemetry stay off (the app never phones home).
 
+.PARAMETER Kit
+  Write a Kit's policy.json: the posture above plus an "updates" block holding
+  "allow_online_check": true, the reserved key every HilbertRaum AI Kit carries
+  (docs/app-updates.md section 8.1; this version does not act on it). Only
+  build-commercial-drive passes it, at its step 1. Without it no "updates" key is written,
+  so a DIY drive's policy.json is the same as before the key existed.
+
 .PARAMETER WithAssets
   After laying out the tree, download + verify a launch-ready default asset set (invokes
   fetch-models.ps1 + fetch-runtime.ps1) so one command yields a usable drive. Build-time
@@ -63,6 +70,7 @@ param(
   [switch] $DryRun,
   [switch] $Force,
   [switch] $Dev,
+  [switch] $Kit,
   [switch] $WithAssets,
   [switch] $AllModels,
   [switch] $AcceptLicense
@@ -166,6 +174,14 @@ $PolicyJson = [ordered]@{
     require_sha256_match    = (-not $Dev)
   }
 }
+
+# A Kit's policy only (-Kit, passed by build-commercial-drive): the reserved update key, written true
+# (docs/app-updates.md section 8.1). It is added on one line below, so the literal above stays the
+# DIY posture byte for byte; network.allow_update_checks stays false either way.
+$KitPolicyUpdates = [ordered]@{
+  allow_online_check = $true
+}
+if ($Kit) { $PolicyJson['updates'] = $KitPolicyUpdates }
 
 Write-Host "Prepare drive at: $Target" -ForegroundColor Cyan
 if ($DryRun) { Write-Host '(dry run -- nothing will be created)' -ForegroundColor Yellow }

@@ -26,6 +26,12 @@ const MANIFEST_DOCS = modelManifestDocs()
 const DEFAULT_IDS = extractScriptArray(repoText('scripts', 'prepare-drive.ps1'), '$DefaultModelIds = @(')
 const approved = (doc: Record<string, unknown>): boolean =>
   (doc.license_review as { status?: string } | undefined)?.status === 'approved'
+/** What every Kit's policy adds to the DIY posture (the F-8 golden's `writers.kit`, U1 (b)). */
+const F8_KIT = (
+  JSON.parse(repoText('apps', 'desktop', 'tests', 'fixtures', 'readers', 'f8-policy', 'vectors.json')) as {
+    writers: { kit: { updates: Record<string, unknown> } }
+  }
+).writers.kit
 /** A committed model outside the default set: --with-assets must leave it alone. */
 const OTHER_ID = String(MANIFEST_DOCS.find((d) => !DEFAULT_IDS.includes(String(d.doc.id)) && d.doc.download)!.doc.id)
 /** One model of the Kit's bundled set (#766), so the builder's step 2 plans a fetch and passes. */
@@ -68,6 +74,23 @@ for (const leg of SCRIPT_LEGS) {
       const r = leg.run(preparer, [f('Target'), root, f('Dev')])
       expect(r.status, outputOf(r)).toBe(0)
       expect(JSON.parse(readFileSync(join(root, 'config', 'policy.json'), 'utf8'))).toEqual(buildPolicyJson({ dev: true }))
+    })
+
+    // F-8, U1 (b): the Kit switch adds exactly the Kit's updates block, whatever the posture (O-15); without it no posture
+    // writes one, so a DIY drive's policy.json is the one it was before the key existed. Only the Kit builders pass the
+    // switch (script-drift.test.ts).
+    it.each<[string, string[], { dev?: boolean; kit?: boolean }]>([
+      ['no posture flag writes the DIY policy, buildPolicyJson(), with no updates block', [], {}],
+      ['the Kit flag writes buildPolicyJson({ kit: true }): the DIY policy plus the Kit block', ['Kit'], { kit: true }],
+      ['the dev and Kit flags together write buildPolicyJson({ dev: true, kit: true })', ['Dev', 'Kit'], { dev: true, kit: true }]
+    ])('%s', (_title, flags, posture) => {
+      const root = scriptRoot('orch-kit-')
+      const r = leg.run(preparer, [f('Target'), root, ...flags.map(f)])
+      expect(r.status, outputOf(r)).toBe(0)
+      const written = JSON.parse(readFileSync(join(root, 'config', 'policy.json'), 'utf8')) as Record<string, unknown>
+      expect(written).toStrictEqual(buildPolicyJson(posture))
+      expect('updates' in written).toBe(posture.kit === true)
+      if (posture.kit) expect(written.updates).toStrictEqual(F8_KIT.updates)
     })
 
     // M22: the .ps1 writes its config through .NET, which resolves a relative path against the PROCESS directory, and that

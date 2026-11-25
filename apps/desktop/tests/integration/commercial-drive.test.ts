@@ -567,6 +567,32 @@ describe('assertCommercialDrive', () => {
     expect(res.problems.some((p) => /update checks/i.test(p))).toBe(true)
   })
 
+  // F-8, G-14 built the simpler way (owner 2026-11-23): every Kit carries `updates.allow_online_check: true` and keeps
+  // `network.allow_update_checks: false`, so the gate refuses nothing new, for the Kit's own literal or for any shape an
+  // administrator gives the install keys (each junk value below is one the F-8 golden blocks the import for).
+  it.each<[string, (kitBlock: Record<string, unknown>) => unknown]>([
+    ["the Kit's literal", (block) => block],
+    ["an admin's allow_user_install false", (block) => ({ ...block, allow_user_install: false })],
+    ['a junk allow_user_install', (block) => ({ ...block, allow_user_install: 'no' })],
+    ['a junk max_version', (block) => ({ ...block, max_version: 'latest' })],
+    ['a junk allow_online_check', (block) => ({ ...block, allow_online_check: 'ask' })],
+    ['an updates block that is not an object', () => 'x']
+  ])('passes a Kit whose policy carries an updates block: %s', async (_label, updates) => {
+    const root = tempDir('hilbertraum-commercial-kit-')
+    const policy = buildPolicyJson({ kit: true })
+    expect(policy.updates, 'the Kit literal carries the block').toStrictEqual({ allow_online_check: true })
+    writePolicy(root, { ...policy, updates: updates(policy.updates!) })
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+    expect(res.problems).toEqual([])
+    expect(res.checks.policyCommercial).toBe(true)
+    expect(res.checks.networkDenied).toBe(true)
+    expect(res.ok).toBe(true)
+  })
+
   it('fails when the policy allows a plaintext workspace', async () => {
     const root = tempDir('hilbertraum-commercial-plain-')
     writePolicy(root, buildPolicyJson({ dev: true })) // plaintext + unverified allowed

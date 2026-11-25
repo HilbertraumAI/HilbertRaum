@@ -1620,6 +1620,23 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('NOT SELLABLE')
       })
 
+      // F-8, G-14 built the simpler way: the native pre-flight reads `network.allow_update_checks` only, so neither the
+      // Kit's `updates.allow_online_check: true` nor an administrator's install keys trip it, and the canonical gate agrees.
+      it.skipIf(!toolBuilt).each<[string, Record<string, unknown>]>([
+        ["the Kit's policy", {}],
+        ["the Kit's policy with an admin's allow_user_install false", { allow_user_install: false }]
+      ])('%s reaches SELLABLE (exit 0)', (_title, extra) => {
+        const root = sellableDrive()
+        const policy = buildPolicyJson({ kit: true })
+        expect(policy.updates, 'the Kit literal carries the block').toStrictEqual({ allow_online_check: true })
+        writeDriveFile(root, 'config/policy.json', JSON.stringify({ ...policy, updates: { ...policy.updates, ...extra } }, null, 2))
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+        expect(out).not.toContain('NOT SELLABLE')
+      })
+
       // The positive behind the two ocr flips below: a pre-flight that called every OCR file a mismatch would pass both.
       // The sh pre-flight also died with no verdict on the second file, or on a key after the block (#765); and on Git
       // Bash it hashed by filename, so a backslash target read every file as a mismatch.
