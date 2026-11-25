@@ -14,6 +14,7 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 import { makeAnalysisCtx } from '../helpers/skill-contexts'
 import { countPrepares } from '../helpers/db-spy'
+import { runInvoiceExtraction } from '../../src/main/services/skills/invoice-run'
 
 // full-doc-skills plan §3.1, Phase 4 / D49 — the invoice analysis handler, driven DIRECTLY (no IPC,
 // no chat wiring). Mirrors skills-analysis-bank.test.ts: seeds the `chunks` table (the legacy reader
@@ -985,5 +986,33 @@ describe('invoice analysis — a newer version’s invoice is served as stored, 
     const { id } = await seedInvoice(db, SOUP, true)
     const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
     expect(res.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
+  })
+
+  // C08 follows the row whose figures are SHOWN (the latest), not the document (T2.13 review R1/R2 M-1); the
+  // guard still protects every newer row of the document, so nothing is re-extracted in any of these.
+  it.each([
+    { name: 'an older row is newer, the latest is this build’s own', older: 1, latest: 0, note: false },
+    { name: 'an older row is newer, the latest is NULL-stamped', older: 1, latest: null, note: false },
+    { name: 'the latest row is newer, an older one is this build’s own', older: 0, latest: 1, note: true }
+  ])('two invoices, $name: C08 only when the shown row is newer, nothing re-extracted', async ({ older, latest, note }) => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const at = (iso: string) => ({ audit: () => {}, now: () => iso })
+    const a = (await runInvoiceExtraction(db, { skillInstallId: INVOICE_INSTALL_ID, documentId: id }, at('2026-01-01T00:00:00.000Z'))).invoiceId!
+    const b = (await runInvoiceExtraction(db, { skillInstallId: INVOICE_INSTALL_ID, documentId: id }, at('2026-01-02T00:00:00.000Z'))).invoiceId!
+    const stamp = db.prepare('UPDATE invoices SET extractor_version = ? WHERE id = ?')
+    stamp.run(INVOICE_EXTRACTOR_VERSION + older, a)
+    stamp.run(latest === null ? null : INVOICE_EXTRACTOR_VERSION + latest, b)
+    const rows = (): unknown[] => [
+      ...db.prepare('SELECT id, extractor_version, gross_total FROM invoices WHERE document_id = ? ORDER BY created_at').all(id),
+      ...db.prepare('SELECT id, invoice_id, line_total FROM invoice_line_items ORDER BY id').all()
+    ]
+    const before = rows()
+
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
+
+    expect(res.answer.endsWith(`\n\n${NOTE}`)).toBe(note)
+    if (!note) expect(res.answer).not.toContain(NOTE)
+    expect(rows()).toEqual(before) // both invoices, their stamps and line items as stored
   })
 })

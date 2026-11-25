@@ -20,6 +20,7 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 import { makeAnalysisCtx } from '../helpers/skill-contexts'
 import { countPrepares } from '../helpers/db-spy'
+import { runBankExtraction } from '../../src/main/services/skills/run'
 
 // full-doc-skills plan §3.1, Phase 2 — the analysis-handler seam + bank handler, driven DIRECTLY (no
 // IPC, no chat wiring). Seeds the `chunks` table (the legacy reader path — no segment reader injected),
@@ -1217,5 +1218,63 @@ describe('bank analysis — a newer version’s statement is served as stored, C
       makeAnalysisCtx(db, { documentIds: [id] }, 'total?', { skillInstallId: BANK_STATEMENT_INSTALL_ID, locale: 'de' })
     )
     expect(res.answer.endsWith(`\n\n${t('de', 'analysis.newerExtractorNote')}`)).toBe(true)
+  })
+
+  // C08 follows the row whose figures are SHOWN (the latest), not the document (T2.13 review R1/R2 M-1); the
+  // guard still protects every newer row of the document, so nothing is re-extracted in any of these.
+  it.each([
+    { name: 'an older row is newer, the latest is this build’s own', older: 1, latest: 0, note: false },
+    { name: 'an older row is newer, the latest is NULL-stamped', older: 1, latest: null, note: false },
+    { name: 'the latest row is newer, an older one is this build’s own', older: 0, latest: 1, note: true }
+  ])('two statements, $name: C08 only when the shown row is newer, nothing re-extracted', async ({ older, latest, note }) => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const at = (iso: string) => ({ audit: () => {}, now: () => iso })
+    const a = (await runBankExtraction(db, { skillInstallId: BANK_STATEMENT_INSTALL_ID, documentId: id }, at('2026-01-01T00:00:00.000Z'))).statementId!
+    const b = (await runBankExtraction(db, { skillInstallId: BANK_STATEMENT_INSTALL_ID, documentId: id }, at('2026-01-02T00:00:00.000Z'))).statementId!
+    const stamp = db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?')
+    stamp.run(BANK_EXTRACTOR_VERSION + older, a)
+    stamp.run(latest === null ? null : BANK_EXTRACTOR_VERSION + latest, b)
+    const rows = (): unknown[] => [
+      ...db.prepare('SELECT id, extractor_version FROM bank_statements WHERE document_id = ? ORDER BY created_at').all(id),
+      ...db.prepare('SELECT id, statement_id, amount FROM bank_transactions ORDER BY id').all()
+    ]
+    const before = rows()
+
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+
+    expect(res.answer.endsWith(`\n\n${NOTE}`)).toBe(note)
+    if (!note) expect(res.answer).not.toContain(NOTE)
+    expect(rows()).toEqual(before) // both statements, their stamps and rows as stored
+  })
+
+  // The chat lane's label writes on a newer reading (T2.13 review R1 M-2; owner D-4: labels as today): a
+  // category question seeds rule labels on the stored rows and moves no figure, row or correction.
+  it('a category question on a newer reading writes labels and changes no amount, row or correction', async () => {
+    const db = freshDb()
+    const { id, statementId } = await seedStatement(db, true)
+    const firstTx = (db.prepare('SELECT id FROM bank_transactions WHERE statement_id = ? ORDER BY row_index').get(statementId) as { id: string }).id
+    db.prepare(
+      `INSERT INTO bank_corrections (id, transaction_id, field, old_value, new_value, created_at)
+       VALUES ('corr-1', ?, 'description', 'Grocery', ?, '2026-02-01T00:00:00.000Z')`
+    ).run(firstTx, NEWER_PAYEE)
+    const stored = (): unknown[] => [
+      ...db.prepare('SELECT * FROM bank_statements WHERE document_id = ?').all(id),
+      ...db
+        .prepare(
+          `SELECT id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after,
+                  source_page, created_at FROM bank_transactions ORDER BY id`
+        )
+        .all(),
+      ...db.prepare('SELECT * FROM bank_corrections').all()
+    ]
+    const before = stored()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE category_id IS NOT NULL').get()).toEqual({ n: 0 })
+
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'break down spending by category'))
+
+    expect(res.answer.endsWith(`\n\n${NOTE}`)).toBe(true)
+    expect(stored()).toEqual(before) // every column but the labels and the balance flags, as stored
+    expect(db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE category_id IS NULL').get()).toEqual({ n: 0 })
   })
 })

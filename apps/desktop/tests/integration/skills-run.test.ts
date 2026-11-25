@@ -967,6 +967,45 @@ describe('G-34 (a) — no bank extraction ever runs over a newer version’s sta
     expect(run).toEqual({ status: 'done', ref: latest, error: null })
   })
 
+  // The guard needs no usable latest id (T2.13 review R2 m-1): a newer statement whose id is '' or NULL (an
+  // `id TEXT PRIMARY KEY` takes both; damage only) still stops the run, which ends done with no result ref
+  // and a count of 0, and deletes nothing.
+  it.each([
+    { name: "''", id: '' },
+    { name: 'NULL', id: null }
+  ])('a newer statement whose id is $name: nothing is read, deleted or inserted; done, no ref, count 0', async ({ id }) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: TEXT, page: 1 }])
+    db.prepare(
+      `INSERT INTO bank_statements (id, document_id, run_id, currency, extractor_version, created_at)
+       VALUES (?, ?, NULL, 'EUR', ?, '2026-01-01T00:00:00.000Z')`
+    ).run(id, docId, BANK_EXTRACTOR_VERSION + 1)
+    if (id === '') {
+      db.prepare(
+        `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, description, amount, currency, created_at)
+         VALUES ('tx-1', '', NULL, 0, '2026-01-02', 'Grocery', -49.9, 'EUR', '2026-01-01T00:00:00.000Z')`
+      ).run()
+    }
+    const before = bankRowsOf(db, docId)
+
+    let reads = 0
+    const res = await runBankExtraction(db, ARGS(docId), {
+      audit: () => {},
+      readDocumentSegments: async () => {
+        reads++
+        return SEGMENTS
+      },
+      replaceExisting: true
+    })
+
+    expect(res).toMatchObject({ ok: true, transactionCount: 0 })
+    expect(res.statementId).toBeUndefined()
+    expect(reads).toBe(0)
+    expect(bankRowsOf(db, docId)).toEqual(before)
+    const run = db.prepare('SELECT status, result_ref AS ref, error FROM skill_runs WHERE id = ?').get(res.runId)
+    expect(run).toEqual({ status: 'done', ref: null, error: null })
+  })
+
   // The run-bar tools go through `prepareDomainRun`: a newer statement is not stale, so they run on the
   // stored rows (the balance check may write its flags on them: D-4).
   const DOWNSTREAM: Array<{ name: string; run: (db: Db, docId: string, sink: { written: string }) => Promise<{ ok: boolean }> }> = [

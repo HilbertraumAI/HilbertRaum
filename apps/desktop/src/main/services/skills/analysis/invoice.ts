@@ -5,6 +5,7 @@ import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
   isInvoiceExtractionNewer,
+  isInvoiceNewer,
   isInvoiceStale,
   latestInvoiceId,
   loadInvoice,
@@ -669,14 +670,9 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         invoiceId = extraction.invoiceId
       }
 
-      // G-34 (a) (frozen): when the stored figures are a newer version's reading, this build never reads the
-      // document again (the glyph-soup retry below included), and every answer that shows those figures ends
-      // with C08 as its LAST line, after a blank line and after the text-quality caveat, built with `ctx.tr`
-      // like the answer's other lines (T2.13 D-3): the format answer, the template (the empty one included)
-      // and the grounded-data postscript. The unreadable-layout refusal and the fall-throughs never carry it.
+      // G-34 (a) (frozen): a document holding ANY newer version's invoice is never read again by this build,
+      // the glyph-soup retry below included (asked per document, like the engine's guard).
       const newerExtraction = isInvoiceExtractionNewer(db, target.id)
-      const newerNote = newerExtraction ? ctx.tr('analysis.newerExtractorNote') : null
-      const withNewerNote = (answer: string): string => (newerNote ? `${answer}\n\n${newerNote}` : answer)
 
       // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
       // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
@@ -691,8 +687,10 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // promoted to 'suspect-confirmed' so no later turn retries again (one geometry pass is final).
       // ONE projection for the three provenance columns (P-5); re-read only when the geometry retry
       // REPLACES the row below. `dateOrderInferred`/`droppedRowCount` are consumed after the retry settles.
-      // Never on a newer version's reading (G-34 (a)): the retry would replace its rows, and could write
-      // 'suspect-confirmed' over its stored verdict, which is served as it is (any non-NULL value hedges).
+      // Never on a document holding a newer version's reading (G-34 (a)): the retry would replace its rows,
+      // and could write 'suspect-confirmed' over its stored verdict, which is served as it is. This build
+      // hedges only on exactly 'suspect' and 'suspect-confirmed' (`loadInvoiceMeta`); any other stored value
+      // reads as normal text (T2.13 review M-3).
       let meta = loadInvoiceMeta(db, invoiceId)
       let textQuality = meta.textQuality
       if (textQuality === 'suspect' && ctx.readDocumentSegments && !newerExtraction) {
@@ -725,6 +723,15 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         }
       }
       const lowTextQuality = textQuality !== null
+
+      // G-34 (a) (frozen): when the invoice whose figures are shown (`invoiceId`, after any retry) is a newer
+      // version's reading, every answer below that shows them ends with C08 as its LAST line, after a blank
+      // line and after the text-quality caveat, built with `ctx.tr` like the answer's other lines (T2.13
+      // D-3): the format answer, the template (the empty one included) and the grounded-data postscript. The
+      // note follows the row shown, not the document (T2.13 review M-1). The unreadable-layout refusal and
+      // the fall-throughs never carry it.
+      const newerNote = isInvoiceNewer(db, invoiceId) ? ctx.tr('analysis.newerExtractorNote') : null
+      const withNewerNote = (answer: string): string => (newerNote ? `${answer}\n\n${newerNote}` : answer)
 
       // A machine-FORMAT request ("als JSON"/"as CSV"/"xml") is answered by SERIALIZING the already-
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a

@@ -4,7 +4,7 @@ import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../..
 import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
-  isBankExtractionNewer,
+  isBankStatementNewer,
   isBankStatementStale,
   latestBankStatementId,
   persistCategorization,
@@ -889,12 +889,14 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         statementId = extraction.statementId
       }
 
-      // G-34 (a) (frozen): when the stored figures are a newer version's reading, every answer below that
-      // shows them ends with C08 as its LAST line, after a blank line, built with `ctx.tr` like the answer's
-      // other lines (T2.13 D-3): the derived-column CSV, the format answer, the template (the empty one
-      // included: its "I read" is about the newer version's reading) and the grounded-data postscript. The
+      // G-34 (a) (frozen): when the statement whose figures are shown (`statementId`, the latest) is a newer
+      // version's reading, every answer below that shows them ends with C08 as its LAST line, after a blank
+      // line, built with `ctx.tr` like the answer's other lines (T2.13 D-3): the derived-column CSV, the
+      // format answer, the template (the empty one included: its "I read" is about the newer version's
+      // reading) and the grounded-data postscript. The note follows the row shown, not the document (T2.13
+      // review M-1): an older newer row beside this build's own or a NULL-stamped latest adds no note. The
       // custom-category refusals and the fall-through show no stored figure and never carry it.
-      const newerNote = isBankExtractionNewer(db, target.id) ? ctx.tr('analysis.newerExtractorNote') : null
+      const newerNote = isBankStatementNewer(db, statementId) ? ctx.tr('analysis.newerExtractorNote') : null
       const withNewerNote = (answer: string): string => (newerNote ? `${answer}\n\n${newerNote}` : answer)
 
       // Load the rows + persisted categories ONCE (the single `bank_transactions` read — audit P-1), then

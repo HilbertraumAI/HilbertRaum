@@ -430,11 +430,13 @@ export async function runDomainExtractionInner<TOutput, TLoaded>(
     // delete uses, so a newer row that is not the latest is protected too. The run ends `done`, pointing at
     // the stored extraction with its stored count: true, and it needs no new error copy (T2.13 D-5). Runs
     // on one document are serialized by the document lock the adapters hold, so this cannot race a delete.
-    const storedRef = config.holdsNewer(db, args.documentId) ? config.latestId(db, args.documentId) : null
-    if (storedRef) {
-      const count = config.storedCountOf(db, storedRef)
+    // Decided on `holdsNewer` ALONE: when the latest row has no usable id ('' or NULL, damage only), the run
+    // still touches nothing and ends `done` with no result ref and a count of 0 (T2.13 review R2 m-1).
+    if (config.holdsNewer(db, args.documentId)) {
+      const storedRef = config.latestId(db, args.documentId) || null
+      const count = storedRef ? config.storedCountOf(db, storedRef) : 0
       finishRun(db, runId, 'done', now(), storedRef, null)
-      return { ok: true, runId, resultRef: storedRef, count }
+      return storedRef ? { ok: true, runId, resultRef: storedRef, count } : { ok: true, runId, count }
     }
 
     const signal = deps.signal ?? new AbortController().signal
@@ -967,12 +969,20 @@ export function isBankStatementStale(db: Db, statementId: string): boolean {
 }
 
 /**
- * Whether the document's stored bank extraction is a NEWER version's reading (G-34 (a)): any of its
- * statements has the `'newer'` verdict. The engine's guard reads it (no extraction ever runs over such a
- * document), and the bank answer ends with C08 (`analysis.newerExtractorNote`) when it is true.
+ * Whether the document holds a NEWER version's bank reading (G-34 (a)): any of its statements has the
+ * `'newer'` verdict. The engine's guard reads it: no extraction ever runs over such a document.
  */
 export function isBankExtractionNewer(db: Db, documentId: string): boolean {
   return holdsNewerExtraction(db, 'bank_statements', documentId, BANK_EXTRACTOR_VERSION)
+}
+
+/**
+ * Whether ONE statement is a newer version's reading (the `'newer'` verdict). The bank answer that shows
+ * this statement's figures ends with C08 (`analysis.newerExtractorNote`) exactly when it is true: the note
+ * follows the row shown, not the document (T2.13 review M-1).
+ */
+export function isBankStatementNewer(db: Db, statementId: string): boolean {
+  return extractorVerdict(db, 'bank_statements', statementId, BANK_EXTRACTOR_VERSION) === 'newer'
 }
 
 /**

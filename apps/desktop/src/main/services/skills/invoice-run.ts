@@ -131,12 +131,21 @@ export function isInvoiceStale(db: Db, invoiceId: string): boolean {
 }
 
 /**
- * Whether the document's stored invoice extraction is a NEWER version's reading (G-34 (a)): any of its
- * invoices has the `'newer'` verdict. The engine's guard reads it (no extraction ever runs over such a
- * document, the glyph-soup retry included), and the invoice answer ends with C08 when it is true.
+ * Whether the document holds a NEWER version's invoice reading (G-34 (a)): any of its invoices has the
+ * `'newer'` verdict. The engine's guard and the glyph-soup retry's stop read it: no extraction ever runs
+ * over such a document.
  */
 export function isInvoiceExtractionNewer(db: Db, documentId: string): boolean {
   return holdsNewerExtraction(db, 'invoices', documentId, INVOICE_EXTRACTOR_VERSION)
+}
+
+/**
+ * Whether ONE invoice is a newer version's reading (the `'newer'` verdict). The invoice answer that shows
+ * this invoice's figures ends with C08 exactly when it is true: the note follows the row shown, not the
+ * document (T2.13 review M-1).
+ */
+export function isInvoiceNewer(db: Db, invoiceId: string): boolean {
+  return extractorVerdict(db, 'invoices', invoiceId, INVOICE_EXTRACTOR_VERSION) === 'newer'
 }
 
 /**
