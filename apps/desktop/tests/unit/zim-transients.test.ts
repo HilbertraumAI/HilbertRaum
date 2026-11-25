@@ -17,6 +17,7 @@ import {
   ZIM_TRANSIENT_DIR_NAME,
   cleanupZimTransients,
   zimTransientDir, samePath } from '../../src/main/services/zim/transients'
+import { UNSEEN_JUNCTIONS, unlinkFolder } from '../helpers/folder-links'
 
 // The knowledge-pack transient cleanup on its own (#301 P3b, findings L3/M4, residual R-7).
 //
@@ -191,6 +192,28 @@ describe('cleanupZimTransients — the contained ZIM transient sweep (#301 P3b, 
     expect(existsSync(decoy)).toBe(true)
     expect(readFileSync(decoy, 'utf8')).toBe('MUST SURVIVE')
   })
+
+  // T2.16 fix round 2 (S-6, review 1's B-1 for this sweep): a junction whose target is a volume GUID path or a
+  // `\\?\GLOBALROOT\Device\HarddiskVolumeN\…` path reads as a plain folder to Node's `lstat`, and the JS `realpathSync`
+  // resolved nothing through it, so its "resolved path" was the expected one and the sweep shredded the library builds
+  // and meta folders in the folder it reaches. The containment is now the vault start's own test (the OS's resolution).
+  for (const [label, make, can] of UNSEEN_JUNCTIONS) {
+    it.skipIf(!can)(`REFUSES a transient directory that is ${label}: nothing is removed, the files behind it are untouched`, () => {
+      const ws = makeWorkspace('encrypted')
+      const elsewhere = join(ws, '..', 'elsewhere')
+      mkdirSync(join(elsewhere, 'meta-3'), { recursive: true })
+      const decoys = [join(elsewhere, 'library.7.xml'), join(elsewhere, 'meta-3', 'library.xml')]
+      for (const decoy of decoys) writeFileSync(decoy, 'MUST SURVIVE')
+      make(elsewhere, zimTransientDir(ws))
+      try {
+        const report = cleanupZimTransients(zimTransientDir(ws), ws, {})
+        expect(decoys.map((decoy) => readFileSync(decoy, 'utf8')), 'the files behind the junction').toEqual(['MUST SURVIVE', 'MUST SURVIVE'])
+        expect(report).toMatchObject({ removed: 0, kept: 0, unknownEntries: 0, confirmed: false })
+      } finally {
+        unlinkFolder(zimTransientDir(ws))
+      }
+    })
+  }
 
   it('REFUSES a transient path that is a file, and a directory that is not the workspace child it claims to be', () => {
     const ws = makeWorkspace('encrypted')

@@ -328,6 +328,15 @@ function initBackend(): void {
       { refused: journalRefusals }
     )
   }
+  // T2.16 (R2 B2): the workspace folder or the logs folder is a link to a folder elsewhere, so the start acted through
+  // neither (no sweep or rekey recovery behind the first, no removal of the rotated log behind the second). The folder
+  // kinds only (`workspace`, `logs`), never a path.
+  const linkedFolders = workspace.linkedStartFolders()
+  if (linkedFolders.length > 0) {
+    log.warn('Workspace start: a folder is a link to a folder elsewhere; the start acted through none of it', {
+      folders: [...linkedFolders]
+    })
+  }
   logStampFailures(workspace) // T2.2: the plaintext open's `last_writer` stamp, when it could not be written (codes only)
   if (workspace.discardedOnlyCopy()) {
     // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept

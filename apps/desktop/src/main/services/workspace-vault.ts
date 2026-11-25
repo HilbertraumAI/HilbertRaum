@@ -1938,7 +1938,7 @@ function removeTempName(path: string): boolean {
 /** #1014 round 4: where {@link insideWorkspace} finds a journal entry: inside the workspace folder on the disk; not
  *  inside (outside it by its text, or inside by its text but through a link); or not known, because a stat on the way
  *  failed for a reason that proves nothing (a hold, a permission, an I/O error: anything but ENOENT, the #911 rule). */
-type Containment = 'inside' | 'outside' | 'unknown'
+export type Containment = 'inside' | 'outside' | 'unknown'
 
 /** #1014 round 5 (review V7-3): what one plan has learned of the disk, so the entries of one folder (most share
  *  `documents/`) cost one walk and one `realpath` between them: the base folder's realpath (the workspace folder for a
@@ -1981,7 +1981,9 @@ function outsideByText(ws: string, entry: string): boolean {
  * {@link insideWorkspace}'s answer for an entry folder that lies inside `ws` by its text; and (T2.16 fix round) the one
  * test every caller applies to a folder the start would act in: a store folder ({@link storeFolderInside}), the
  * workspace folder and the logs folder themselves ({@link folderAtItsName}), the working file's folder before the #911
- * replay ({@link replayMayWrite}). `folder` is `base` or lies below it by its text, and it is `inside` only when it is,
+ * replay ({@link replayMayWrite}); and (round 2, S-6) the knowledge-pack transient folder its own sweep empties
+ * (`zim/transients.ts`, which refuses on `unknown` as it always refused a folder it could not resolve). `folder` is
+ * `base` or lies below it by its text, and it is `inside` only when it is,
  * on the disk, where its path says: no folder below `base` on the way is a link (`lstat`, which never follows one), and
  * the OS's own resolution of `folder` is `base`'s resolution with the same names below it. `outside` is anything else
  * there (a link, a junction, a file at a folder's name, a folder that resolves elsewhere); `unknown` a stat that failed
@@ -1997,7 +1999,7 @@ function outsideByText(ws: string, entry: string): boolean {
  * the same resolution, so a link or a short (8.3) name above `base`, a `subst` drive or a network drive letter changes
  * nothing.
  */
-function folderContainment(base: string, folder: string, memo: ContainmentMemo): Containment {
+export function folderContainment(base: string, folder: string, memo: ContainmentMemo = { folders: new Map() }): Containment {
   const rel = relative(base, folder)
   let dir = base
   for (const part of rel === '' ? [] : rel.split(sep)) {
@@ -2029,7 +2031,7 @@ function folderContainment(base: string, folder: string, memo: ContainmentMemo):
  *  path says, judged from its parent by {@link folderContainment}? `outside` when it is a link to a folder elsewhere (any
  *  junction, a symbolic link), or no folder; `unknown` when a stat proves nothing. */
 function folderAtItsName(dir: string): Containment {
-  return folderContainment(dirname(dir), dir, { folders: new Map() })
+  return folderContainment(dirname(dir), dir)
 }
 
 /** #1014 round 3: the staged database's or an in-store stage's entry (`documents/`, `images/`), which the start settles:
@@ -3027,6 +3029,9 @@ function judgeSidecarStage(staged: string, target: string, dataKey: Buffer): key
  * workspace.
  */
 function discardOrphanedStage(vaultPaths: VaultPaths): void {
+  // T2.16 fix round 2 (S-6): not behind a workspace folder that is a link to a folder elsewhere (R2 B2's test,
+  // {@link folderAtItsName}): the two names lie in the folder it reaches, and the file of that name there was removed.
+  if (folderAtItsName(workspaceDirOf(vaultPaths)) === 'outside') return
   if (
     !statSaysAbsent(vaultPaths.descriptorPath) ||
     !statSaysAbsent(vaultPaths.encPath) ||
@@ -3313,7 +3318,12 @@ export function unlockEncryptedVault(
   // decides whether staged `.new` files roll forward (committed) or are discarded. #973: a staged
   // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is;
   // #1001: so does a staged document or image copy it cannot vouch for. #1014 round 4: what it leaves is counted.
-  recoverPendingRekey(vaultPaths, descriptor, onJournalRefusals)
+  // T2.16 fix round 2 (S-1; the owner's B2 decision, 2026-11-24, applied to the unlock): not behind a workspace folder
+  // that is a link to a folder elsewhere ({@link folderAtItsName}), as the start skips it there. This pass runs before
+  // the password check, so any password typed into the lock screen, a wrong one included, had the journal shred and
+  // replace files behind the link after all. What a password change cut short left there waits (the owner accepted that
+  // a linked workspace folder loses the start's tidy-up and this recovery); the unlock's own reads and writes go on.
+  if (folderAtItsName(workspaceDirOf(vaultPaths)) !== 'outside') recoverPendingRekey(vaultPaths, descriptor, onJournalRefusals)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const kdfT0 = performance.now()
   const key = deriveKey(password, salt, descriptor.kdf)
@@ -4139,7 +4149,8 @@ export class WorkspaceController {
       // stage scan and the rotated log's removal); behind a linked logs folder the log is not removed
       // ({@link removeRotatedLog}). Both are noted for the log ({@link linkedStartFolders}). The salvage still runs (it
       // keeps a failed lock's newer copy from the unlock, which reads and writes through the link as before), but its
-      // #911 replay does not ({@link replayMayWrite}). A stat that proves nothing reads as before (#1014's rule).
+      // #911 replay does not ({@link replayMayWrite}). A stat that proves nothing reads as before (#1014's rule). Round 2:
+      // the unlock's own rekey recovery, before its password check, is skipped there too ({@link unlockEncryptedVault}).
       const linkedWorkspace = folderAtItsName(workspaceDirOf(this.vaultPaths)) === 'outside'
       const logsPath = this.vaultPaths.logsPath
       if (linkedWorkspace) this._linkedStartFolders.push('workspace')

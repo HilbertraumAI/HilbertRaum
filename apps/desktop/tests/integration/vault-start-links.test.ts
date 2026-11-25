@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   existsSync,
@@ -9,31 +8,30 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  rmdirSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync
 } from 'node:fs'
-import { dirname, join, parse, relative } from 'node:path'
-import { tmpdir } from 'node:os'
+import { dirname, join, relative } from 'node:path'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
   ROTATED_ENCRYPTED_LOG_NAME,
   VaultRecoveryBlockedError,
-  WorkspaceController
+  WorkspaceController,
+  encryptFile
 } from '../../src/main/services/workspace-vault'
 import {
   ENCRYPTION_REQUIRED,
   endedUnlocked,
+  freshVaultPaths,
   lockedVault,
   thrownBy,
   unlockedController,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
-import { tempRoot } from '../helpers/db-fixtures'
+import { FOLDER_LINKS, UNSEEN_JUNCTIONS, unlinkFolder, type FolderLink } from '../helpers/folder-links'
 
 // T2.16 fix round (W-83, frozen F-9; G-43 (b)): the start of an encrypted workspace runs at every launch, before any
 // password, and a file a drive carries must never make it act on a file outside the workspace. These rows put a link
@@ -41,12 +39,12 @@ import { tempRoot } from '../helpers/db-fixtures'
 //   - R1 B-1: a Windows junction whose target is not of the form `\??\X:\…` (a volume GUID path, or a
 //     `\\?\GLOBALROOT\Device\HarddiskVolumeN\…` path) reads as a plain folder to Node's `lstat` and to the JS
 //     `realpathSync`, so "no link on the way" let it through, for a journal entry and for the store folders the sweep and
-//     the stage scan read. Junctions need no privilege; the volume's GUID comes from `mountvol <root> /L`, and its device
-//     number is found by trying each one against a marker file (both read-only).
+//     the stage scan read. The links are made by `tests/helpers/folder-links.ts`.
 //   - R2 B2 (owner 2026-11-24: fix): the workspace folder itself, or the logs folder, a link to a folder elsewhere. The
 //     start skips the sweep, the stage scan and the rekey recovery behind a linked workspace folder, and the removal of
-//     the rotated log behind a linked logs folder, and says so (content-free) for the log. The unlock goes on through the
-//     link as before.
+//     the rotated log behind a linked logs folder, and says so (content-free) for the log. Round 2: the unlock skips its
+//     own rekey recovery (before the password check) behind a linked workspace folder too, and the start no longer
+//     removes a create's orphaned stage there; the unlock otherwise reads and writes through the link as before.
 //   - R1 B-2, beside it: the #911 salvage's WAL replay never runs into a working file behind a linked workspace folder.
 // The `\??\X:\…` junction and the symbolic link at a store folder are T2.9's rows (workspace-vault-format-guard).
 
@@ -78,103 +76,6 @@ function plant(path: string, text: string): string {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, text)
   return path
-}
-
-/** The `\\?\Volume{…}\` root of the volume `path` lies on (`mountvol <root> /L`, read-only, no privilege), or null. */
-function volumeGuidRoot(path: string): string | null {
-  try {
-    const root = execFileSync('mountvol', [parse(path).root, '/L'], { encoding: 'utf8' }).trim()
-    return /^\\\\\?\\Volume\{[0-9a-f-]+\}\\$/i.test(root) ? root : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * The `\\?\GLOBALROOT\Device\HarddiskVolumeN\` root of the volume the temp folder lies on, or null: each number is tried
- * with a junction to a marker folder in a temp root of its own, and the one whose junction lists the marker wins. Each
- * junction is removed (`rmdirSync`: the link only) right after its look, and points at a sibling, never at an ancestor.
- */
-function deviceRootOfTemp(): string | null {
-  const root = tempRoot('start-links-device')
-  const target = join(root, 'target')
-  const marker = `marker-${randomBytes(6).toString('hex')}`
-  plant(join(target, marker), '')
-  const tail = target.slice(parse(target).root.length)
-  for (let n = 1; n <= 32; n++) {
-    const device = `\\\\?\\GLOBALROOT\\Device\\HarddiskVolume${n}\\`
-    const link = join(root, 'J')
-    try {
-      symlinkSync(`${device}${tail}`, link, 'junction')
-    } catch {
-      continue
-    }
-    try {
-      if (readdirSync(link).includes(marker)) return device
-    } catch {
-      /* another volume, or none at this number */
-    } finally {
-      rmdirSync(link)
-    }
-  }
-  return null
-}
-
-type FolderLink = (target: string, link: string) => void
-
-/** Can this account make `make` links to a folder? (A Windows symbolic link needs Developer Mode or the privilege.) */
-function canLink(make: FolderLink): boolean {
-  const root = tempRoot('start-links-can')
-  try {
-    mkdirSync(join(root, 'target'))
-    make(join(root, 'target'), join(root, 'link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    try {
-      rmdirSync(join(root, 'link'))
-    } catch {
-      /* none made */
-    }
-  }
-}
-
-const GUID_ROOT = isWindows ? volumeGuidRoot(tmpdir()) : null
-const DEVICE_ROOT = isWindows ? deviceRootOfTemp() : null
-
-/** A junction to `target` spelled under `root` (a volume GUID or device root of the same volume). */
-const junctionUnder =
-  (root: string | null): FolderLink =>
-  (target, link) => {
-    if (root === null) throw new Error('no such root on this machine')
-    symlinkSync(`${root}${target.slice(parse(target).root.length)}`, link, 'junction')
-  }
-
-/** R1 B-1's two junction forms that Node reads as plain folders, where this machine can make them. */
-const UNSEEN_JUNCTIONS: Array<[string, FolderLink, boolean]> = isWindows
-  ? [
-      ['a junction to a volume GUID path', junctionUnder(GUID_ROOT), GUID_ROOT !== null],
-      ['a junction to a \\Device path', junctionUnder(DEVICE_ROOT), DEVICE_ROOT !== null]
-    ]
-  : []
-
-/** Every folder link a drive can carry, where this machine can make it: the junction forms on Windows (no privilege
- *  needed), and a symbolic link to a folder everywhere (elsewhere `symlinkSync` ignores the kind, so it is run once). */
-const dirSymlink: FolderLink = (target, link) => symlinkSync(target, link, 'dir')
-const FOLDER_LINKS: Array<[string, FolderLink, boolean]> = [
-  ...(isWindows ? [['a junction', (t: string, l: string) => symlinkSync(t, l, 'junction'), true] as [string, FolderLink, boolean]] : []),
-  ...UNSEEN_JUNCTIONS,
-  ['a symbolic link', dirSymlink, canLink(dirSymlink)]
-]
-
-/** Removes the link at `link` itself (never what it reaches), when there is one. */
-function unlinkFolder(link: string): void {
-  try {
-    rmdirSync(link)
-  } catch {
-    /* gone already */
-  }
 }
 
 describe('a junction Node reads as a plain folder is still a link to the start (T2.16, R1 B-1)', () => {
@@ -294,6 +195,70 @@ describe('the workspace folder or the logs folder itself a link (T2.16, R2 B2)',
           expect(ctl.linkedStartFolders()).toEqual(['workspace'])
           expect(ctl.isRecoveryBlocked()).toBe(false)
           expect(ctl.getState().state).toBe('locked')
+        } finally {
+          ctl.shutdown()
+        }
+      } finally {
+        unlinkFolder(ws)
+      }
+    })
+  }
+
+  // Round 2 (S-1, the owner's B2 decision applied to the unlock): the unlock runs the rekey recovery again before it
+  // checks the password, so one keystroke into the lock screen had the journal swap a file behind the link after all.
+  // Behind a linked workspace folder that recovery is skipped too, for every password: what a password change cut short
+  // left there waits, and only the unlock's own reads and writes (the working file it decrypts) go through the link.
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the workspace folder ${label}, a password change's journal pending behind it: neither a wrong password nor the right one has the unlock act on it`, () => {
+      const vp = lockedVault('start-links-unlock', PW)
+      const ws = dirname(vp.dbPath)
+      const elsewhere = linkedWorkspace(vp, make)
+      try {
+        plant(join(elsewhere, 'documents', 'a.pdf.enc.new'), 'USER FILE: a stage with no stored copy')
+        plant(join(elsewhere, 'sub', 'x.enc'), 'USER FILE 3')
+        plant(join(elsewhere, 'sub', 'x.enc.new'), 'PLANTED')
+        writeFileSync(
+          join(elsewhere, REKEY_JOURNAL_NAME),
+          JSON.stringify({ version: 1, staged: [join(ws, 'sub', 'x.enc.new')], remove: [] })
+        )
+        const before = filesBelow(elsewhere)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        try {
+          expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+          expect(filesBelow(elsewhere), 'after a wrong password').toEqual(before)
+          expect(ctl.unlock(PW).state).toBe('unlocked')
+          const opened = filesBelow(elsewhere)
+          const asBefore = Object.fromEntries(Object.keys(before).map((name) => [name, opened[name]]))
+          expect(asBefore, 'after the right password: every file that was there').toEqual(before)
+          expect(ctl.lock().state).toBe('locked')
+        } finally {
+          ctl.shutdown()
+        }
+      } finally {
+        unlinkFolder(ws)
+      }
+    })
+  }
+
+  // Round 2 (S-6): with no key file, no `.enc` and no journal the start removes a create's orphaned `.enc.new` and its
+  // write temp (#973); behind a linked workspace folder those names lie elsewhere, so they are left.
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the workspace folder ${label} with no workspace in it: the start removes no orphaned stage behind it`, () => {
+      const vp = freshVaultPaths('start-links-orphan')
+      const ws = dirname(vp.dbPath)
+      const elsewhere = linkedWorkspace(vp, make)
+      try {
+        // A frame of this build's (as a create's stage is), under a key nothing holds, and its write temp.
+        const src = plant(join(vp.root, 'stage-src.bin'), 'a create cut short before its commit')
+        encryptFile(src, join(elsewhere, `hilbertraum.sqlite.enc${REKEY_SUFFIX}`), randomBytes(32))
+        plant(join(elsewhere, `hilbertraum.sqlite.enc${REKEY_SUFFIX}.tmp`), 'USER FILE: its write temp')
+        const before = filesBelow(elsewhere)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        try {
+          expect(filesBelow(elsewhere), 'after the start').toEqual(before)
+          expect(ctl.getState().state).toBe('uninitialized')
         } finally {
           ctl.shutdown()
         }
