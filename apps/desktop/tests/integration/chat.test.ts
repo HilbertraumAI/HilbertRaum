@@ -313,6 +313,18 @@ describe('conversation persistence', () => {
     expect(listConversations(db)[0].title).toBe('What is a vector store?')
   })
 
+  // T2.12 (F-26, D-8): a newer version may store the default title as the code `hr:<key>`. It is still the default, so
+  // the first message names the chat; a code this version cannot read is not the default, and stays.
+  it.each([
+    ['the default title as a code', 'hr:main.chat.defaultTitle', 'What is a vector store?'],
+    ['a code this version does not know', 'hr:main.chat.someFutureTitle', 'hr:main.chat.someFutureTitle']
+  ])('a title stored as %s', (_form, stored, after) => {
+    const db = freshDb()
+    const conv = createConversation(db, { title: stored })
+    maybeSetTitleFromFirstMessage(db, conv.id, 'What is a vector store?')
+    expect(listConversations(db)[0].title).toBe(after)
+  })
+
   // CODE-17 (full-audit 2026-07-11): the auto-title cut is code-point-safe (the RAG-2
   // truncateSnippet idiom) — a raw `.slice(0, 60)` counts UTF-16 units and can cut inside a
   // surrogate pair, persisting a title that forever renders `�` in the sidebar.

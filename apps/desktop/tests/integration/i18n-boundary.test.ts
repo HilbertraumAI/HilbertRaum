@@ -7,7 +7,7 @@ import type { StartDocTaskRequest } from '../../src/shared/types'
 import type { Translator } from '../../src/main/services/translation'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { documentsDir, getDocument } from '../../src/main/services/ingestion'
+import { createQueuedDocument, documentsDir, getDocument } from '../../src/main/services/ingestion'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import { assertDownloadAllowed } from '../../src/main/services/downloads'
 import { isFriendlyTaskError } from '../../src/main/services/doctasks'
@@ -163,6 +163,19 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     applyUiLanguageSetting('en')
     expect(getDocument(db, id)?.scanDetected).toBe(true)
     expect(getDocument(db, id2)?.scanDetected).toBe(true)
+  })
+
+  // T2.12 (F-26): a newer version may store the scan notice as the code `hr:<key>`. scanDetected goes by the stored
+  // message's key, so the Make-searchable offer and the OCR task still reach the row; a code this version cannot read is
+  // no scan.
+  it.each([
+    ['the code', 'hr:main.ingest.pdfScanDetected', true],
+    ['the code with a parameter this version ignores', 'hr:main.ingest.pdfScanDetected?pages=2', true],
+    ['a code this version does not know', 'hr:main.ingest.someFutureScan', false]
+  ])('scanDetected reads a failed row stored as %s', (_form, errorMessage, detected) => {
+    const doc = createQueuedDocument(db, join(tmp, 'scan.pdf'))
+    db.prepare("UPDATE documents SET status = 'failed', error_message = ? WHERE id = ?").run(errorMessage, doc.id)
+    expect(getDocument(db, doc.id)?.scanDetected).toBe(detected)
   })
 
   // A language registered after German, end to end. One language stands for the rest: German,

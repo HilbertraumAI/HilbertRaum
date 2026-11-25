@@ -1027,6 +1027,15 @@ describe('DocumentsScreen — the lead above a failure message the app does not 
       expect(banner.textContent).toBe(`${tDe('main.ingest.pdfScanDetected')} ${tDe('docs.scan.ocrOffer')}`)
     )
   })
+
+  // T2.12 (F-26, D-7): a newer version may store a failure as the code `hr:<key>`. One this version does not know
+  // reads as the newer-version line, under the same lead, so the row still says the file failed (no row change).
+  it.each(['en', 'de'] as const)('%s: a failure stored as a code this version does not know reads as the newer-version line under the lead', async (lang) => {
+    const banner = await failedBanner(lang, { errorMessage: 'hr:main.ingest.someFutureFailure' })
+    const lead = translate(lang, 'docs.failed.lead')
+    expect(within(banner).getByText(lead).tagName).toBe('P')
+    expect(banner.textContent).toBe(`${lead}${translate(lang, 'common.newerVersionText')}`)
+  })
 })
 
 // ---- §11.6 refinement: action overflow, MIME→label, selection toolbar, status badges ----

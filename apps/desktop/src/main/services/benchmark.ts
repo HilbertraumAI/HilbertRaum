@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { randomFillSync } from 'node:crypto'
 import { t } from '../../shared/i18n'
+import { persistedMessageKey } from '../../shared/persisted-messages'
 import { perfMark } from './perf'
 import { throughputMbps } from './read-speed'
 import type { ModelManifest } from '../../shared/manifest'
@@ -440,14 +441,6 @@ function slowReadWarning(effectiveReadMbps: number): string {
   return t('en', 'main.benchmark.warnSlowRead', { mbps: Math.floor(effectiveReadMbps) })
 }
 
-/** Matches any persisted slow-read warning (whatever `{mbps}` it named) — the main-side
- *  twin of the renderer display map's template regex. */
-const SLOW_READ_WARNING_RE = new RegExp(
-  `^${t('en', 'main.benchmark.warnSlowRead', { mbps: '@@MBPS@@' })
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    .replace('@@MBPS@@', '\\d+')}$`
-)
-
 /**
  * Re-key the ONE warning that tracks `effectiveRead` against a fresh sample (#110):
  * drop any previously persisted slow-read warning and append the current one when the
@@ -456,10 +449,12 @@ const SLOW_READ_WARNING_RE = new RegExp(
  * the default journey the ONLY automatic benchmark runs before any model exists, so
  * without this the primary #110 warning would never appear (and a stale one could
  * contradict the freshly updated Diagnostics row above it). All other warnings are
- * benchmark-time facts and pass through untouched.
+ * benchmark-time facts and pass through untouched. A persisted slow-read warning is read
+ * by its key, whatever `{mbps}` it named: the English, an alias, or a newer version's code
+ * (F-26), through the reader the renderer's display map uses.
  */
 export function upsertSlowReadWarning(warnings: string[], effectiveReadMbps: number): string[] {
-  const kept = warnings.filter((w) => !SLOW_READ_WARNING_RE.test(w))
+  const kept = warnings.filter((w) => persistedMessageKey(w) !== 'main.benchmark.warnSlowRead')
   if (effectiveReadMbps < SLOW_EFFECTIVE_READ_MBPS) kept.push(slowReadWarning(effectiveReadMbps))
   return kept
 }

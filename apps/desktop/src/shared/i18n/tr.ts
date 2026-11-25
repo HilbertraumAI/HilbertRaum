@@ -2272,6 +2272,8 @@ export const tr: UiCatalog<'tr'> = {
   'common.apply': 'Uygula',
   'common.labelValue': '{label}: {value}',
   'common.percent': '%{pct}',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
   'indicator.offline': 'Yerel · Çevrimdışı',
   'indicator.online': 'Yerel · İndirmeye izin verildi',
   'indicator.offlineDetail': 'Her şey bu sürücüde kalır. İnternet bağlantısı kullanılmaz.',

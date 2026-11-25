@@ -10,6 +10,7 @@ import {
 import { t as translate, tCount } from '../../src/shared/i18n'
 import { makeDocumentInfo } from '../helpers/chat-fixtures'
 import { nameCompare } from '../../src/renderer/lib/collation'
+import { ocrRemedyKind } from '../../src/renderer/lib/ocrRemedy'
 import { PROJECT_ORDER_CASES, inLanguageOrder } from '../helpers/project-order-fixtures'
 
 /** `s` with each U+00A0 spelled out, so a row compares code points and a failure shows which space. */
@@ -33,6 +34,32 @@ describe('isRetryableFailure', () => {
     // A read/parse error or an unknown cause → retryable.
     expect(isRetryableFailure('EIO: i/o error, read')).toBe(true)
     expect(isRetryableFailure(null)).toBe(true)
+  })
+
+  // T2.12 (F-26, D-7): a newer version may store the failure as the code `hr:<key>`. The offer goes by the key, so a
+  // coded intrinsic failure is not offered either; one this version cannot read is, since a re-index here writes a
+  // message this version can show.
+  it.each([
+    ['hr:main.ingest.unsupportedType?ext=.xyz', false],
+    ['hr:main.ingest.fileTooLarge', false],
+    ['hr:main.ingest.tooManyChunks', false],
+    ['hr:main.ingest.pdfScanDetected', false],
+    ['hr:main.ingest.imageNeedsOcr', true],
+    // A key this version does not know.
+    ['hr:main.ingest.someFutureFailure', true]
+  ] as const)('a failure stored as %s: retry offered %s', (raw, offered) => {
+    expect(isRetryableFailure(raw)).toBe(offered)
+  })
+})
+
+// #410 + T2.12 (F-26): the photo row's in-app OCR remedy goes by the stored message's key, so a newer version's coded
+// form gets it too; a code this version cannot read gets none.
+describe('ocrRemedyKind reads a coded photo failure by its key', () => {
+  it.each([
+    ['hr:main.ingest.imageNeedsOcr', 'photo'],
+    ['hr:main.ingest.someFutureFailure', null]
+  ] as const)('%s → %s', (errorMessage, kind) => {
+    expect(ocrRemedyKind({ status: 'failed', scanDetected: false, errorMessage })).toBe(kind)
   })
 })
 

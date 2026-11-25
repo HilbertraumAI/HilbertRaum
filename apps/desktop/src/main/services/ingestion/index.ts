@@ -50,7 +50,7 @@ import {
   type ParseContext,
   type ParsedDocument
 } from './parsers'
-import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
+import { persistedMessageKey } from '../../../shared/persisted-messages'
 import { ocrMetaOf, parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import {
@@ -426,9 +426,10 @@ function rowToInfo(
     staleEmbeddings,
     summary: parseSummary(row.summary_json),
     origin: parseOrigin(row.origin_json),
-    // DERIVED scan marker: failed with the exact scan notice. The OCR task targets
-    // exactly these rows (plus already-OCR'd PDFs for a re-run).
-    scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
+    // DERIVED scan marker: failed with the scan notice, read by its key (the English the PDF
+    // parser stores, an alias, or a newer version's code: F-26). The OCR task targets exactly
+    // these rows (plus already-OCR'd PDFs for a re-run).
+    scanDetected: row.status === 'failed' && persistedMessageKey(row.error_message) === 'main.ingest.pdfScanDetected',
     ocr: ocrInfoForRow(row),
     scannedPages: scannedPagesInfo(row.scanned_pages_json),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +

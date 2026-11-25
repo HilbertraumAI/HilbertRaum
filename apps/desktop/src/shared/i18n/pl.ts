@@ -2448,6 +2448,8 @@ export const pl: UiCatalog<'pl'> = {
   'common.apply': 'Zastosuj',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
   'indicator.offline': 'Lokalnie · Offline',
   'indicator.online': 'Lokalnie · Pobieranie dozwolone',
   'indicator.offlineDetail':

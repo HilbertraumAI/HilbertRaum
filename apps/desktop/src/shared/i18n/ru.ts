@@ -2431,6 +2431,8 @@ export const ru: UiCatalog<'ru'> = {
   'common.apply': 'Применить',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
   'indicator.offline': 'Локально · Офлайн',
   'indicator.online': 'Локально · Скачивание разрешено',
   'indicator.offlineDetail': 'Все остается на этом диске. Подключение к интернету не используется.',

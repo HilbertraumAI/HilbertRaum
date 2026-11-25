@@ -2406,6 +2406,8 @@ export const es: UiCatalog<'es'> = {
   'common.apply': 'Aplicar',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}\u00A0%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
   'indicator.offline': 'Local · Sin conexión',
   'indicator.online': 'Local · Descargas permitidas',
   'indicator.offlineDetail': 'Todo se queda en esta unidad. No se usa ninguna conexión a internet.',

@@ -2356,6 +2356,8 @@ export const nl: UiCatalog<'nl'> = {
   'common.apply': 'Toepassen',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version cannot show it.',
   'indicator.offline': 'Lokaal · Offline',
   'indicator.online': 'Lokaal · Downloads toegestaan',
   'indicator.offlineDetail':

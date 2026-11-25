@@ -2422,6 +2422,9 @@ export const de: Record<keyof typeof en, string> = {
   'common.apply': 'Übernehmen',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}\u00A0%',
+  'common.newerVersionText':
+    'Dieser Text stammt aus einer neueren Version von HilbertRaum, und diese Version kann ihn nicht ' +
+    'anzeigen.',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':

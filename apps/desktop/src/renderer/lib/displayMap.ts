@@ -1,144 +1,69 @@
 import { en, type MessageKey, type MessageParams } from '@shared/i18n'
 import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '@shared/citation-markers'
+import {
+  DISPLAY_MAP_KEYS,
+  INTERPOLATED_MAP_KEYS,
+  parsePersistedMessage,
+  persistedMessageKey
+} from '@shared/persisted-messages'
 
 // The D-L4 display map (i18n record §3.3 rule 1): persisted main-process strings
 // are stored as canonical ENGLISH (documents.error_message, the fixed RAG answers in
 // messages.content, benchmark warnings in settings.lastBenchmark) so the data
-// contracts — most importantly the `scanDetected` exact-match — never move. The
-// renderer translates them at display time via this exact-match reverse lookup from
-// the known English constants to their MessageKeys. Unknown strings (raw library
-// errors) render as-is; a failed document row and the chat attach banner show them
-// under a translated lead (#807, `classifyServerCopy`). Messages that carry an
-// interpolated value (the offending file extension) are handled separately below —
-// they can't be exact-matched.
+// contracts — most importantly `scanDetected` — never move. The renderer translates
+// them at display time: `@shared/persisted-messages` reads a stored string back to its
+// MessageKey (by exact match, or, for a message that carries an interpolated value such
+// as the offending file extension, by a pattern built from its English template), and
+// this module renders the key in the UI language. Unknown strings (raw library errors)
+// render as-is; a failed document row and the chat attach banner show them under a
+// translated lead (#807, `classifyServerCopy`).
 //
 // Because the English catalog values are byte-identical to the pre-i18n literals
 // (D-L8), rows persisted BEFORE the i18n wave match too — switching language
 // retroactively re-translates old failure rows and old "couldn't find it in your
 // documents" answers. In an English UI the lookup is the identity.
+//
+// F-26 (T2.12): a newer version may store a message in the coded form `hr:<key>`. One this
+// version knows renders like its English; one it cannot show renders as C02
+// (`common.newerVersionText`), under the same lead.
 
-/** Every persist-canonical key the map recognizes (keep in step with the en.ts set —
- * exported so the catalog hygiene test can pin the two sets to each other). */
-export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
-  'main.ingest.pdfScanDetected',
-  'main.ingest.audioNeedsTranscriber',
-  // #527: the audio failure names the missing piece — engine, both, or no engine for this system.
-  'main.ingest.audioNeedsEngine',
-  'main.ingest.audioNeedsModelAndEngine',
-  'main.ingest.audioEngineUnsupported',
-  'main.ingest.audioUnreadable',
-  'main.ingest.audioTranscriptionFailed',
-  // #530: the OS refused to start the AI engine / the voice engine (no library named).
-  'main.ingest.engineCannotRun',
-  'main.ingest.voiceEngineCannotRun',
-  // #869: the voice engine cannot read the speech model's file name on Windows (no path in it).
-  'main.ingest.voiceModelPathUnsupported',
-  // #1012: a file of the voice engine could not be read just now (an audio import's row; the engines'
-  // own notice text, so its English value is persist-canonical too).
-  'main.engine.filesUnreadable',
-  // #634: the search model timed out, could not start, or failed (chosen by kind, never its text).
-  'main.ingest.searchModelTimeout',
-  'main.ingest.searchModelCannotStart',
-  'main.ingest.searchModelFailed',
-  'main.ingest.imageNeedsOcr',
-  'main.ingest.imageNoText',
-  'main.ingest.imageOcrFailed',
-  // Photo stored without recognition because the recognizer cannot run in this build (#232).
-  'main.ingest.imageOcrUnavailable',
-  'main.ingest.sourceMissing',
-  'main.ingest.interrupted',
-  'main.ingest.fileTooLarge',
-  'main.ingest.tooManyChunks',
-  'main.ingest.parseTimeout',
-  'main.rag.noContext',
-  'main.rag.reindexNeeded',
-  'main.chat.docTaskBusy',
-  'main.chat.defaultTitle',
-  'main.evidenceReviews.defaultTitle',
-  'main.benchmark.warnTiny',
-  'main.benchmark.warnUnknown',
-  'main.benchmark.warnDriveProbe',
-  'main.benchmark.warnSlowDrive',
-  // #185: the contended-probe warning is persisted into settings.lastBenchmark.warnings like
-  // its siblings, and carries no interpolated value — so it is exact-match, not INTERPOLATED.
-  'main.benchmark.warnSpeedSkipped'
-]
-
-const KEY_BY_ENGLISH: ReadonlyMap<string, MessageKey> = new Map(
-  DISPLAY_MAP_KEYS.map((key) => [en[key], key])
-)
+// The two key sets live in `@shared/persisted-messages` (T2.12): main reads the same set for
+// `scanDetected`. Re-exported so the catalog hygiene test's imports stay as they are.
+export { DISPLAY_MAP_KEYS, INTERPOLATED_MAP_KEYS }
 
 /**
- * The persist-canonical key a stored English string IS (exact match), or null. Lets a row branch
- * on WHICH known failure it carries without comparing raw English at the call site — e.g. the
- * photo row's in-app OCR remedy (#410) keys off `main.ingest.imageNeedsOcr`, whose stored text
- * never changes (the remedy is appended at display time instead).
+ * The persist-canonical key a stored string IS (its English, an alias, or a code this version
+ * knows: F-26), or null. Lets a row branch on WHICH known failure it carries without comparing
+ * raw English at the call site — e.g. the photo row's in-app OCR remedy (#410) keys off
+ * `main.ingest.imageNeedsOcr`, whose stored text never changes (the remedy is appended at
+ * display time instead).
  */
 export function displayMapKey(raw: string | null | undefined): MessageKey | null {
-  return raw ? (KEY_BY_ENGLISH.get(raw) ?? null) : null
+  return persistedMessageKey(raw)
 }
 
 /** A bound translator (what `useT().t` returns, or `(k) => t(lang, k)`). */
 export type BoundT = (key: MessageKey, params?: MessageParams) => string
 
-// ---- Interpolated persist-canonical messages -------------------------------------------
-// Some persisted error messages carry an interpolated value (the offending file extension),
-// so they cannot be reverse-matched by the exact-match map above. Each is reverse-matched by
-// a regex derived from its English template (the param becomes a capture group) and
-// re-rendered in the target language with the param re-interpolated. These keys are
-// persist-canonical but deliberately NOT in DISPLAY_MAP_KEYS (which is the exact-match set).
-
-/** Persist-canonical keys handled via the interpolated matcher (not exact-match). Exported
- *  so the catalog-hygiene test can pin this set too. */
-export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
-  'main.ingest.unsupportedType',
-  'main.benchmark.warnVeryLowTokens',
-  'main.benchmark.warnSlowRead',
-  'main.benchmark.warnRecommendationLowered',
-  // #530: the engine cannot run because this system library is missing — the library's file
-  // NAME is the one interpolated value (never a path: the raw loader line is never stored).
-  'main.ingest.engineLibraryMissing'
-]
-
-/** Build a `^…$` regex from an English template by escaping it and turning each `{param}`
- *  placeholder into a capture group. Pass params in TEMPLATE ORDER: capture group N is the
- *  Nth placeholder in the English template. */
-function templateToRegex(template: string, ...params: string[]): RegExp {
-  let escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  for (const param of params) {
-    escaped = escaped.replace(`\\{${param}\\}`, '(.+?)')
-  }
-  return new RegExp(`^${escaped}$`)
-}
-
-const UNSUPPORTED_TYPE_RE = templateToRegex(en['main.ingest.unsupportedType'], 'ext')
-// Issue #52: the very-low-tokens benchmark warning is persisted with the measured model's id
-// interpolated, so it round-trips through the same template-regex mechanism.
-const WARN_VERY_LOW_TOKENS_RE = templateToRegex(en['main.benchmark.warnVeryLowTokens'], 'model')
-// #110: the slow-read warning carries the measured effective MB/s the same way.
-const WARN_SLOW_READ_RE = templateToRegex(en['main.benchmark.warnSlowRead'], 'mbps')
-// Issue #95 (§6.5): the recommendation-lowered warning carries TWO values — the measured
-// figure and the model id — in that order in the English template.
-const ENGINE_LIBRARY_MISSING_RE = templateToRegex(en['main.ingest.engineLibraryMissing'], 'library')
-const WARN_RECOMMENDATION_LOWERED_RE = templateToRegex(
-  en['main.benchmark.warnRecommendationLowered'],
-  'tps',
-  'model'
-)
 // Legacy pattern for rows persisted by Phase-4-era ingestion (before this message was
 // localized): the old raw English form ended with the offending extension. Matched here so an
 // already-failed row still localizes after this change instead of leaking raw English into a
 // German UI. Written as a regex (not the quoted literal) so the copy-tone guard stays clean.
+// The one old form outside PERSISTED_ALIASES (F-26), and frozen like it.
 const LEGACY_UNSUPPORTED_TYPE_RE = /^Unsupported file type: (.+)$/
 
 /**
  * Recover the offending extension when `raw` is the unsupported-file-type failure (current
- * OR legacy wording), else null. Exported so a failed row can branch on it: "Try again"
- * (re-index) is offered only for retryable failures, and an unsupported type is not one.
+ * OR legacy wording, an alias or a code: F-26), else null. Exported so a failed row can branch
+ * on it: "Try again" (re-index) is offered only for retryable failures, and an unsupported type
+ * is not one.
  */
 export function unsupportedTypeExt(raw: string): string | null {
-  const m = UNSUPPORTED_TYPE_RE.exec(raw) ?? LEGACY_UNSUPPORTED_TYPE_RE.exec(raw)
-  return m ? m[1] : null
+  const message = parsePersistedMessage(raw)
+  if (message?.kind === 'message') {
+    return message.key === 'main.ingest.unsupportedType' ? (message.params.ext ?? null) : null
+  }
+  return LEGACY_UNSUPPORTED_TYPE_RE.exec(raw)?.[1] ?? null
 }
 
 // ---- Citation markers (#28 / beta-feedback plan Phase 1, D68) ---------------------------
@@ -181,10 +106,11 @@ export function formatCitationLabel(t: BoundT, label: string): string {
 export interface ServerCopy {
   /** The display text: what `localizeServerCopy` returns. */
   text: string
-  /** Whether `raw` was one of the app's own messages: the exact map, an interpolated family, or the
-   *  doc-task-busy substring. False only for the pass-through (a library's or the OS's own words),
-   *  which a failed row shows under the translated `docs.failed.lead` and the chat attach banner
-   *  under `chat.attach.failed` (it names the file). */
+  /** Whether `raw` was one of the app's own messages: the exact map, an interpolated family, a
+   *  code this version knows, or the doc-task-busy substring. False for the pass-through (a
+   *  library's or the OS's own words) and for a code this version cannot show (F-26: the text is
+   *  C02), which a failed row shows under the translated `docs.failed.lead` and the chat attach
+   *  banner under `chat.attach.failed` (it names the file). */
   recognized: boolean
 }
 
@@ -192,29 +118,22 @@ const known = (text: string): ServerCopy => ({ text, recognized: true })
 
 /**
  * Translate a server-origin string for display and say whether the display map knew it:
- * exact-match against the known persisted English constants, then the interpolated families,
- * else pass through unchanged (not recognized). DOC_TASK_BUSY_MESSAGE is additionally matched
- * as a substring — the chat banner recognizes it via `error.includes` (transport prefixes may
- * survive), so its display mapping must tolerate the same embedding.
+ * a stored message `@shared/persisted-messages` reads (its English, an alias, or a code: F-26),
+ * then the legacy unsupported-type wording, else pass through unchanged (not recognized). A code
+ * this version cannot show reads as C02, not recognized. DOC_TASK_BUSY_MESSAGE is additionally
+ * matched as a substring — the chat banner recognizes it via `error.includes` (transport prefixes
+ * may survive), so its display mapping must tolerate the same embedding.
  *
  * The persisted-constant branches carry no citation markers; a real model answer (the only text
  * that carries `[S{n}]`) falls through to the final return, where the marker is localized (D68).
  */
 export function classifyServerCopy(t: BoundT, raw: string): ServerCopy {
-  const key = KEY_BY_ENGLISH.get(raw)
-  if (key) return known(t(key))
-  const ext = unsupportedTypeExt(raw)
+  const message = parsePersistedMessage(raw)
+  // The copy deck's C02 stands under the lead on a failed row, so it is not recognized.
+  if (message?.kind === 'unknownCode') return { text: t('common.newerVersionText'), recognized: false }
+  if (message) return known(t(message.key, message.params))
+  const ext = LEGACY_UNSUPPORTED_TYPE_RE.exec(raw)?.[1]
   if (ext != null) return known(t('main.ingest.unsupportedType', { ext }))
-  const model = WARN_VERY_LOW_TOKENS_RE.exec(raw)?.[1]
-  if (model != null) return known(t('main.benchmark.warnVeryLowTokens', { model }))
-  const mbps = WARN_SLOW_READ_RE.exec(raw)?.[1]
-  if (mbps != null) return known(t('main.benchmark.warnSlowRead', { mbps }))
-  const lowered = WARN_RECOMMENDATION_LOWERED_RE.exec(raw)
-  if (lowered) {
-    return known(t('main.benchmark.warnRecommendationLowered', { tps: lowered[1], model: lowered[2] }))
-  }
-  const library = ENGINE_LIBRARY_MISSING_RE.exec(raw)?.[1]
-  if (library != null) return known(t('main.ingest.engineLibraryMissing', { library }))
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return known(raw.replace(busy, t('main.chat.docTaskBusy')))
   return { text: localizeCitationMarkers(t, raw), recognized: false }

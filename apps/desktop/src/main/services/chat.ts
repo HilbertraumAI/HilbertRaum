@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { t } from '../../shared/i18n'
+import { persistedMessageKey } from '../../shared/persisted-messages'
 import { type Db, prepareCached } from './db'
 import {
   SEARCH_MARK_END,
@@ -1411,7 +1412,8 @@ export function searchMessages(
  */
 export function maybeSetTitleFromFirstMessage(db: Db, conversationId: string, content: string): void {
   const conv = getConversation(db, conversationId)
-  if (!conv || conv.title !== DEFAULT_TITLE) return
+  // The default title by its key: the English, an alias, or a newer version's code (F-26).
+  if (!conv || persistedMessageKey(conv.title) !== 'main.chat.defaultTitle') return
   // Code-point-safe cut (the truncateSnippet idiom, rag/index.ts — RAG-2; full-audit 2026-07-11
   // CODE-17): a raw `.slice(0, 60)` counts UTF-16 units and can cut inside a surrogate pair
   // (emoji, CJK ext-B), persisting a title that forever ends in `�` in the sidebar. Spreading

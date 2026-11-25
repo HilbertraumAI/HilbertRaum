@@ -571,6 +571,16 @@ describe('buildWarnings', () => {
     // Threshold boundary: exactly 100 is not slow.
     expect(upsertSlowReadWarning(others, 100)).toEqual(others)
   })
+
+  // T2.12 (F-26, D-8): a newer version may store the slow-read warning as the code `hr:<key>?mbps=…`. It is still the
+  // one warning upsertSlowReadWarning owns, so a fresh sample replaces or removes it (never two slow-read lines); a
+  // code this version cannot read is another warning, and stays.
+  it('upsertSlowReadWarning owns the slow-read warning in its coded form too', () => {
+    const others = [t('en', 'main.benchmark.warnTiny'), 'hr:main.benchmark.someFutureWarning']
+    const stored = [...others, 'hr:main.benchmark.warnSlowRead?mbps=55']
+    expect(upsertSlowReadWarning(stored, 42)).toEqual([...others, t('en', 'main.benchmark.warnSlowRead', { mbps: 42 })])
+    expect(upsertSlowReadWarning(stored, 480)).toEqual(others)
+  })
 })
 
 // ---- runBenchmark + persistence + downstream reads ------------------------------

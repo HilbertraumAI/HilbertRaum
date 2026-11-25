@@ -2456,6 +2456,8 @@ export const en = {
   'common.apply': 'Apply',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version can’t show it.',
   'indicator.offline': 'Local · Offline',
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',
