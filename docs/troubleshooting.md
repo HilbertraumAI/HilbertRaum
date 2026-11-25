@@ -335,8 +335,9 @@ On a developer drive, unverified models are allowed; a commercial drive requires
 checksum.
 
 **If the verifier prints `SKIP   <id>: needs a newer HilbertRaum (…)`**, that model's manifest is for
-a newer version than the app in your copy of the scripts (an unknown `role`, or a `min_app_version`
-above it; the bracket says which, and the version it compared with). The app lists such a model under
+a newer version than the app in your copy of the scripts (an unknown `role`, a `min_app_version`
+above it, or a `min_app_version` that is no plain version, which is skipped the same way; the bracket
+says which, and for a `min_app_version` also the version it compared with). The app lists such a model under
 "Needs a newer HilbertRaum" and never runs it, so the verifier checks none of its files and leaves it
 out of `config/checksums.json`; its summary says how many it skipped. With `--kit` (`-Kit`) any skip
 fails the check: a Kit ships only manifests its own app can use. `fetch-models` skips the same
@@ -442,6 +443,9 @@ What to do:
   proves what happened, and your imported documents' encrypted copies under
   `workspace/documents/` may be individually recoverable.
 
+<!-- Maintainer note (app-update wave, P2): "install the newer version from an update file" in this paragraph is
+     the copy release 1 will show; the "Install update from a file…" button it leads to lands with P6, so on this
+     branch it is not built yet (T6.6 and T6.D check this entry against the built button). -->
 Never run two copies of the app at the same time against the same drive. Versions 0.1.59 and
 newer refuse a second instance on their own — but an older copy takes no such lock, so that
 protection only holds when **both** copies are 0.1.59 or newer. When upgrading, quit the old
@@ -482,6 +486,8 @@ key file are as they were.
 
 What to do:
 
+<!-- Maintainer note (app-update wave, P2): "Install update from a file…" is the copy release 1 will show; the
+     button lands with P6, so on this branch it is not built yet (T6.6 and T6.D check this entry against it). -->
 - **A newer version was used on this drive** (another computer's copy, or before a "Go back"): open
   the workspace with that newer version. Install it from an update file (**Install update from a
   file…**, as the message says), or put that version's app back on the drive in place of this one
@@ -727,11 +733,14 @@ earlier one (or one a person or another program left there) was in the workspace
 creates a new workspace only from scratch: it moved those files aside instead of using them, and never
 writes over one it set aside before.
 
-**These files are not encrypted.** They may hold an earlier workspace's chats, documents and settings
-in readable form, and nothing in HilbertRaum reads or removes them. If you might need that data, copy
-them somewhere safe (an SQLite tool opens the `.quarantine` file, with its `-wal` and `-shm` beside
-it). If you don't, quit HilbertRaum and delete them from the `workspace/` folder. Your current
-workspace does not use them.
+**Keep them unless you are sure you don't need them.** They may be the only copy of an earlier
+workspace on this drive: its chats, documents and settings. They do no harm where they are: your
+current workspace does not use them, and nothing in HilbertRaum reads or removes them.
+
+**These files are not encrypted**, so anyone with the drive can read them. To keep the data safe,
+copy them somewhere you trust (an SQLite tool opens the `.quarantine` file, with its `-wal` and `-shm`
+beside it). Only if you are sure you will never need that data, quit HilbertRaum and delete them from
+the `workspace/` folder. Deleting is permanent: the app keeps no other copy.
 
 ---
 

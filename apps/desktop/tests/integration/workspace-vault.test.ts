@@ -1134,6 +1134,87 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
+  /**
+   * F-27 review 1 M-2: what a session in a rollback-journal mode (a later version's: every build runs the workspace in
+   * WAL mode) leaves when it ends mid-transaction, on the vault at `vp` (password `pw`): it committed `contextTokens`
+   * 7171 and a table of its own (`later_rows`, 2,000 rows), then began a transaction (`contextTokens` 9999, every
+   * `later_rows` row rewritten) whose changes spilled into the file. Its hot `hilbertraum.sqlite-journal` (those pages
+   * as committed) is read while that transaction is open and put back after the close, which rolls the transaction
+   * back and deletes the journal (as `leaveAsKilled` does for a `-wal`). `torn`: the working file as the spill left it
+   * goes back too, newer than `.enc`; otherwise it is gone.
+   */
+  function endedMidRollbackJournal(vp: VaultPaths, torn: boolean): void {
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    key.fill(0)
+    db.close()
+    const raw = openRawDb(vp.dbPath)
+    let journal: Buffer
+    let tornBytes: Buffer
+    try {
+      raw.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA mmap_size = 0;')
+      raw.exec('CREATE TABLE later_rows(id INTEGER PRIMARY KEY, v TEXT)')
+      raw.exec('BEGIN')
+      const insert = raw.prepare('INSERT INTO later_rows(v) VALUES (?)')
+      for (let i = 0; i < 2000; i++) insert.run(`later-${'y'.repeat(200)}${i}`)
+      raw.exec('COMMIT')
+      updateSettings(raw, { contextTokens: 7171 })
+      raw.exec('PRAGMA cache_size = 5; BEGIN;')
+      updateSettings(raw, { contextTokens: 9999 })
+      raw.exec("UPDATE later_rows SET v = 'UNCOMMITTED-' || v")
+      journal = readFileSync(`${vp.dbPath}-journal`)
+      tornBytes = readFileSync(vp.dbPath)
+      raw.exec('ROLLBACK')
+    } finally {
+      raw.close()
+    }
+    if (torn) {
+      writeFileSync(vp.dbPath, tornBytes)
+      backdate(vp.encPath)
+    } else rmSync(vp.dbPath)
+    writeFileSync(`${vp.dbPath}-journal`, journal)
+  }
+
+  it('a hot -journal a rollback-mode session left beside an intact .enc: the unlock removes it first and opens the snapshot, never damaged (F-27 R1 M-2)', () => {
+    const vp = lockedVault('vault', 'pw')
+    endedMidRollbackJournal(vp, false)
+    const enc = readFileSync(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // The start leaves the journal: it is no name its sweep knows.
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(true)
+    // Played into the fresh copy of `.enc`, those pages mix the later session into the snapshot, or read as a malformed
+    // database ("damaged" on an intact `.enc`), whichever pages the two files share.
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    const db = ctl.requireDb()
+    expect(getSettings(db).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'later_rows'").get()).toEqual({ n: 0 })
+    expect(db.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(false)
+    expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+    ctl.lock()
+  })
+
+  it('a torn working file with its own hot -journal, kept as .recovery: the unlock rolls it forward and leaves the journal for SQLite to play back (F-27 R1 M-2)', () => {
+    const vp = lockedVault('vault', 'pw')
+    endedMidRollbackJournal(vp, true)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // The salvage keeps the torn file (newer than `.enc`, no -wal or -shm, a database to the probe); its journal stays.
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(true)
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(true)
+    ctl.unlock('pw')
+    // The copy decrypted after the roll-forward is that working file: its journal undoes the spilled transaction.
+    const db = ctl.requireDb()
+    expect(getSettings(db).contextTokens).toBe(7171)
+    expect(db.prepare("SELECT count(*) AS n FROM later_rows WHERE v LIKE 'UNCOMMITTED-%'").get()).toEqual({ n: 0 })
+    expect(db.prepare('SELECT count(*) AS n FROM later_rows').get()).toEqual({ n: 2000 })
+    expect(db.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(false)
+    ctl.lock()
+  })
+
   // #955 item 3, S-2: the unlock of a vault the start never saw skipped the start's salvage, so the `.enc` was
   // decrypted over a working file newer than it (a failed lock's session). Both ways in: a whole workspace copied back
   // under the create form, and the #807 copy's own advice ("put the file back") while the lock screen is up.

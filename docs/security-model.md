@@ -1173,9 +1173,11 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
   case inside them measured about 55 s of main-thread work on the reviewer's computer (longer on a
   slower one), while the default above costs well under a second. Every descriptor a published release
   wrote is far inside them; a later version that needs more raises the descriptor version
-  (`app-updates.md` §7.7).
-- **Key material is wiped after use.** `deriveKey` zeroes the derived bytes it copied out of the hash
-  library, and `decrypt` zeroes the pieces it joined into the result, also when the final step throws;
+  (`app-updates.md` §7.7, which also gives the part of the bounds the two libraries can derive: scrypt
+  under its 256 MiB `maxmem`, argon2id with `m` at least 8·`p`).
+- **Key material is wiped after use.** For argon2id, `deriveKey` zeroes the derived bytes it copied out
+  of the hash library (scrypt's result is the one buffer, returned as the key), and `decrypt` zeroes the
+  pieces it joined into the result, also when the final step throws;
   the KEK is zeroed once the data key is unwrapped, and the data key at the lock.
 
 **Accepted residual — offline password guessing on a lost/stolen drive (full-audit-2026-06-29 SEC-1, Low).**
@@ -1217,7 +1219,11 @@ individual rows — the spec §8 schema is identical in both modes.
   its `-wal`/`-shm` sidecars.
 - **WAL sidecars:** WAL mode creates `hilbertraum.sqlite-wal` / `-shm`, which can hold plaintext pages.
   They are checkpointed before encryption and shredded after, so the encrypted snapshot is complete
-  and no plaintext leaks in a sidecar.
+  and no plaintext leaks in a sidecar. Before the decrypt the unlock also shreds a
+  `hilbertraum.sqlite-journal` (a rollback journal, which only a session in another journal mode, a
+  later version's, can leave), since SQLite would play it back into the fresh copy; an unlock that has
+  just rolled `.recovery` forward leaves it, because it then belongs to the copy it decrypts
+  (`unlockEncryptedVault`; app-update F-27, `app-updates.md` §7.7).
 - **Plaintext-mode quit (issue #51):** `lock()` is a deliberate no-op for `plaintext_dev`, so quit
   routes through `WorkspaceController.shutdown()` — `lock()` for an unlocked encrypted vault, and
   for plaintext a `wal_checkpoint(TRUNCATE)` + `close()` so no `-wal`/`-shm` remain at rest. Not a
@@ -1919,16 +1925,24 @@ the vault and its start path (T2.7) led to these rules, as built in `workspace-v
 - **A journal entry is a full path or nothing.** An entry that is not a full path on this system (on
   Windows a drive letter or `\\`) is judged as one outside the workspace: it never vouches for a stage
   at the start (`fullPathEntry`, `planRekeyJournal`).
-- **Log lines carry no text from the drive.** The key-derivation errors name the parameter's type only,
-  and the create's open errors carry SQLite's code and fixed description, never its message.
+- **Key-derivation and create-open errors carry no text from the drive.** The key-derivation errors
+  name the parameter's type only, and the create's open errors carry SQLite's code and fixed
+  description, never its message. One log line does carry a bounded field from the drive: the
+  newer-format refusal at the unlock ("the vault format was written by a newer build",
+  `registerWorkspaceIpc.ts`) logs `found`, which for a descriptor or rekey-journal `version` written as
+  text, or a `kdf.algo` it does not know, is that text's first 40 characters (`readVaultDescriptorChecked`,
+  `vaultFormatVerdict`); otherwise it is a number or a parameter name and value. The log's redaction
+  (#975, `log-redact.ts`) treats that field as any text when the log is shown, copied or saved: it
+  replaces a known folder, a profile path's account or this computer's account name inside it, and
+  leaves the rest as written.
 - **The pre-password checks of a database file are strict:** the probe opens the file read-only in
   `defensive` mode with `cell_size_check` on and `trusted_schema` off, and the #911 replay's connection
   turns `cell_size_check` on too (`db.ts`; "Vault-overwrite guards" above).
 
 **Residuals** (`known-limitations.md`, "App updates: …"; the follow-up candidates FU-P2-n are P2's): a
-readable `.recovery` with a later file time than `.enc`, beside an existing workspace, is still rolled
-forward at the next unlock, since the app cannot tell it from a failed lock's own copy (it replaces the
-whole workspace visibly, and the store guard bounds what its rows can delete); start-time reads can
+copy placed beside an existing workspace can replace it at the next unlock, since the app keeps a
+failed lock's unencrypted copy for that unlock and cannot authenticate one (the replacement is visible,
+the whole workspace at once, and the store guard bounds what its rows can delete); start-time reads can
 follow a link at a fixed name or a linked folder to a network path before any password (FU-P2-2); the
 preview, export and text-recognition temps are named after the document's id (FU-P2-8); the key
 derivation's worst case inside the bounds is about 55 s ("Key derivation" above).
@@ -1979,7 +1993,7 @@ every imported document readable on a lost drive.
   plaintext. Since the app-update P2 security round only a plaintext copy inside the store folder is
   upgraded this way: one the row places outside the store counts as no stored copy, so the re-index
   imports the original into the store again, or fails as its source missing, and writes or removes
-  nothing outside the store (see "File handling on a drive the app did not prepare" below).
+  nothing outside the store (see "File handling on a drive the app did not prepare" above).
 - The wiring: ingestion receives a `DocumentCipher` from `WorkspaceController.documentCipher()` —
   non-null only for an unlocked encrypted workspace (`plaintext_dev` keeps plaintext copies, as
   labelled).

@@ -409,7 +409,8 @@ As built in P2 (T2.6): the copy's `<G17-ADDRESS>` is the catalogs' `{address}`, 
 constant, `UPDATE_ADDRESS` in `shared/update-address.ts`, which main and the gate both import
 (`workspaceFailureParams`). Until P11c types the real address it is the placeholder
 `https://update-address.invalid` (RFC 2606), so a dev or test build shows
-`https://update-address.invalid/from/<version>` on the lock screen; a `repo-hygiene.test.ts` row fails
+`https://update-address.invalid/from/<version>` in X01's and C01's text on the lock screen (the legend of
+these ids is in §7.6); a `repo-hygiene.test.ts` row fails
 once the app's version moves off 0.1.66 while the placeholder is still there.
 
 ### 3.4 Where the import starts
@@ -1922,8 +1923,9 @@ change, the working files) and [`data-contracts.md`](data-contracts.md) (the sch
     replaces").
 - **(c) A documented residual** (G-43 (c)): a spent newer `.recovery` that is older than `.enc` stays on
   the drive unencrypted after a release-1 unlock. It needs a newer version that crashed while locking
-  and then a "Go back"; it holds the user's own data on the user's own drive, and the next start of the
-  newer version encrypts it again. "Older" is judged by file time alone, so a copy or restore tool that
+  and then a "Go back"; it holds the user's own data on the user's own drive, and the newer version's
+  next unlock removes it as spent (`unlockEncryptedVault`'s #985 branch keeps it only until then, or until
+  a later failed lock's salvage replaces it). "Older" is judged by file time alone, so a copy or restore tool that
   gives `.enc` a later time makes a fresh newer copy read as spent (T2.9 R2-8).
   [`known-limitations.md`](known-limitations.md) records it, with the other limits of P2's reviews.
 
@@ -1969,7 +1971,15 @@ As built in P2 (T2.2, in `main/services/db.ts`; CF-3 answered at P2's entry, Δ-
 ### 7.6 Old-reader behaviors that only release 1 can provide
 
 Each one ships in the oldest sold version because only that version meets the case. As built in P2,
-except W-70 (P3) and the parts of W-68 marked P3 and P11b:
+except W-70 (P3) and the parts of W-68 marked P3 and P11b.
+
+The ids C01–C08 and X01–X03 name texts of the app-update copy deck (a working paper outside the repo)
+by their catalog keys: C01 `main.workspace.schemaUnreadable`; C02 `common.newerVersionText`; C03 and
+C04 `packs.state.newerFormat` and `packs.state.newerFormatTitle`; C05 `packs.addFailed.newerFormat`; C06
+and C07 `skills.reconcile.needsNewerApp.one` and `.other`; C08 `analysis.newerExtractorNote`; X01
+`main.workspace.newer`; X02 `models.newerApp.hint`; X03 `skills.incompatible.title` (the same text as
+`main.skills.incompatible`).
+
 - **A user skill for a newer version says so** (W-65, T2.14): a skill that fails validation while its
   frontmatter parses and carries a well-formed `compatibility.minAppVersion` above the running version
   is filed as `needsNewerApp` instead of the validator's messages (`failedSkillNeedsNewerApp`,
@@ -1982,7 +1992,7 @@ except W-70 (P3) and the parts of W-68 marked P3 and P11b:
 - **A schema this version can't parse says so** (W-68, T2.14): an unlock whose password verified and
   whose decrypted database fails with SQLite's "malformed database schema" (a CORRUPT code), on a file
   whose stamp is not above this build's, answers `workspace_schema_unreadable` with C01 ("Your password
-  is correct, but this version of HilbertRaum can't read the workspace. It was probably last used with
+  is correct, but this version of HilbertRaum can’t read the workspace. It was probably last used with
   a newer version. Your workspace is unchanged. …") instead of the damage copy (`sqliteSchemaUnreadable`,
   `db.ts`; `VaultSchemaUnreadableError`, `workspace-vault.ts` `openFailure`; `registerWorkspaceIpc.ts`).
   The decrypted copy is shredded, `.enc` and the descriptor stay byte for byte, the log and audit lines
@@ -2000,18 +2010,18 @@ except W-70 (P3) and the parts of W-68 marked P3 and P11b:
   key ever had, oldest first, the seven keys release 1 acts on marked `actedOn`; it is in the golden
   manifest. Release 1's lookup also reads the coded form `hr:<key>?<name>=<value>&…` (whole string,
   percent-encoded values), maps a key it knows, and shows C02 ("This text comes from a newer version of
-  HilbertRaum, and this version can't show it.") for one it does not (`renderer/lib/displayMap.ts`).
+  HilbertRaum, and this version can’t show it.") for one it does not (`renderer/lib/displayMap.ts`).
   Release 1 originates no code. The grammar and the duties are in §7.7 ("Stored messages").
 - **"Go back" leaves release 1 a state it can read** (W-70, P3, planned): release 1 stores with
   `gpuAutoDisabled` the engine build it was set under and tries the graphics card again when its own
   engine differs; its unlock names an active model it cannot list instead of failing silently (also the
-  Home screen's row and headline, which until then read "starting" for such a model; T2.7's F-23 review
-  2, m-1).
+  Home screen's row and headline, which until then show "Getting ready…" and the badge "Starting" for
+  such a model; T2.7's F-23 review 2, m-1).
 - **A knowledge pack in a newer ZIM format says so** (W-71, T2.14): release 1 reads the ZIM major version
   (a `uint16` at offset 4; `readZimHeader`, `zimFormatTooNew`, `ZIM_MAX_READABLE_MAJOR = 6`,
   `zim/identity.ts`). Above 6 a file is never handed to `kiwix-manage` or `kiwix-serve`: Add refuses it
   with C05 ("This archive uses a newer ZIM format than this version of HilbertRaum can read, so it
-  wasn't added. …"; add reason `newer-format`); a known row whose file is now such an archive is stored
+  wasn’t added. …"; add reason `newer-format`); a known row whose file is now such an archive is stored
   `unavailable_reason = 'newer_format'` and shows the chip "Newer format" (C03) with C04; a file on the
   drive no row knows gets no row; a chat turn records the outcome `newer-format` ("not searched: newer
   ZIM format"). A restarted `kiwix-serve` resolves the packs again first (T2.14 R1-1); the library file
@@ -2020,9 +2030,10 @@ except W-70 (P3) and the parts of W-68 marked P3 and P11b:
 - **Extractor versions** (G-34 (a), W-72, T2.13): release 1 re-extracts a bank statement or invoice only
   when its `extractor_version` is `NULL` or **lower** than its own (11 and 13). Equal is current; any
   other value (higher, a real, text) is a newer version's: its rows are served as they are, with C08 as
-  the last line of every answer that shows them, never replaced or deleted, and nothing that hangs off
-  them is deleted (`EXTRACTOR_VERDICT_SQL`, `extractorVerdict`, `holdsNewerExtraction`,
-  `skills/run.ts`). A deliberate rollback of a bad extractor ships a higher-numbered one.
+  the last line of every answer that shows them, never replaced or deleted by an extraction, and nothing
+  that hangs off them is deleted by one (`EXTRACTOR_VERDICT_SQL`, `extractorVerdict`, `holdsNewerExtraction`,
+  `skills/run.ts`; the document's delete and re-index still remove them, §7.7 "Extractions"). A
+  deliberate rollback of a bad extractor ships a higher-numbered one.
 
 ### 7.7 Duties of every later writer of workspace data (F-27, W-64)
 
@@ -2035,7 +2046,9 @@ same list in short form.
 
 How to read a line: **Code** names the file and function release 1's behavior lives in, below
 `apps/desktop/src/`. **Proof** names the test that pins it, below `apps/desktop/tests/`, by file and
-row title. The bracket at the end names the source of the duty. "The stamp" is the database's
+row title. The bracket at the end names the source of the duty: "F-27 review" is the first review of
+the list as T2.11 wrote it, "F-27 R1" and "F-27 R2" its two later reviews (each duty against the code;
+what the list missed), all P2 working papers outside the repo. "The stamp" is the database's
 `PRAGMA user_version`; "the data key" is the key a version-2 descriptor wraps. File names are those of
 the workspace database, `hilbertraum.sqlite`.
 
@@ -2061,16 +2074,37 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   lists, and at every open it creates again any of its tables, columns and indexes that is missing
   (`CREATE TABLE IF NOT EXISTS`, `ensureColumn`). A change to one of its tables can therefore break its
   writes every time: a `NOT NULL` column with no default, a `UNIQUE` index its rows can violate, a
-  `CHECK` or `STRICT` typing its values can fail, a trigger that raises. And a table or column of its
-  own that is dropped or renamed comes back empty: release 1 reads `NULL` there and writes there.
-  Below a higher stamp a later version changes release 1's tables only by adding columns that are
-  nullable or have a default, and adds only tables, indexes and triggers release 1's writes cannot
-  trip. Anything else ships with a higher stamp (the line on schema text, below).
+  `CHECK` or `STRICT` typing its values can fail, a trigger that raises. A table of its own that is
+  dropped or renamed comes back empty, and so does a column it adds by `ensureColumn`: release 1 reads
+  `NULL` there and writes there. A column of a table's first definition does not come back (the table
+  is there, so nothing is created): release 1's statements that name it fail with "no such column", and
+  when one of its indexes names it, the open's `CREATE INDEX IF NOT EXISTS` fails and every unlock
+  answers "Could not open". So does an object of a later version under one of release 1's names in
+  another kind: a view left at the name of one of its tables (`CREATE TABLE IF NOT EXISTS` passes over
+  it, then `CREATE INDEX` and `ALTER TABLE` fail), or a table, index or trigger at the name of one of
+  release 1's of another kind. Below a higher stamp a later version changes release 1's tables only by
+  adding columns that are nullable or have a default, adds only tables, indexes and triggers release
+  1's writes cannot trip, and names none of them as release 1 names its own. Anything else ships with
+  a higher stamp (the line on schema text, below).
   Code: `main/services/db.ts` `SCHEMA`, `ensureColumn`, `applyPragmasAndMigrations`; the `INSERT`
   statements of `main/services/ingestion/index.ts` and `main/services/chat.ts`.
   Proof: `unit/db-user-version.test.ts`, "an existing pre-stamp database (version 0) upgrades in place;
   every later open writes the stamp again, never user_version" (the re-creation); no row yet feeds a
-  later version's constraint to release 1's writes. [F-27 review M-4]
+  later version's constraint to release 1's writes, drops a column of a first definition or leaves a
+  view at a table's name (the view case was probed on Node 24.13.0's SQLite in the review). [F-27
+  review M-4; F-27 R1 m-2, R2 m-6]
+- **Times in release 1's columns are `toISOString()` text.** Release 1 writes the times it stores (its
+  `created_at`, `updated_at` and other `…_at` columns, all `TEXT`) as `new Date().toISOString()`
+  (`2026-11-25T10:00:00.000Z`) and orders and compares stored times as
+  text: the turns of a chat ("`messages` rows keep their rowids"), a document's newest statement or
+  invoice ("A document's newest row is the newer version's"), the activity log it prunes
+  ("`runtime_events` is a short log"), the reset of work left in progress (`updated_at < ?`). A later
+  version writes every time in a column release 1 reads in that form: another form sorts out of turn
+  in release 1, so a row is reset, served or pruned when it should not be.
+  Code: `main/services/chat.ts` (the turn queries, `ORDER BY created_at, rowid`);
+  `main/services/skills/run.ts` `latestBankStatementId`; `main/services/audit.ts` `pruneAuditEvents`;
+  `main/services/ingestion/index.ts` `reconcileStuckDocuments`. Proof: none for a time in another form.
+  [F-27 R1 m-8]
 - **Nothing in a schema object release 1 meets that its SQLite lacks.** Release 1 runs every statement
   on the SQLite built into its own runtime (the version is recorded at the Kit tag, §7.6). A trigger,
   generated column, `CHECK` or index expression on a table release 1 reads or writes runs inside
@@ -2147,11 +2181,31 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   plus a digit 2 to 9 at `.enc` or at a staged file (`*.enc.new`). It reads the frame of those files
   only. So: a new key derivation is a new `kdf.algo` value; a new frame for the database is `HRAUMEN2`
   to `HRAUMEN9` (any other eighth byte reads as damage), and after those a higher descriptor version.
-  A stage in a new frame locks release 1 out of the whole workspace until it is gone.
+  A stage in a new frame locks release 1 out of the whole workspace until it is gone. Below a higher
+  descriptor version, release 1 checks the descriptor's shape before its `kdf.algo`: `mode`
+  `encrypted`, a `kdf` object, a non-empty `saltB64` and `verifier`, and under version 2 a `dataKey`.
+  A new derivation that drops one of them (a key wrapped by a device, no salt) reads as an unreadable
+  key file, and the unlock asks for it to be restored: such a change raises the descriptor version.
   Code: `main/services/workspace-vault.ts` `vaultFormatVerdict`, `readVaultDescriptorChecked`,
   `stagedRekeyFiles`; `main/services/security/crypto.ts` `classifyFrameMagic`.
   Proof: `integration/workspace-vault-format-guard.test.ts`, "a vault a newer build wrote is refused at
-  startup and at unlock, and left byte for byte (#845)". [W-64, F-9]
+  startup and at unlock, and left byte for byte (#845)"; no row feeds a new `kdf.algo` without one of
+  the shape's fields. [W-64, F-9; F-27 R1 m-1]
+- **A workspace keeps `config/workspace.json`, whatever its format.** Release 1 knows that a workspace
+  exists by two files only, `config/workspace.json` (in any form: one it can read, one it cannot, one
+  in a newer format) and `workspace/hilbertraum.sqlite.enc`, or by a stage or journal it refuses as
+  newer (the line above). With none of them it reports no workspace and offers to create one,
+  in the same folders: its start deletes `hilbertraum.sqlite.enc.new` (the line on stages, below), and
+  its create refuses what a newer version stamped at the database's names (#985), sets aside what else
+  it finds there on a build that allows no plaintext workspace (`setLeftoversAside`), and writes its
+  own descriptor and `.enc` beside whatever else a later version keeps there. A later
+  layout that moves or renames both files (a descriptor per profile, a database split in parts) still
+  keeps a file at `config/workspace.json` that release 1 refuses (the line above): otherwise a "Go
+  back" offers a second, empty workspace over it.
+  Code: `main/services/workspace-vault.ts` `WorkspaceController.vaultExistsOnDisk`, `getState`,
+  `createEncryptedVaultOnDisk`. Proof: `integration/workspace-vault.test.ts`, "a working database with
+  its -wal and -shm and no key file: the create moves the three aside unchanged and starts an empty
+  workspace (F-3)"; no row has a later layout without both files. [F-27 R1 M-3]
 - **Stored document and image copies stay `HRAUMEN1` while the descriptor version is 2.** Release 1
   does not read the frame of a stored copy (`documents/<id><ext>.enc`, `images/<id><ext>.enc`) at the
   start or the unlock: it opens the workspace. A copy in another frame then fails wherever release 1
@@ -2166,22 +2220,35 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   `failureRowMessage`. Proof: `integration/workspace-vault-format-guard.test.ts`, the row "a staged
   document copy in a newer frame beside a v2 descriptor, no journal" (a stage is refused); no row yet
   feeds a stored copy in a newer frame. [F-27 review M-2]
-- **Key-derivation parameters stay inside release 1's bounds under descriptor version 2.** Release 1
-  derives with `scrypt` or `argon2id` only inside: key length 32; scrypt `N` a power of two from 1,024
-  to 2^22, `r` 1 to 32, `p` 1 to 16; argon2id `m` 8 to 2^20 KiB (1 GiB), `t` 1 to 8, `p` 1 to 16. The
-  argon2id upper bounds were lowered in P2's security round (owner, 2026-11-25), so a descriptor inside
+- **Key-derivation parameters stay inside what release 1 derives under descriptor version 2.** Release
+  1 accepts `scrypt` or `argon2id` only inside its bounds: key length 32; scrypt `N` a power of two from
+  1,024 to 2^22, `r` 1 to 32, `p` 1 to 16; argon2id `m` 8 to 2^20 KiB (1 GiB), `t` 1 to 8, `p` 1 to 16.
+  Inside them it derives only where its two libraries do. Scrypt runs with `maxmem` 256 MiB and needs
+  `N` below 2^(16·`r`): it derives exactly when `N`·`r` is below 2^21 and, with `r` 1, `N` is at most
+  2^15 (Node's check under OpenSSL is 128·`r`·(`N` + `p` + 2) bytes at most 256 MiB, which for these
+  values is the same region; Electron's BoringSSL counts `N` + `p` + 1 blocks, the same region again).
+  So `N` 2^17 with `r` 8, or 2^19 with `r` 3, derives, and 2^18 with `r` 8, 2^20 with `r` 2, or 2^16 and
+  above with `r` 1 does not. Argon2id (`@noble/hashes`) needs `m` at least 8·`p` (`m` 8 to 127 with `p`
+  16 fails) and a salt of at least 8 bytes (release 1 writes 16). The argon2id upper bounds were lowered
+  in P2's security round (owner, 2026-11-25), so a descriptor inside
   them cannot keep an unlock attempt busy for many minutes (the worst case inside them measured about
   55 s of main-thread work on the reviewer's box, longer on a slower laptop; T2.7 security re-check 1);
   every descriptor a published release wrote (argon2id `m` 19,456, `t` 2, `p` 1) is far inside them. A parameter above its upper bound reads as
   "newer", refused before anything is written: a later version that needs more raises the descriptor
   version. One below a lower bound, of another type, or another key length fails the unlock as "Could
-  not open", after the start's steps have run; its error names the type only. A later version that
-  wants release 1 to open the workspace stays inside the bounds.
+  not open", after the start's steps have run; its error names the type only. So does a descriptor
+  inside the bounds that release 1 cannot derive with: it is not "newer", and every release-1 unlock of
+  it fails as "Could not open" after the start's steps and the unlock's rekey recovery have run
+  (nothing is lost, and the newer version still opens it). A later version that wants release 1 to
+  open the workspace stays inside the region release 1 derives.
   Code: `main/services/security/crypto.ts` `KDF_UPPER_BOUNDS`, `validateKdfBounds`,
-  `kdfParamAboveBounds`. Proof: `unit/crypto.test.ts` (the out-of-bounds table);
-  `unit/crypto-argon2-maxmem.test.ts`; `integration/workspace-vault-format-guard.test.ts`, the row "a
-  failed lock’s leftovers beside a v2 descriptor whose argon2id m is above this build’s bound".
-  [W-64; T2.9 R1-6 as built; T2.7 security L-1]
+  `kdfParamAboveBounds`, `deriveKey` (the `maxmem` of each call). Proof: `unit/crypto.test.ts` (the
+  out-of-bounds table); `unit/crypto-argon2-maxmem.test.ts`; `integration/workspace-vault-format-guard.test.ts`,
+  the row "a failed lock’s leftovers beside a v2 descriptor whose argon2id m is above this build’s
+  bound". No row derives at a value inside the bounds that release 1 cannot derive: the corners above
+  were run on Node 24.13.0 (OpenSSL) in P2's docs round; Electron's BoringSSL region follows from its
+  memory check and was not run (a named proof gap). [W-64; T2.9 R1-6 as
+  built; T2.7 security L-1; F-27 R1 M-1]
 - **No field that matters under descriptor version 2 or journal version 1.** Release 1 builds the
   descriptor anew from its six fields (`version`, `mode`, `kdf`, `saltB64`, `verifier`, `dataKey`), with
   its own default key derivation, at every password change, and a version-1 journal anew from its three
@@ -2238,7 +2305,8 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   for (#973)"; `integration/vault-recovery-guards.test.ts`, "a password change whose staged database
   cannot be moved into place (#1027)" and "a stale staged copy the unlock cannot delete: the workspace
   opens at .enc, and the lock of that session deletes the stage (#1027)". [Δ-P2-2 (D-2), #1027; F-27 (b)]
-- **No file named `*.enc.new` in `documents/` or `images/` that is not such a stage.** One no entry
+- **No file named `*.enc.new` in `documents/` or `images/` that is not a stage, under the data key the
+  descriptor wraps, of the stored copy of that name.** One no entry
   vouches for: with its stored copy gone, release 1's start renames it into place; beside a stored
   copy, the unlock swaps it in only when it opens under the data key and the stored copy does not, and
   deletes it otherwise (also when its length differs from the stored copy's, or another name shares its
@@ -2250,7 +2318,8 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
 - **`hilbertraum.sqlite.recovery` is a plaintext SQLite copy that a failed lock or a crash left, and
   nothing else.** At the unlock, after the password, release 1 does one of four things with a file at
   that name. Stamped above its own and possibly the freshest copy (not older than `.enc` by file time,
-  or `.enc` missing): it refuses the unlock and writes nothing. Stamped above its own and older than
+  or `.enc` missing): it refuses the unlock and writes nothing after that (the steps before the
+  password check, the rekey recovery among them, may have written; §7.2). Stamped above its own and older than
   `.enc`: it leaves the file, unencrypted, and opens `.enc`. A database it can read that is newer than
   `.enc` (or `.enc` missing): it encrypts the file over `.enc` and shreds it. Anything else (older, or
   no SQLite database): it shreds the file. And a start that keeps a working copy first shreds whatever
@@ -2278,6 +2347,29 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   Proof: `integration/workspace-vault.test.ts`, "CODE-1b: a mid-session crash leftover (live -wal/-shm) is still shredded — the documented power-cut
   trade-off" and "#892: live sidecars beside the session’s working file %s: swept as before, and the
   notice". [W-64]
+- **The working database stays in WAL mode, and no session relies on `hilbertraum.sqlite-journal`.**
+  Release 1 runs the workspace database in WAL mode (every build since before v0.1.50) and tells a
+  clean close from a crash by the `-wal` and `-shm` alone. A rollback journal is no name its start
+  knows: the sweep leaves a `hilbertraum.sqlite-journal`, and the salvage can keep a working file
+  beside one (no `-wal` or `-shm`) as `.recovery` without it. Its unlock shreds the journal before it decrypts
+  `.enc`, since SQLite would play it back into that fresh copy at the open's first read (pages of a
+  later session mixed into the snapshot, or "damaged" on an intact `.enc`). The one exception is an
+  unlock that has just rolled `.recovery` forward: the copy it decrypts is then that kept working file,
+  and SQLite plays the journal back into it at the open. A create that opens a new database beside a
+  journal has SQLite delete it, unshredded (the create sets the working file, its `-wal` and `-shm`
+  aside, not the journal). A later version runs the working database in WAL mode in every session and
+  never relies on a `-journal` surviving a release-1 start or unlock: a session it ends mid-transaction
+  in another journal mode is lost in release 1, as the line above says of any session that ended
+  without a lock, or comes back without that transaction.
+  Code: `main/services/workspace-vault.ts` `unlockEncryptedVault` (the `-journal` shred before the
+  decrypt), `cleanSidecars`, `preserveNewerPlaintext`, `setLeftoversAside`; `main/services/db.ts`
+  `applyPragmasAndMigrations` (`PRAGMA journal_mode = WAL`).
+  Proof: `integration/workspace-vault.test.ts`, "a hot -journal a rollback-mode session left beside an
+  intact .enc: the unlock removes it first and opens the snapshot, never damaged (F-27 R1 M-2)" and "a
+  torn working file with its own hot -journal, kept as .recovery: the unlock rolls it forward and leaves
+  the journal for SQLite to play back (F-27 R1 M-2)"; no row has a create beside a journal (SQLite's
+  delete of one beside an empty database was run on Node 24.13.0 in P2's docs round). [F-27 R1 M-2,
+  m-12]
 
 **File names in the workspace**
 
@@ -2353,9 +2445,11 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   anew when release 1 records a lost session), `working-copy-lost.json` (replaced when release 1 records
   one, and removed once it reads as release 1's own: `"v": 1` with a text `enc`). In `documents/` and
   `images/`: `<stored copy>.tmp`. In `logs/`: `app.log.enc` and its `app.log.enc.tmp` (written anew
-  whenever release 1 saves its log, unless the file is in a newer frame), `app.1.log.enc` (replaced when the log rotates, unless in
+  whenever release 1 saves its log, unless the file is in a newer frame), `app.1.log.enc` and its
+  `app.1.log.enc.tmp` (replaced when the log rotates, unless in
   a newer frame, and removed when a journal's `remove` list names a file of that name), and a plain
-  `app.log` or `app.1.log` (shredded on an encrypted workspace).
+  `app.log` or `app.1.log` (shredded on an encrypted workspace). And `workspace/hilbertraum.sqlite-journal`
+  (shredded by an unlock, or deleted by SQLite at a create: the line on WAL mode, above).
   Code: `main/services/workspace-vault.ts` `openWriteTemp`, `encryptFile`, `decryptFile`,
   `setLeftoversAside`, `recoverPendingRekey`, `clearRekeyJournal`,
   `quarantineName`, `settleRekeyJournal`, `writeVaultDescriptor`, `writeWorkingCopyLostMarker`,
@@ -2378,11 +2472,14 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   `chunking`, `embedding`, `indexed`, `failed` and `deleted`. Release 1 reads any other value as
   `failed`, searches and scopes only `indexed` documents, and offers "Try again" on a failed row
   whose reason it cannot name; that re-index removes the document's statements and invoices (see
-  "Extractions"). A later version keeps a state of its own in a column of its own.
-  Code: `main/services/ingestion/index.ts` `toStatus`; `main/services/rag/index.ts` and
-  `main/services/skills/scope-documents.ts` (`d.status = 'indexed'`);
+  "Extractions"). Release 1 never stores `deleted` (it builds that status in memory for a row that is
+  gone), but it hides a stored `deleted` row from its lists: such a document is out of search, cannot
+  be deleted by the user there, and keeps its stored copy and chunks. A later version keeps a state of
+  its own in a column of its own.
+  Code: `main/services/ingestion/index.ts` `toStatus`, `listDocuments` (`status != 'deleted'`);
+  `main/services/rag/index.ts` and `main/services/skills/scope-documents.ts` (`d.status = 'indexed'`);
   `renderer/screens/documents/format.tsx` `isRetryableFailure`. Proof: none yet for a value release 1
-  does not know. [F-27 review M-5 (a)]
+  does not know. [F-27 review M-5 (a); F-27 R2 m-7]
 - **Work left in progress is reset by release 1.** Whenever its documents list is read while nothing
   of its own runs, release 1 resets what it finds in progress. A document that is `queued`,
   `extracting`, `chunking` or `embedding` becomes `failed` with the reason "interrupted". A
@@ -2402,21 +2499,85 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   Code: `main/services/ingestion/index.ts` `prepareDocument`; `main/services/ingestion/parsers/index.ts`
   `selectParser`. Proof: `integration/ingestion.test.ts`, "marks an unsupported file type as failed"; no
   row yet renames a title. [F-27 review M-5 (c)]
+- **Chunk ids do not survive a release-1 re-index.** Every release-1 re-index of a document ("Re-index",
+  OCR, "Re-index for deep index", "Re-index all") deletes its `embeddings`, `chunks`, `tree_nodes` (with their edges),
+  `extraction_records` and statements and invoices, sets its `tree_status` and `extract_status` to
+  `stale`, and writes the chunks again under new random ids. The text can differ from before: an OCR run
+  adds pages, and a re-index whose stored copy is gone imports the original file again. A later
+  version's own derived data is not told. So whatever a later version derives from a document's text or
+  keys by a chunk, tree node or extraction record id either hangs off `chunks(id)` or `documents(id)`
+  with `ON DELETE CASCADE` (it then goes with the re-index), or is keyed to the document and a position
+  of its own and checked against `documents.fully_chunked` (release 1 writes the time of every
+  successful index there) before it is used; a state column of its own is never the only proof that
+  such data is current. A later version that stores its vectors under a new model id makes release 1
+  offer this re-index for every document ("Search", below).
+  Code: `main/services/ingestion/index.ts` `prepareDocument` (the chunk-replace transaction),
+  `finalizeDocument` (`fully_chunked`). Proof: `integration/ingestion.test.ts`, "re-indexes a document,
+  replacing its chunks"; `integration/whole-doc-analysis.test.ts`, "re-index tears the tree down
+  (stale), and a rebuild reuses the cache despite chunk-id churn"; no row hangs a later table off a
+  chunk. [F-27 R1 M-4, R2 M-2]
+- **A document release 1 could not have indexed leaves search at any release-1 re-index.** The re-index
+  sets the document to `extracting` first and fails it (`failed`, with one of release 1's own reasons)
+  for a file above its size limits (1 GiB, 64 MiB for the text formats), a type it has no parser for,
+  more than 1,000 chunks, or a parser's cap or timeout. Its stored copy and its old chunks stay, but
+  release 1 searches only `indexed` documents, and for a type it cannot read it offers no retry. "Re-index
+  all" runs this over every document. A later version that adds a file type or raises a limit knows
+  this; when it meets such a row back from release 1 it indexes the document again itself.
+  Code: `main/services/ingestion/index.ts` `prepareDocument` (the size check, `selectParser`, the
+  over-cap gate, the catch that stores `failed`); `main/services/ingestion/limits.ts`
+  `DEFAULT_INGESTION_LIMITS`; `main/services/ingestion/chunker.ts` `MAX_CHUNKS_PER_DOCUMENT`. Proof:
+  `integration/ingestion-limits.test.ts`, "M13/C4: re-indexing an over-cap document fails BEFORE
+  deleting its existing chunks, and clears fully_chunked"; `integration/ingestion.test.ts`, "marks an
+  unsupported file type as failed". [F-27 R2 M-4]
 - **A row of a new kind never goes into `messages`.** To release 1 every `messages` row whose `kind`
-  is not `'compaction'` is a message of the chat: it lists it, sends it to the model and, through the
-  `messages_fts_ai` trigger, finds it in chat search. A later version keeps a tool call, a hidden note
-  or any other new kind of row in a table of its own.
+  is not `'compaction'` is a message of the chat: it lists it and, through the `messages_fts_ai`
+  trigger, finds it in chat search; it sends it to the model when its `role` is `user` or `assistant`,
+  and lists any other role as `system`, not sent. A regenerate takes the chat's last listed row: when
+  that is not an `assistant` row, it deletes nothing and answers after it. The newest `'compaction'`
+  row of a chat (by rowid) is the chat's summary: release 1 puts its `content` into the prompt as the
+  summary and skips every turn up to its `covers_through_rowid` (`NULL` reads as 0, nothing skipped).
+  A later version keeps a tool call, a hidden note or any other new kind of row in a table of its own,
+  and writes a `'compaction'` row only as release 1 reads one: plain summary text in `content` that
+  covers every turn up to `covers_through_rowid`, newest last.
   Code: `main/services/chat.ts` (every transcript query filters `kind IS NOT 'compaction'` and nothing
-  else); `main/services/db.ts` `MESSAGES_FTS_TRIGGERS`. Proof: `integration/conversation-search.test.ts`
-  and `integration/chat-compaction.test.ts` pin the one kind release 1 knows; no row yet feeds another.
-  [F-27 review M-6]
+  else; `rowToMessage`, `listConversationTurns`, `getLatestCheckpoint`, `deleteLastAssistantMessage`);
+  `main/services/db.ts` `MESSAGES_FTS_TRIGGERS`. Proof: `integration/conversation-search.test.ts`
+  and `integration/chat-compaction.test.ts` pin the one kind release 1 knows; no row yet feeds another
+  kind, role or compaction form. [F-27 review M-6; F-27 R1 m-3, R2 m-5]
 - **`messages` rows keep their rowids.** Release 1 orders the turns of a chat by `created_at` and then
   by the table's implicit `rowid`, and a checkpoint names the last row it covers by that rowid
   (`covers_through_rowid`). A later version never renumbers them: no rebuild of `messages` that does
-  not copy `rowid`, and no `VACUUM`, which may renumber an implicit rowid.
+  not copy `rowid`, and no `VACUUM`, which may renumber an implicit rowid (a snapshot by `VACUUM INTO`
+  is §7.8's question). Release 1 itself gives one row a new rowid: the answer a failed regenerate puts
+  back (the next line).
   Code: `main/services/chat.ts` (the queries ordered by `m.rowid`, and those that read
   `covers_through_rowid`). Proof: `integration/chat-compaction.test.ts` (the checkpoint rows); no row
-  yet renumbers a rowid. [F-27 review M-6]
+  yet renumbers a rowid. [F-27 review M-6; F-27 R1 m-11, R2 m-4]
+- **What hangs off a chat's last answer does not survive a release-1 regenerate, a failed one
+  included.** A regenerate deletes the chat's last answer (the delete cascades) and, when the new answer
+  fails, is stopped before its first token, or is cut by a model stop, a lock or a quit, inserts the old
+  row again: the same `id` and `created_at`, release 1's 17 columns only, its `result_tables` rows, and a
+  new rowid. A successful regenerate removes the row for good. (One with a review on it is refused.) A
+  later version keeps what must survive that in a table of its own, keyed by the message `id`, with no
+  foreign key onto `messages`, and removes its own orphans; a column of its own on `messages` reads
+  `NULL` (or its default) on a row put back; it never names a `messages` row by rowid except as release
+  1's checkpoints do.
+  Code: `main/services/chat.ts` `deleteLastAssistantMessage`, `restoreMessage`;
+  `main/ipc/chat-stream.ts` (the regenerate's restore legs). Proof:
+  `integration/regenerate-result-table-restore.test.ts`, "a regenerate whose grounded generation FAILS
+  restores the table byte-identically", "a Stop BEFORE the first token restores the table
+  byte-identically" and "CONTROL — a SUCCESSFUL regenerate still drops the old table (the answer was
+  replaced)"; no row feeds a later version's column or table. [F-27 R2 M-1]
+- **A chat's scope narrows only through release 1's fields of `scope_v2_json`.** Release 1 reads
+  `collectionIds`, `documentIds`, `packIds`, `includeArchived` and `documentsOff` there and ignores
+  every other field. A scope a later version narrows only by a field of its own (tags, folders, an
+  exclude list, a date range) is, to release 1, an object with empty lists: the explicit "All
+  documents", so release 1 answers that chat from the whole library. Its next scope change stores its
+  own fields only, and the later field is gone. A later version resolves a narrowing of its own into
+  `documentIds` (or `collectionIds`) as well, or accepts that.
+  Code: `main/services/collections.ts` `parseDocumentScope`; `main/services/chat.ts`
+  `serializeDocumentScope`. Proof: `integration/zim-regressions.test.ts` (the `documentsOff` parse rows);
+  no row feeds a field release 1 does not know. [F-27 R2 M-8]
 - **The two built-in collections exist, and "in no collection" does not survive a release-1 open.** At
   every open release 1 creates a collection of `type` `library` and one of `type` `temporary` when
   there is none, and files into the Library every `indexed` document that has no membership and a
@@ -2424,16 +2585,67 @@ workspace rows too, are in §6.11, except W-65's line in the group "Knowledge pa
   Code: `main/services/db.ts` `seedCollections`. Proof: `integration/collections.test.ts`, "seeds
   exactly one Library and one Temporary, undeletable + idempotent on re-open" and "files indexed
   non-generated unfiled docs into Library; skips generated + unindexed". [F-27 review m-12]
+- **Every place a document is filed is a `document_collections` row.** Release 1's "Delete project
+  with its documents" deletes, with its stored copy, every document of that project that has no
+  `document_collections` row for another collection (a Library member is never deleted so). A later
+  version that files documents by any other means (a table of its own for folders, tags or shared
+  spaces, a nested project, a link from a chat) also keeps a membership row release 1 can see for each
+  document that must survive that delete.
+  Code: `main/services/collections.ts` `projectOnlyDocumentIds`; `main/ipc/registerCollectionsIpc.ts`
+  (the delete handler, which runs `deleteDocument` on each). Proof:
+  `integration/collections-ipc.test.ts`, "delete-project "withDocuments" never deletes a Library member
+  (C2)"; no row files a document by another means. [F-27 R2 M-5, R1 m-6]
 - **A new shape of stored JSON is a new column.** Release 1's re-index of a PDF reuses the recognized
   pages in `documents.ocr_json`: a `pages` list whose entries have a whole-number `pageNumber` and a
   text `text`. In another shape it finds no page: in a PDF with a text layer the text of the scanned
   pages is gone from the index without a word; a PDF that is all scan fails the re-index as a scan, so
   it leaves search and "Make searchable" is offered again (T2.11 re-check n-2). The other JSON columns
-  it reads tolerantly read as absent in a shape it does not know.
+  it reads tolerantly read as absent in a shape it does not know. And release 1 writes these JSON
+  columns whole whenever it writes them, so a field of a later version's there lasts only until then:
+  `conversations.scope_v2_json` and `scope_json` (every scope change), `documents.summary_json` (every
+  summary), `tree_meta_json` (every deep-index build), `scanned_pages_json` (every PDF re-index),
+  `ocr_json` (every OCR run), `pending_destination_json` (cleared when the document is filed),
+  `messages.skill_offer_json` and `evidence_reviews.freshness_ack_json`.
   Code: `main/services/ingestion/index.ts` `parseOcr`, `prepareDocument`;
-  `main/services/ingestion/parsers/pdf.ts` (the scan check, `PDF_SCAN_DETECTED_MESSAGE`). Proof:
+  `main/services/ingestion/parsers/pdf.ts` (the scan check, `PDF_SCAN_DETECTED_MESSAGE`); the writers
+  of those columns (`chat.ts`, `collections.ts`, `ingestion/index.ts`, `analysis/tree-build.ts`,
+  `analysis/node-vectors.ts`, `evidence-pack/freshness.ts`). Proof:
   `integration/ocr-task.test.ts`, "preview shows the recognized per-page text and re-index reuses it (no
-  re-OCR)"; no row yet feeds another shape. [F-27 review m-11]
+  re-OCR)"; no row yet feeds another shape or a field of a later version's. [F-27 review m-11; F-27 R2
+  m-1]
+- **A column release 1 reads as a closed set holds only release 1's values.** Release 1 reads any other
+  value as its default, acts on it so, and stores its own value over it when the user acts:
+  `documents.lifecycle` (anything but `temporary` and `archived` is `permanent`, and only `archived` is
+  kept out of search, so a document a later version marks as binned, hidden or expired is searched and
+  quoted); `evidence_reviews.status` (anything but `ready` is `draft`: editable, and "Mark ready" stores
+  `ready` over it); `evidence_review_items.decision` (`not_reviewed`, which keeps a review from being
+  ready), `kind` (`block`), `block_kind` and `evidence_review_links.reviewer_relation` (none),
+  `link_origin` (`reviewer`); `conversations.mode` (`chat`); `messages.role` (`system`, above);
+  `messages.truncated_cause` (`context`: "raise the context size"); `collections.type` (any type but
+  `library` and `temporary` is an ordinary project, deletable with its documents); and every
+  `image_sessions` row is an image session ("Clear history" deletes every row and shreds each bare
+  `stored_name` in `images/`). A later version puts a new state, kind or cause into a column or table
+  of its own; a document that must stay out of release 1's answers is `archived` in
+  `documents.lifecycle`, the one value release 1 keeps out of search.
+  Code: `main/services/collections.ts` `docLifecycle`, `rowToCollection`; `main/services/retrieval-scope.ts`
+  (the `archived` exclusion); `main/services/evidence-reviews.ts` `normalizeStatus`, `normalizeDecision`,
+  `normalizeItemKind`, `normalizeBlockKind`, `normalizeLinkOrigin`, `normalizeRelation`;
+  `main/services/chat.ts` `rowToConversation`, `rowToMessage`, `parseTruncationCause`;
+  `main/services/vision/history.ts` `clearImageSessions`. Proof: none feeds a value release 1 does not
+  know. [F-27 R2 M-7, R1 m-7]
+- **`runtime_events` is a short log, not a store.** Whenever release 1 records an event and the table
+  would hold more than 5,250 rows, it deletes all but the newest 5,000, ordered by `created_at` as text
+  and then rowid, whatever the event type. Its Settings → Diagnostics "Export" writes every kept row's
+  `message` and `metadata_json` as stored to a plaintext file the user picks (`activity-log.json`), and
+  the list shows an `event_type` it does not know by its raw name. A later version writes `created_at`
+  as `toISOString()` does, puts no content, name, path or secret into `message` or `metadata_json`,
+  picks type names that read well raw, and keeps nothing there that it needs later (a history it must
+  keep, such as §8.6's update events beyond release 1's 5,000 newest, is a table of its own).
+  Code: `main/services/audit.ts` `recordEvent`, `pruneAuditEvents`, `AUDIT_MAX_ROWS`,
+  `AUDIT_PRUNE_SLACK`; `main/ipc/registerAuditIpc.ts` (the export);
+  `renderer/screens/settings/DiagnosticsTab.tsx` `auditLabel`. Proof: `integration/audit.test.ts`,
+  "recordEvent prunes back to the ceiling once an insert crosses ceiling + slack"; no row prunes a later
+  version's event. [F-27 R1 M-5, R2 M-6]
 
 **Stored messages**
 
@@ -2635,6 +2847,18 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
   Proof: `unit/benchmark-schema.test.ts`; `unit/settings-write-gate.test.ts`, "drops an entry with no
   machine identity, and keeps one record per machine" and "drops a record that is not a placement, and
   one filed under the wrong model id". [W-64, which says three: the code has four]
+- **`local_api_token` row 1 holds the local API key itself, in release 1's form.** Whenever release 1
+  uses the key (a local API request, Settings showing it), it serves the row's `token` as the
+  credential when it starts `hr-` and has at least nine more characters, and otherwise writes a new
+  random key over the row. A later version that keeps keys in another form (a hash, another prefix,
+  more than one key) uses a table of its own and leaves this row to release 1: a key in another form
+  is replaced the first time release 1 uses the API, and every client the user set up then fails in the
+  later version; and a hash stored there with the `hr-` prefix would be accepted by release 1 as the
+  key itself.
+  Code: `main/services/local-api/token.ts` `getOrCreateToken`, `isWellFormedToken`;
+  `main/services/local-api/lifecycle.ts`; `main/ipc/registerLocalApiIpc.ts`. Proof:
+  `unit/local-api-token.test.ts`, "re-mints over a tampered/malformed stored row instead of serving it
+  as a credential". [F-27 R2 M-9]
 
 **Search**
 
@@ -2660,14 +2884,25 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
   vector tagged with its active embedding model's id as if its own recipe made it, and reuses a cached
   summary filed under the same content hash and model id as if its own prompt made it. A later version
   that changes how a vector or a summary is made (the prefix, the pooling, the size, the prompt) stores
-  the result under another model id.
+  the result under another model id, and its vectors in a table of its own: `embeddings` holds one row
+  per chunk (`chunk_id` is its primary key), so a vector of a new recipe written there replaces release
+  1's. While "Go back" is offered, the rows under release 1's embedding model stay, and the
+  `activeEmbeddingModelId` setting stays a model release 1 lists. Otherwise release 1 finds nothing by
+  meaning, flags every indexed document as needing a re-index and offers "Re-index all", which runs
+  the re-index of "Chunk ids do not survive a release-1 re-index" (and removes every statement, invoice
+  and correction, "Extractions") over the whole library. `summary_cache` is a cache release 1 trims:
+  each deep-index build deletes its oldest rows beyond 50,000 (by default) by `created_at`, whatever
+  their model id; nothing else lives there.
   Code: `main/services/embeddings/index.ts` (the `embedding_model_id` filter of the vector search);
   `main/services/embeddings/resident-cache.ts`; `main/services/analysis/tree-build.ts` (the
-  `summary_cache` lookup by `content_hash` and `model_id`); `main/services/analysis/node-vectors.ts`.
+  `summary_cache` lookup by `content_hash` and `model_id`); `main/services/analysis/node-vectors.ts`;
+  `main/services/ingestion/index.ts` `listDocuments` (`staleEmbeddings`); `main/services/db.ts`
+  (`embeddings`); `main/services/analysis/summary-cache.ts` `evictSummaryCache`.
   Proof: `integration/vector-search-resident-iteration.test.ts`, "filters search to the active
   embedding_model_id so a mock→real switch cannot blend spaces (Phase 10)";
-  `integration/whole-doc-analysis.test.ts`, "a rebuild over a warm summary_cache costs 0 model calls".
-  [W-64]
+  `integration/whole-doc-analysis.test.ts`, "a rebuild over a warm summary_cache costs 0 model calls";
+  `unit/summary-cache-eviction.test.ts`, "prunes a cache past the HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS cap
+  down to the cap, keeping the NEWEST rows". [W-64; F-27 R1 M-4, R2 M-3, m-3]
 
 **Knowledge packs and skills**
 
@@ -2686,6 +2921,18 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
   stored as newer_format, and readable again once the file is" and "an unavailable reason this version
   does not know (a newer version’s) reads as unavailable with no reason, and the next reconcile heals
   it" (the main side only: no renderer row feeds an unknown reason). [T2.14 R2-1 (a), R2-5]
+- **The rest of a `knowledge_packs` row is release 1's cache, and `zim/` holds packs only.** At every
+  session's reconcile release 1 rewrites `leaf`, `recorded_path`, `size_bytes` and `unavailable_at` from
+  the file it finds (path healing), and resets `searchable` to `NULL` whenever `searchable_key` moves;
+  that key includes the size and time of release 1's own `kiwix-serve`, so the verdict is judged again
+  each time the two versions alternate. It registers, as an enabled pack, every `*.zim` file in the
+  drive's `zim/` folder that no row knows, and honours `removed_at` as "never bring back" (its insert
+  never touches a row that exists). A later version keeps nothing of its own only in those columns,
+  keeps no `*.zim` file in `zim/` that is not a pack, and keeps `removed_at` set on a pack the user
+  removed.
+  Code: `main/services/zim/packs.ts` `reconcile` (the file walk and the path healing, the
+  `searchable_key` reset, the `INSERT … ON CONFLICT(id) DO NOTHING`). Proof: `unit/zim-packs.test.ts`
+  (the reconcile rows); no row feeds a later version's column value. [F-27 R2 m-2]
 - **A pack release 1's tools cannot read carries a ZIM major above 6.** Release 1 judges a pack file by
   two header fields only: the ZIM magic and the `uint16` major at offset 4, "above 6" its one refusal
   that keeps the row. A known row whose file has another magic reads as "Different archive" ("… remove
@@ -2727,7 +2974,9 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
 - **A snapshot by moving the old `.enc`** at the post-migration checkpoint, with a recovery rule
   designed with `.recovery` and the rekey journal; a plaintext workspace uses `VACUUM INTO` (W-38; M-D3,
   the retention, is asked in P10). Never a copy of `config/workspace.json`, which would keep an old
-  password valid.
+  password valid. `VACUUM INTO` may renumber the implicit rowids of `messages`, which release 1's
+  checkpoints name (§7.7, "`messages` rows keep their rowids"): P10 proves that a snapshot put back
+  keeps them (T10.7's rowid links) or takes that copy with SQLite's backup API (F-27 R1 m-11, R2 m-4).
 - **Tests and fixtures** (W-39): history and chained fixtures from v0.1.50 to the latest release,
   committed as logical SQL text and loaded with an explicit `{ defensive: true }` (spike 7, §10.6); an
   all-paths schema-equality test; a compatibility test against the previous release's reader snapshot;
@@ -2797,7 +3046,13 @@ are not repeated: the engine install's (§6.7), G-43 (c) and the salvage behind 
   the registry's refresh shows a newly marked row as "Files missing" until the next reconcile (R2-3b).
 - **F-27's own list (T2.11):** a refused file whose name holds `.parse` is stored as `<id>.parse.enc`,
   which the start's sweep shreds, leaving the failed row without its copy (S-1; follow-up FU-P2-4); the
-  image history's stored names are covered in words only (S-6).
+  image history's stored names are covered in words only (S-6). P2's docs round (F-27 R1 M-2): the
+  create sets the working file, its `-wal` and `-shm` aside but not a `hilbertraum.sqlite-journal`,
+  which SQLite deletes unshredded when the create opens its new database, so a set-aside copy of a
+  session in a rollback mode lacks its journal; and after a roll-forward the journal is left for SQLite,
+  so when that unlock's open fails before SQLite plays it back, `.enc` holds the torn copy, and the
+  next unlock shreds the journal and opens that copy without it (both need a later version that broke
+  the WAL duty, §7.7).
 - **Manifests and skills (T2.7's F-23/F-25 reviews):** an app skill only a later version bundles stays
   an undeletable "Files missing" row after a "Go back" (R2 m-2); the detail view describes a later
   version's skill by release 1's rules, and an unknown stored permission reads as release 1's ceiling
@@ -2810,11 +3065,10 @@ are not repeated: the engine install's (§6.7), G-43 (c) and the salvage behind 
   person deletes them (S-c, owner: keep and document); with a hand-set relative `HILBERTRAUM_DRIVE_ROOT`
   (the launchers always pass a full path) the journal's own entries are relative, so none vouches at the
   start and an interrupted password change waits for the unlock, which judges its stages under the data
-  key (S-d, accepted); a `.recovery` whose file time is later than
-  `.enc`'s, beside an existing workspace, is still encrypted over `.enc` at the next unlock, its rows and
-  settings included: the roll-forward trusts a plaintext file it cannot authenticate, which replaces the
-  user's whole workspace visibly, and the store guard bounds what its rows can delete (F-3's remainder,
-  re-checks 1 and 2); a store a user keeps behind a link of their own keeps a deleted document's or
+  key (S-d, accepted); a copy placed beside an existing workspace can replace it at the next unlock,
+  its rows and settings included: the roll-forward trusts a plaintext copy it cannot authenticate; the
+  replacement is visible (the whole workspace at once), and the store guard bounds what its rows can
+  delete (F-3's remainder, re-checks 1 and 2); a store a user keeps behind a link of their own keeps a deleted document's or
   image's encrypted copy (N-2's cost); the preview, export and OCR decrypt temps are named after the
   document's id with a random suffix, so a crafted id could put that short-lived temp outside the store
   (follow-up FU-P2-8).

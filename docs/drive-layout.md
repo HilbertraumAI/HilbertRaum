@@ -235,8 +235,10 @@ longer open that workspace; 0.1.59 and older do not check. No release so far has
 been 1 since 0.1.60. From the first release sold on a Kit on, every open also writes which version
 opened the workspace last (`last_writer` in the database's `schema_meta` table, a hint for support
 and for later versions, `app-updates.md` §7.4), and a version that finds a workspace's vault files in
-a newer version's format, or a database it cannot read the layout of, refuses it and changes nothing
-(`app-updates.md` §7.2, §7.6).
+a newer version's format, or a database it cannot read the layout of, refuses it and leaves the
+workspace's own files as they are (for a database it cannot read, after the steps that settle an
+interrupted password change, which run first; the copy it decrypted to try is removed again:
+`app-updates.md` §7.2, §7.6).
 
 ## Preparing a drive (scripts)
 

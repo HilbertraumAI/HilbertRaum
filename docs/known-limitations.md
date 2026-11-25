@@ -786,7 +786,9 @@ password recovery — are documented in
   `NULL` or lower than this build's; an equal one is current; any other value (higher, a real, text) is a
   newer version's reading, served as stored with a one-line note (C08) as the last line of every answer
   that shows it, and never re-extracted, replaced or deleted by an extract or categorize path
-  (`extractorVerdict`, `skills/run.ts`). A deliberate rollback of a bad extractor ships a higher number.
+  (`extractorVerdict`, `skills/run.ts`; Categorize and a category question can still overwrite its
+  category labels, and a check its reconciled flags: see "App updates: …", Extractions). A deliberate
+  rollback of a bad extractor ships a higher number.
   **Accepted cost:** a workspace a newer version read keeps that version's figures in this one, and a
   correction kept only in the newer version's `bank_corrections` shows uncorrected under C08; a
   re-extract from an older or `NULL` stamp still drops the persisted per-row categories (the next
@@ -4536,11 +4538,14 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
   companions together to `hilbertraum.sqlite.quarantine` (`-wal`, `-shm`), or, when one of those names
   is taken, to the first free `hilbertraum.sqlite.quarantine-<n>` (n from 1 to 64); the `.recovery` to
   `hilbertraum.sqlite.recovery.quarantine`, then `…recovery.quarantine-<n>`. Nothing set aside is ever
-  overwritten; with no free name the create fails and writes nothing. These files are **not encrypted**:
-  they may hold an earlier workspace's data in readable form. Nothing in the app reads, removes or
-  vouches for them. Keep them if you may need that data (an SQLite tool opens the `.quarantine` file with
-  its `-wal` and `-shm` beside it); otherwise quit HilbertRaum and delete them from `workspace/`
-  (`troubleshooting.md`, "Files named `….quarantine` in the workspace folder").
+  overwritten; with no free name the create fails and writes nothing. They may be the only copy of an
+  earlier workspace on the drive, so keep them unless you are sure you don't need them: they do no harm,
+  and nothing in the app reads, removes or vouches for them. They are **not encrypted**: copy them
+  somewhere you trust (an SQLite tool opens the `.quarantine` file with its `-wal` and `-shm` beside
+  it); deleting them, after quitting HilbertRaum, is permanent (`troubleshooting.md`, "Files named
+  `….quarantine` in the workspace folder"). A rollback journal there (`hilbertraum.sqlite-journal`, which
+  only a later version could leave) is not set aside with them: the create's new database has SQLite
+  delete it (app-updates.md §7.7, the line on WAL mode).
 
 **The vault guard (T2.9)**
 - A file of a newer version that cannot be read at the moment of the check (another program holds it)
@@ -4560,8 +4565,8 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
 - Every file error of an interrupted password change's recovery shows "another program is holding a
   recovery file … try again", also where waiting cannot help (a write-protected drive, a lasting I/O
   error) (R1 A-2).
-- A read-only drive that first refuses an `open` for writing (not a folder or rename) reads as "something
-  stopped HilbertRaum" instead of the write-protected text (R1 A-3).
+- A read-only drive that first refuses an `open` for writing (not a folder or rename) reads as
+  "Something stopped HilbertRaum while it was starting. …" instead of the write-protected text (R1 A-3).
 - A start that hangs instead of failing (a very long sweep, a FIFO at a fixed name on macOS or Linux) shows
   no window and no answer (R2 A3); a failure before or after the guarded start, at the very beginning or
   after the back end is half built, is outside the failure screen's promise (R1 A-4, A-6).
@@ -4636,17 +4641,17 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
   row, switched off (re-check R1-n2).
 - The skill export and the loader follow a stored row's folder name unchecked, for reads only: exporting a
   row another program wrote reads the folder it names (re-check R1-n3; follow-up candidate FU-P2-7).
-- Until P3 builds W-70, the Home screen shows "starting" for an active model this version cannot use; pick
-  another on the AI Model screen (R2 m-1).
+- Until P3 builds W-70, the Home screen shows "Getting ready…" and the badge "Starting" for an active
+  model this version cannot use; pick another on the AI Model screen (R2 m-1).
 
 **The security round (T2.7)**
 - The worst case inside the lowered password-hardening limits (argon2id at 1 GiB of memory and 8 passes)
   keeps an unlock attempt busy for about 55 s on the reviewer's computer, longer on a slower one; every
   workspace any release made needs well under a second (re-check 1).
-- A readable `workspace/hilbertraum.sqlite.recovery` with a later file time than the encrypted file,
-  beside an existing workspace, is still encrypted over it at the next unlock, its contents and settings
-  included: the app cannot tell such a copy from a failed lock's own. It replaces the whole workspace
-  visibly, and the store guard limits what its rows can delete (F-3's remainder).
+- A copy of a workspace placed beside an existing one can replace it at the next unlock, its contents
+  and settings included: the app keeps a failed lock's unencrypted copy for that unlock and cannot
+  authenticate one. The replacement is visible (the whole workspace at once), and the store guard
+  limits what its rows can delete (F-3's remainder).
 - A store a user keeps behind a link of their own (`documents/` or `images/` a junction to a folder
   elsewhere) keeps a deleted document's or image's encrypted copy: nothing behind such a link is shredded
   (re-check 1, N-2).

@@ -350,11 +350,11 @@ manual release acceptance, one phase on its branch (22), one drafted phase (30).
    wave's working ledger is outside the repo; this item is rewritten at the merge. **Release 1 freezes behaviour in these files: ask the owner before
    changing one (each change is synced into the branch).** Under `apps/desktop/src/main/`:
    `services/{workspace-vault,db,policy,drive,commercial-drive,workspace,models,resolve-model,assets,runtime-download}.ts`,
-   `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log}.ts`,
-   `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,zim/packs,ingestion/index,chat}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
-   `services/skills/{run,invoice-run,registry,loader,installer}.ts`, `{index,backend-start,shutdown,close-guard}.ts`,
+   `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log,chat,vision/history}.ts`,
+   `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,zim/packs,zim/transients}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
+   `services/ingestion/{index,stored-copy,stored-copy-leaf}.ts`, `services/skills/{run,invoice-run,registry,loader,installer}.ts`, `{index,backend-start,shutdown,close-guard}.ts`,
    `tools/assert-commercial-drive.ts`, `ipc/{registerEngineIpc,engine-recheck,registerSkillsIpc,registerStartFailureIpc}.ts`,
-   `ipc/{registerCoreIpc,registerWorkspaceIpc,log-copy}.ts`. Under `apps/desktop/src/`: `shared/{manifest,app-version,skill-manifest,persisted-messages}.ts`,
+   `ipc/{registerCoreIpc,registerWorkspaceIpc,log-copy}.ts`. Under `apps/desktop/src/`: `shared/{manifest,app-version,skill-manifest,persisted-messages,update-address,workspace-failure-keys}.ts`,
    `shared/i18n/{en,de,es,fr,it,nl,pl,ru,tr,uk}.ts`, `renderer/lib/displayMap.ts`, `renderer/screens/WorkspaceGate.tsx`, `preload/index.ts`.
    Elsewhere: `apps/desktop/electron-builder.yml`, `apps/desktop/tests/fixtures/{vault-golden,readers,display-map,schema-meta}/` (+ `golden-fixtures.sha256`), `launchers/*`, `model-manifests/**`,
    `app-skills/**`, `scripts/{prepare-drive,build-commercial-drive,fetch-runtime,fetch-models,verify-models}.*`,

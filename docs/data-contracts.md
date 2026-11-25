@@ -165,7 +165,7 @@ code names a key of this build's catalog with every placeholder of its English s
 key; any other well-formed code (an unknown key, a missing placeholder, a repeated parameter, a bad
 escape) shows C02 (`common.newerVersionText`); anything else is no code. A string longer than 4,096
 UTF-16 units is no persisted message and shows as it is. This build originates no code; v0.1.66 and older
-show one raw. The duties are in "Workspace data: duties of every later writer" above ("Stored
+show one raw. The duties are in "Workspace data: duties of every later writer" below ("Stored
 messages").
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
@@ -236,7 +236,9 @@ Nothing reaches the workspace file, so an older build sees no change and `SCHEMA
 `current`; anything else (a higher integer, a real, text, a blob) → `newer`, served as stored with C08 as
 the last line of every answer that shows the row, and never re-extracted, replaced or deleted by an
 extract or categorize path (`holdsNewerExtraction`; a document's delete and re-index still remove its
-rows). SKA-26's `!==` rule is reversed. The duties are in "Workspace data: duties of every later writer"
+rows, and Categorize, a category question and a check still write its labels and reconciled flags:
+`category_id`, `categorized_by_model`, `reconciled`, `totals_reconciled`, the Extractions duties
+below). SKA-26's `!==` rule is reversed. The duties are in "Workspace data: duties of every later writer"
 below ("Extractions").
 
 ### Workspace data: duties of every later writer (app-update F-27, W-64)
@@ -252,9 +254,14 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 - A foreign key onto one of release 1's tables never refuses a delete: `ON DELETE CASCADE` or
   `SET NULL`, or no key at all for data that must outlive release 1's delete.
 - Release 1's own statements keep succeeding: below a higher stamp, its tables change only by added
-  columns that are nullable or have a default, and gain no `NOT NULL`, `UNIQUE`, `CHECK`, `STRICT` or
-  raising trigger its writes can trip; none of its tables or columns is dropped or renamed (release 1
-  creates a missing one again, empty).
+  columns that are nullable or have a default, gain no `NOT NULL`, `UNIQUE`, `CHECK`, `STRICT` or
+  raising trigger its writes can trip, and lose or rename no table or column of release 1's (a missing
+  table or added column comes back empty; a missing column of a table's first definition, a view at one
+  of its table names, or another object under one of its names fails every unlock as "Could not
+  open").
+- Every time in a column release 1 reads is `toISOString()` text: release 1 orders and compares stored
+  times as text (chat turns, the newest extraction, the activity log's prune, the reset of work in
+  progress).
 - No function, collation, virtual-table module or FTS5 tokenizer release 1's SQLite lacks in a
   trigger, generated column, `CHECK`, index expression or partial index on a table release 1 reads or
   writes.
@@ -277,33 +284,45 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 
 **The vault, the journal and stages**
 - A new vault format is one release 1 refuses: a descriptor `version` above 2, a new `kdf.algo`
-  value, a journal `version` above 1, a frame `HRAUMEN2` to `HRAUMEN9` at `.enc` or at a stage (then
-  a higher descriptor version). Release 1 reads the frame of those files only, and a stage in a new
-  frame locks it out of the whole workspace.
+  value (in a descriptor that keeps release 1's shape: `mode`, `kdf`, `saltB64`, `verifier`, `dataKey`;
+  else raise the version), a journal `version` above 1, a frame `HRAUMEN2` to `HRAUMEN9` at `.enc` or
+  at a stage (then a higher descriptor version). Release 1 reads the frame of those files only, and a
+  stage in a new frame locks it out of the whole workspace.
+- A workspace keeps a file at `config/workspace.json`, whatever its format: with neither it nor
+  `workspace/hilbertraum.sqlite.enc` (nor a stage or journal it refuses as newer), release 1 offers to
+  create a new workspace in the same folders.
 - Stored document and image copies stay `HRAUMEN1` while the descriptor version is 2: release 1 does
   not refuse a stored copy in another frame, it fails on that document (beside a stage in doubt it
   leaves the stage). A new stored-copy frame needs a descriptor version above 2.
-- Under descriptor version 2 the key-derivation parameters stay inside release 1's bounds (key length
-  32; scrypt `N` a power of two from 1,024 to 2^22, `r` 1 to 32, `p` 1 to 16; argon2id `m` 8 to 2^20
-  KiB, `t` 1 to 8, `p` 1 to 16; a parameter above them reads as newer).
+- Under descriptor version 2 the key-derivation parameters stay inside what release 1 derives: its
+  bounds (key length 32; scrypt `N` a power of two from 1,024 to 2^22, `r` 1 to 32, `p` 1 to 16;
+  argon2id `m` 8 to 2^20 KiB, `t` 1 to 8, `p` 1 to 16; a parameter above them reads as newer) and,
+  inside them, scrypt `N`·`r` below 2^21 with `N` at most 2^15 when `r` is 1 (`maxmem` 256 MiB,
+  `N` below 2^(16·`r`)), argon2id `m` at least 8·`p` and a salt of at least 8 bytes. Anything else
+  inside the bounds is "Could not open" at every release-1 unlock.
 - No new field that matters under descriptor version 2 or journal version 1: release 1 drops a field
   it does not know when it rewrites either file.
 - A stage counts only once the version-2 descriptor that wraps its data key is on the drive: under a
-  version-1 descriptor, or with no descriptor, no `.enc` and no journal, release 1 deletes it.
+  version-1 descriptor release 1 deletes every stage, and with no descriptor, no `.enc` and no journal
+  it deletes the database stage and its temp.
 - Every stage release 1 can roll forward with no key check (one a journal lists, or one whose target
   is gone) is under the data key the descriptor wraps.
 - A version-1 journal entry is the stage's full path, ends `.enc.new`, and lies inside the workspace
   folder with no link on the way; any other entry vouches for nothing (#1014).
 - Never `.enc` and a waiting database stage under the same data key, whichever was written first:
   release 1 deletes such a stage when no journal lists it (#1027), and rolls a listed one over `.enc`.
-- No file named `*.enc.new` in `documents/` or `images/` that is not a stage of the stored copy
-  beside it.
+- No file named `*.enc.new` in `documents/` or `images/` that is not a stage, under the data key the
+  descriptor wraps, of the stored copy of that name.
 - `hilbertraum.sqlite.recovery` is a plaintext SQLite copy of the workspace that only a failed lock or
   a crash leaves, and nothing else is ever stored under that name.
 - A session that ended without a lock (a live write-ahead log beside `.enc`) is lost at any release-1
   start that sweeps: no promise of crash recovery on a drive release 1 may still open. So is a working
   copy beside a staged `.enc.new` when `.enc` is missing, and one that does not read as a database after
   its `-wal` is replayed.
+- The working database stays in WAL mode, and no session relies on `hilbertraum.sqlite-journal`:
+  release 1's unlock shreds one before it decrypts `.enc` (unless it has just rolled `.recovery`
+  forward, whose journal SQLite then plays back), and a create has SQLite delete one; never rely on a
+  `-journal` surviving a release-1 start or unlock.
 
 **File names in the workspace**
 - No stored file in `documents/` or `images/` has a name that holds `.parse` or ends `.tmp` (release
@@ -317,26 +336,52 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
 - A later version removes its own orphans: release 1 deletes only the files it knows.
 - Nothing of a later version's own under a name release 1 deletes or replaces (the write temps, the
   quarantined journal, the names a create sets leftovers aside under, `zim-transient/`, the
-  lost-session marker, the log files: named in §7.7).
+  lost-session marker, the log files and their temps, `hilbertraum.sqlite-journal`: named in §7.7).
 
 **Rows release 1 reads, resets and creates again**
 - `documents.status` holds only release 1's seven values (`queued`, `extracting`, `chunking`,
-  `embedding`, `indexed`, `failed`, `deleted`): release 1 reads any other as `failed`.
+  `embedding`, `indexed`, `failed`, `deleted`): release 1 reads any other as `failed`, and hides a
+  stored `deleted` row (which it never writes) from its lists, copy and chunks kept.
 - No row is left `queued`, `extracting`, `chunking` or `embedding`, with `tree_status` `building` or
   `extract_status` `extracting`, or as a `started` skill run, for work a later version means to resume:
   release 1 resets them.
 - A document's title keeps its file extension: release 1 picks the parser, the MIME type and the
   stored copy's name from it on every re-index.
+- Chunk ids do not survive a release-1 re-index (new random ids, the tree, extraction records,
+  statements and invoices gone, the text possibly changed): what a later version derives from a
+  document's text cascades from `chunks(id)` or `documents(id)`, or is keyed to the document and checked
+  against `documents.fully_chunked`.
+- A document release 1 could not have indexed (a type it has no parser for, above its size limits,
+  more than 1,000 chunks) is set `failed` and leaves search at any release-1 re-index, copy and old
+  chunks kept.
 - A row of a new kind never goes into `messages`: every row whose `kind` is not `'compaction'` is a
-  chat message to release 1 (listed, sent to the model, searched).
+  chat message to release 1 (listed, searched, and sent to the model as `user` or `assistant`; any other
+  role is listed as `system`); a `'compaction'` row is only the plain summary that covers every turn up
+  to its `covers_through_rowid`.
 - `messages` rows keep their rowids (no rebuild that drops them, no `VACUUM`): release 1 orders turns
-  and anchors checkpoints by them.
+  and anchors checkpoints by them (a `VACUUM INTO` snapshot is §7.8's question).
+- What hangs off a chat's last answer does not survive a release-1 regenerate, a failed one included:
+  release 1 deletes the row and may put it back with its own 17 columns, its `result_tables` and a new
+  rowid; a later version keys what must survive by the message `id`, with no foreign key.
+- A chat's scope narrows only through `collectionIds`, `documentIds`, `packIds`, `includeArchived` and
+  `documentsOff` in `scope_v2_json`: a scope narrowed only by another field is "All documents" to
+  release 1, and its next scope change drops that field.
 - The built-in `library` and `temporary` collections exist, and "in no collection" does not survive a
   release-1 open: it files every unfiled `indexed` document with a `NULL` `origin_json` into the
   Library.
+- Every place a document is filed is a `document_collections` row: "Delete project with its
+  documents" deletes every document of the project with no row for another collection.
 - A new shape of stored JSON is a new column: release 1's re-index reads `ocr_json` as `pages` with a
   whole-number `pageNumber` and a text `text`; in any other shape it drops the scanned pages' text, and
-  fails a PDF that is all scan as a scan.
+  fails a PDF that is all scan as a scan. The JSON columns release 1 writes whole (named in §7.7) keep
+  a later version's field only until it writes them.
+- A column release 1 reads as a closed set holds only release 1's values (`documents.lifecycle`, the
+  review status, decisions and link kinds, `conversations.mode`, `messages.role` and
+  `truncated_cause`, `collections.type`, `image_sessions`): any other reads as release 1's default and
+  is overwritten when the user acts; a document kept out of release 1's answers is `archived`.
+- `runtime_events` is a short log: release 1 keeps its newest 5,000 rows by `created_at`, exports
+  `message` and `metadata_json` as stored to a plaintext file, and shows an unknown type by its raw
+  name; nothing a later version needs, and no content, name, path or secret, goes there.
 
 **Stored messages**
 - A code (`hr:<key>?<name>=<value>&…`) names only a key release 1 knows and gives every placeholder
@@ -385,16 +430,25 @@ the database's `PRAGMA user_version`; "the data key" is the key a version-2 desc
   a new meaning or a wider range is a new key (release 1 leaves keys it does not know).
 - A new field in `lastBenchmark`, `benchmarkHistory`, `modelPlacements` or `gpuProbe` lasts only until
   release 1 writes that record.
+- `local_api_token` row 1 holds the key itself in release 1's form (`hr-` and at least nine more
+  characters): release 1 serves such a value as the credential and replaces any other with a new key;
+  keys in another form, or more than one, go in a table of the later version's own.
 
 **Search**
 - `chunks_fts` and `messages_fts` keep their names, columns, default tokenizer, their five triggers
   each (by name, with the `fts_rowid` and `new.kind` markers) and the `fts_rowid` columns.
-- A changed embedding or summary recipe changes the stored model id.
+- A changed embedding or summary recipe changes the stored model id, and new vectors go in a table of
+  their own (`embeddings` has one row per chunk): release 1's vectors and `activeEmbeddingModelId`
+  stay while "Go back" is offered, or release 1 offers "Re-index all". `summary_cache` is a cache
+  release 1 trims (oldest rows beyond 50,000).
 
 **Knowledge packs and skills**
 - `knowledge_packs.unavailable_reason` is release 1's to overwrite at every session's reconcile; a later
   version reads `newer_format` and any value it does not know as "judge again", and keeps no meaning of
   its own only there.
+- The rest of a `knowledge_packs` row (`leaf`, `recorded_path`, `size_bytes`, `unavailable_at`,
+  `searchable`) is release 1's cache; `zim/` holds packs only (release 1 registers every unknown
+  `*.zim` there), and a removed pack keeps `removed_at`.
 - A pack release 1's tools cannot read carries a ZIM major above 6 (a known row whose file has another
   magic reads as "Different archive"); no new kind of `knowledge_packs` row.
 - The outcome code `newer-format` in `messages.pack_outcomes_json` is kept for ever; release 1 drops a

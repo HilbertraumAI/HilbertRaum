@@ -3586,6 +3586,8 @@ export function unlockEncryptedVault(
     let recoveryDiscarded = false
     let restoredMissingEnc = false
     let newerRecoveryLeft = false
+    /** F-27 review 1 M-2: this unlock encrypted the `.recovery` copy over `.enc`, so the copy decrypted below is it. */
+    let rolledForward = false
     // #911 (code review): `.enc` is judged ONCE, by the start's rule: only ENOENT is missing. `existsSync` read any other
     // stat failure (a delete-pending file on Windows, EPERM, EBUSY) as "missing", so a spent `.recovery` could be
     // encrypted over a good `.enc`.
@@ -3651,6 +3653,7 @@ export function unlockEncryptedVault(
           restoredMissingEnc = encMissing
           encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
           encMissing = false
+          rolledForward = true
         }
         // #875 review round 2: a broken copy that held the failed lock's session is the evidence of
         // that loss, so it is shredded only once this unlock has succeeded (below): an unlock that
@@ -3670,6 +3673,14 @@ export function unlockEncryptedVault(
     // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
     // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
     cleanSidecars(vaultPaths.dbPath)
+    // F-27 review 1 M-2: and a rollback journal, which SQLite plays back into the file at the open's first read just the
+    // same. Every build runs the workspace database in WAL mode (since before v0.1.50), so a hot
+    // `hilbertraum.sqlite-journal` is a session's that ended mid-transaction in a rollback mode, a later version's: it
+    // holds pages of the working file that session wrote, which the start swept or kept as `.recovery`, never of the
+    // `.enc` decrypted below, and played into that copy it mixes the two or reads as damage on an intact `.enc`. Except
+    // after a roll-forward: the copy decrypted below is then that kept working file, whose journal stays for SQLite to
+    // play back, as before. Not in the start's sweep, which would take it from a working file kept as `.recovery`.
+    if (!rolledForward) shredFile(`${vaultPaths.dbPath}-journal`)
     const decryptT0 = performance.now()
     try {
       decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
