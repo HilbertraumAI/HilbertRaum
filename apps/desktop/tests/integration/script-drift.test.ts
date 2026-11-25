@@ -17,7 +17,7 @@ import {
   USER_DATA_CONFIG_FILES,
   USER_DATA_DIRS
 } from '../../src/main/services/commercial-drive'
-import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
+import { REPO_ROOT, filesUnder, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { extractScriptArray } from '../helpers/script-legs'
 import { MARKER_ROWS } from '../helpers/fetch-runtime-markers'
 import { committedRuntimeSources } from '../helpers/catalog'
@@ -1107,5 +1107,169 @@ describe('launchers keep the line endings their shell needs (audit M20)', () => 
 
   it.each(['launchers/Start HilbertRaum.command', 'launchers/start-hilbertraum.sh'])('%s has no CR', (rel) => {
     expect(repoText(rel)).not.toContain('\r')
+  })
+})
+
+// App-update W-17, W-20 (T3.3b; docs/app-updates.md §8.4, §8.5): the Kit builders write config/kit-support.txt and then
+// config/drive-release.json as the build's last writes, through two node helpers every CI leg runs directly
+// (kit-support.test.ts, drive-release.test.ts). No row can run a builder's writing steps (they download first), so where
+// and how the twins call the helpers is read here as text, the one proof F1 of the T3.3b sheet leaves. prepare-drive makes
+// the same record call through the same runner and is run in script-execution.test.ts; the runner rows below hold the
+// builder's runner to prepare-drive's, byte for byte.
+describe('the Kit builders write the support end, then the release record, as their last writes (app-update W-17, W-20)', () => {
+  interface Twin {
+    rel: string
+    prep: string
+    /** The step-6 line that captures the hashes, the close of the verify-only guard, and step 1's line. */
+    generate: string
+    close: string
+    step1: string
+    /** The runner's definition line and how a call to it starts. */
+    runner: string
+    call: string
+    /** How a call names each helper's path, and the target it hands on. */
+    record: string
+    stamp: string
+    target: string
+  }
+  const TWINS: Twin[] = [
+    {
+      rel: 'scripts/build-commercial-drive.ps1',
+      prep: 'scripts/prepare-drive.ps1',
+      generate: "Run 'verify-models.ps1' @{ Target = $Target; Generate = $true }",
+      close: '} # end of steps 1-6 (skipped by -VerifyOnly)',
+      step1: "Step 1 'Lay out the drive (commercial policy: encryption required, no phone-home)'",
+      runner: 'function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {',
+      call: 'Invoke-NodeHelper ',
+      record: '$ReleaseHelper',
+      stamp: '$KitSupportHelper',
+      target: "'--target', $NodeTarget"
+    },
+    {
+      rel: 'scripts/build-commercial-drive.sh',
+      prep: 'scripts/prepare-drive.sh',
+      generate: 'bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --generate',
+      close: 'fi # end of steps 1-6 (skipped by --verify-only)',
+      step1: 'step 1 "Lay out the drive (commercial policy: encryption required, no phone-home)"',
+      runner: 'node_helper() {',
+      call: 'node_helper ',
+      record: '"$RELEASE_HELPER"',
+      stamp: '"$KIT_SUPPORT_HELPER"',
+      target: '--target "$TARGET"'
+    }
+  ]
+  const trimmed = (rel: string): string[] => codeLines(rel).map((l) => l.text.trim())
+  /** The code lines that hand `helper` to a call (its own definition line left out), with their index. */
+  const callsOf = (lines: string[], helper: string): Array<{ at: number; line: string }> =>
+    lines.flatMap((line, at) => (line.includes(helper) && !line.startsWith(`${helper} =`) ? [{ at, line }] : []))
+  /** The flags a call line passes, quoted or not. */
+  const flagsOf = (line: string): string[] => [...line.matchAll(/(?:^|[\s,('"])(--[a-z][a-z-]*)/g)].map((m) => m[1])
+  /** What writes onto a drive in these scripts: a child script, a copy, a node helper, a folder, a mode, a file write. */
+  const WRITES = /\bRun '|Copy-Item|Invoke-NodeHelper |New-Item|Set-Content|WriteAllText|\bbash "|\bcp |\bnode_helper |\bmkdir |\bchmod /
+
+  it.each(TWINS)('$rel calls write-drive-release.mjs once, with --target alone, after step 6 and inside the verify-only guard, as the last write', (t) => {
+    const lines = trimmed(t.rel)
+    expect(lines.filter((l) => l.includes('scripts/lib/write-drive-release.mjs')), 'one spelling of the helper path').toHaveLength(1)
+    const calls = callsOf(lines, t.record)
+    expect(calls.map((c) => c.line)).toEqual([expect.stringContaining(t.call)])
+    const [call] = calls
+    expect(flagsOf(call.line)).toEqual(['--target'])
+    expect(call.line).toContain(t.target)
+    expect(call.line, 'shows the lines starting drive-release.json').toMatch(/ '?drive-release\.json'? /)
+    const generateAt = lines.indexOf(t.generate)
+    const closeAt = lines.indexOf(t.close)
+    expect(generateAt).toBeGreaterThan(-1)
+    expect(closeAt).toBeGreaterThan(generateAt)
+    expect(call.at).toBeGreaterThan(generateAt)
+    expect(call.at).toBeLessThan(closeAt)
+    expect(lines.slice(call.at + 1, closeAt).filter((l) => WRITES.test(l)), 'nothing writes after the record').toEqual([])
+  })
+
+  // PowerShell 5.1's native-argument quoting: a trailing backslash before the closing quote of a space-holding path
+  // escapes the quote, so node is handed the target without it (a bare drive root keeps its own), as the gate is.
+  it('build-commercial-drive.ps1 hands node the target without a trailing backslash, a bare drive root excepted', () => {
+    const lines = trimmed('scripts/build-commercial-drive.ps1')
+    const full = lines.indexOf('$Target = [System.IO.Path]::GetFullPath($Target)')
+    const trim = lines.indexOf("$NodeTarget = $Target.TrimEnd('\\')")
+    expect(full).toBeGreaterThan(-1)
+    expect(trim).toBeGreaterThan(full)
+    expect(lines[trim + 1]).toBe("if ($NodeTarget -match '^[A-Za-z]:$') { $NodeTarget += '\\' }")
+    expect(lines.filter((l) => l.startsWith('$NodeTarget ')), 'set once').toHaveLength(1)
+  })
+
+  it('both builders check the stamp before step 1 and write it right before the record, with the same flags', () => {
+    const flags = TWINS.map((t) => {
+      const lines = trimmed(t.rel)
+      expect(lines.filter((l) => l.includes('scripts/lib/write-kit-support.mjs')), `${t.rel}: one spelling of the helper path`).toHaveLength(1)
+      const calls = callsOf(lines, t.stamp)
+      expect(calls.map((c) => c.line), t.rel).toEqual([expect.stringContaining(t.call), expect.stringContaining(t.call)])
+      const [check, write] = calls
+      for (const c of calls) {
+        expect(c.line, t.rel).toContain(t.target)
+        expect(c.line, `${t.rel}: shows the lines starting kit-support.txt`).toMatch(/ '?kit-support\.txt'? /)
+      }
+      expect(check.at, `${t.rel}: the check comes before step 1`).toBeLessThan(lines.indexOf(t.step1))
+      expect(write.at, `${t.rel}: the write comes after step 6`).toBeGreaterThan(lines.indexOf(t.generate))
+      expect(write.at, `${t.rel}: the stamp is written before the record`).toBeLessThan(callsOf(lines, t.record)[0].at)
+      return calls.map((c) => flagsOf(c.line))
+    })
+    expect(flags[0]).toEqual([['--target', '--support-end', '--check'], ['--target', '--support-end']])
+    expect(flags[1]).toEqual(flags[0])
+  })
+
+  // The runner is executed through prepare-drive (script-execution.test.ts: a stub node's other lines are not shown, its
+  // exit code is the result), so the builder's must be that one: node --no-warnings, the helper's own lines only, and in
+  // PowerShell 5.1 the merged stderr under 'Continue', since under 'Stop' its first line would end the build.
+  it.each(TWINS)("$rel runs its helpers through prepare-drive's own runner, byte for byte", (t) => {
+    const block = (rel: string): string[] => {
+      const lines = repoText(rel).split(/\r?\n/)
+      const start = lines.indexOf(t.runner)
+      expect(start, `${rel}: the runner`).toBeGreaterThan(-1)
+      const end = lines.indexOf('}', start)
+      expect(end, `${rel}: the runner's close`).toBeGreaterThan(start)
+      return lines.slice(start, end + 1)
+    }
+    const runner = block(t.rel)
+    expect(runner).toEqual(block(t.prep))
+    expect(runner.join('\n')).toContain('--no-warnings')
+    if (t.rel.endsWith('.ps1')) expect(runner.map((l) => l.trim())).toContain("$ErrorActionPreference = 'Continue'")
+  })
+
+  it.each(['scripts/prepare-drive.ps1', 'scripts/prepare-drive.sh'])('%s calls write-drive-release.mjs once, with --target alone, after the assets block', (rel) => {
+    const ps1 = rel.endsWith('.ps1')
+    const lines = trimmed(rel)
+    expect(lines.filter((l) => l.includes('lib/write-drive-release.mjs')), 'one spelling of the helper path').toHaveLength(1)
+    const calls = callsOf(lines, ps1 ? '$ReleaseHelper' : '"$RELEASE_HELPER"')
+    expect(calls.map((c) => c.line)).toEqual([expect.stringContaining(ps1 ? 'Invoke-NodeHelper ' : 'node_helper ')])
+    expect(flagsOf(calls[0].line)).toEqual(['--target'])
+    expect(calls[0].line).toContain(ps1 ? "'--target', $NodeTarget" : '--target "$TARGET"')
+    // Both ends of the assets block: the -WithAssets branch's last line and the other branch's.
+    const tails = [lines.findIndex((l) => l.includes('Now capture real hashes:')), lines.findIndex((l) => l.includes('to verify checksums.'))]
+    for (const tail of tails) expect(tail).toBeGreaterThan(-1)
+    expect(calls[0].at).toBeGreaterThan(Math.max(...tails))
+    expect(calls[0].at).toBeLessThan(lines.findIndex((l) => l.includes('Launch from the drive with HILBERTRAUM_DRIVE_ROOT')))
+  })
+
+  // Release 1 and every later version read the stamp for ever, and nothing but the Kit builder writes it (W-17; record
+  // §6.9, the upgrade coverage of §10: byte-identical after an update, a fallback and "Go back").
+  it('only the two Kit builders name the stamp writer, and the format module imports nothing that writes', () => {
+    const notComment = (l: string): boolean => !/^\s*(#|\/\/|\*|\/\*)/.test(l)
+    const scripts = readdirSync(join(REPO_ROOT, 'scripts'))
+      .filter((f) => /\.(ps1|sh)$/.test(f))
+      .map((f) => `scripts/${f}`)
+    const lib = readdirSync(join(REPO_ROOT, 'scripts', 'lib'))
+      .filter((f) => /\.m?js$/.test(f) && f !== 'write-kit-support.mjs')
+      .map((f) => `scripts/lib/${f}`)
+    const src = filesUnder(join(REPO_ROOT, 'apps', 'desktop', 'src'), /\.(ts|tsx|mts|js|mjs)$/).map((p) =>
+      p.slice(REPO_ROOT.length + 1).split('\\').join('/')
+    )
+    expect(src.length, 'the walk found the app').toBeGreaterThan(100)
+    const naming = [...scripts, ...lib, ...src].filter((rel) => repoText(rel).split('\n').filter(notComment).some((l) => l.includes('write-kit-support')))
+    expect(naming.sort()).toEqual(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])
+    const fsImport = /import\s*\{([^}]*)\}\s*from\s*'node:fs'/.exec(repoText('apps/desktop/src/main/services/updates/kit-support.ts'))
+    expect(fsImport, 'kit-support.ts imports node:fs').not.toBeNull()
+    const names = fsImport![1].split(',').map((n) => n.trim()).filter((n) => n !== '')
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.filter((n) => /write|append|rename|unlink|rm|mkdir|copy|cp|truncate|chmod|chown|utimes|link/i.test(n))).toEqual([])
   })
 })

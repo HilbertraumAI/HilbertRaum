@@ -15,6 +15,12 @@
 #      requires the app artifact + launcher for every platform in --platforms and a
 #      recorded, matching hash for every sidecar binary.
 #
+# Between steps 6 and 7 an un-numbered block writes the build's last two files: the Kit's support end,
+# config/kit-support.txt (from --support-end, written once per Kit), then the drive's release record,
+# config/drive-release.json (the apps, start files and engines now on the drive; docs/app-updates.md §8.4, §8.5).
+# Both are written by node helpers under scripts/lib, so node 22.18 or later must be on PATH; the month, node and an
+# existing support end are checked before step 1.
+#
 # The verdict is assertCommercialDrive's (apps/desktop/src/main/services/commercial-drive.ts,
 # the CANONICAL, unit-tested gate). This script ORCHESTRATES the existing scripts; it does not
 # re-implement them. The order of the steps lives here and in the .ps1 twin alone
@@ -27,14 +33,23 @@
 # delete the old build first (#233). See docs/packaging.md.
 #
 # Usage:
-#   scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license \
+#   scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --support-end 2031-12 \
 #       [--app-artifact ./release/HilbertRaum-0.1.0.AppImage]... [--platforms win-x64,mac-arm64,linux-x64] \
 #       [--kiwix-source-dir <archive dir>] [--skip-package] [--verify-only] [--dry-run]
+#   --support-end       the month this Kit's support period ends, YYYY-MM: written once into
+#                       config/kit-support.txt (W-17). Required on every run but --verify-only, a
+#                       --dry-run included; not before this computer's current month; echoed in words
+#                       before step 1. A drive that holds another month is refused: to re-stamp unsold
+#                       stock, delete config/kit-support.txt on purpose and run again
 #   --platforms         the platforms this kit is sold for (default all three)
 #   --kiwix-source-dir  install the kiwix-tools corresponding-source bundle from this
 #                       maintainer-local archive dir before fetching kiwix_tools binaries
 #                       (#339 P8-4); omitted = this Kit ships no kiwix-tools at all
-#   --verify-only skip steps 1-6, run only the final gate against the drive as it is
+#   --skip-package  copy no app; the support end and a release record without an app version are
+#                   still written: after copying the apps by hand, write the record again
+#                   (docs/packaging.md) before the --verify-only check
+#   --verify-only skip steps 1-6 and the record block, run only the final gate against the drive as
+#                 it is: nothing is written, and --support-end is not needed (given, it is ignored)
 #   --dry-run     download and change nothing; the final gate still runs and prints its verdict
 set -euo pipefail
 
@@ -43,6 +58,7 @@ ACCEPT_LICENSE=0
 APP_ARTIFACTS=()
 PLATFORMS="win-x64,mac-arm64,linux-x64"
 KIWIX_SOURCE_DIR=""
+SUPPORT_END=""
 SKIP_PACKAGE=0
 VERIFY_ONLY=0
 DRY_RUN=0
@@ -58,6 +74,8 @@ while [[ $# -gt 0 ]]; do
     --platforms=*) PLATFORMS="${1#*=}"; shift ;;
     --kiwix-source-dir) KIWIX_SOURCE_DIR="${2:-}"; shift 2 ;;
     --kiwix-source-dir=*) KIWIX_SOURCE_DIR="${1#*=}"; shift ;;
+    --support-end) SUPPORT_END="${2:-}"; shift 2 ;;
+    --support-end=*) SUPPORT_END="${1#*=}"; shift ;;
     --skip-package) SKIP_PACKAGE=1; shift ;;
     --verify-only) VERIFY_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -91,6 +109,12 @@ for p in "${PLATFORM_LIST[@]}"; do
     exit 2
   fi
 done
+# A Kit's support end (W-17): required on every run that writes, a dry run included, so a rehearsal fails where the run
+# would. Checked as a plain string here; the helper below checks the month itself.
+if [[ $VERIFY_ONLY -eq 0 && -z "$SUPPORT_END" ]]; then
+  echo "--support-end <YYYY-MM> is required: the month this Kit's support ends (config/kit-support.txt)" >&2
+  exit 2
+fi
 # The version the artifacts must carry = the desktop package's (electron-builder and the
 # release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
 APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/apps/desktop/package.json" | head -n1)"
@@ -122,11 +146,41 @@ if [[ ${#APP_ARTIFACTS[@]} -gt 0 && $VERIFY_ONLY -eq 0 ]]; then
 fi
 
 step() { echo; echo "[$1] $2"; }
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $1; returns its exit code. prepare-drive.sh holds the same function (script-drift.test.ts).
+node_helper() {
+  local prefix="$1" out line code=0
+  shift
+  out="$(node --no-warnings "$@" 2>&1)" || code=$?
+  while IFS= read -r line; do
+    case "$line" in "$prefix"*) echo "  $line" ;; esac
+  done <<< "$out"
+  return "$code"
+}
 
 echo "Build a COMMERCIAL (sellable) drive at: $TARGET"
 echo "  platforms: $PLATFORMS | app version: $APP_VERSION"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run -- nothing will be changed; the final gate still runs)"
 [[ $VERIFY_ONLY -eq 1 ]] && echo "(verify only -- steps 1-6 skipped)"
+
+# The Kit's support end and the drive's release record (W-17, W-20; docs/app-updates.md §8.4, §8.5) are the build's
+# last writes, by two node helpers. Both are checked here, before any download: node itself, the month (in a dry run
+# too) and whatever config/kit-support.txt holds already (it is written once per Kit), so a build that could not finish
+# stops before step 1, as a missing artifact does (#769). The month is echoed in words for the owner to read.
+KIT_SUPPORT_HELPER="$REPO_ROOT/scripts/lib/write-kit-support.mjs"
+RELEASE_HELPER="$REPO_ROOT/scripts/lib/write-drive-release.mjs"
+if [[ $VERIFY_ONLY -eq 1 ]]; then
+  if [[ -n "$SUPPORT_END" ]]; then echo "(verify only -- --support-end ignored: nothing is written)"; fi
+else
+  if ! command -v node >/dev/null 2>&1; then
+    echo "build-commercial-drive needs node 22.18 or later on PATH: it writes config/kit-support.txt and config/drive-release.json" >&2
+    exit 1
+  fi
+  check_exit=0
+  node_helper kit-support.txt "$KIT_SUPPORT_HELPER" --target "$TARGET" --support-end "$SUPPORT_END" --check || check_exit=$?
+  if [[ $check_exit -eq 2 ]]; then exit 2; fi
+  if [[ $check_exit -ne 0 ]]; then exit 1; fi
+fi
 
 if [[ $VERIFY_ONLY -eq 0 ]]; then
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
@@ -247,6 +301,33 @@ if [[ $DRY_RUN -eq 1 ]]; then
   echo "  (dry run: skipping verify-models)"
 else
   bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --generate
+fi
+
+# --- Record what this drive was built with (W-17, W-20) ------------------------------
+# UN-NUMBERED, like the kiwix bundle: the build's last writes, after step 6 and before the final check, inside the
+# verify-only guard (--verify-only writes neither file). First the Kit's support end, config/kit-support.txt (written
+# once per Kit: the same month is kept, another one refused; docs/app-updates.md §8.4), then the drive's release record,
+# config/drive-release.json (the apps, start files and engines now on the drive, §8.5), which must come last: a change
+# after it leaves a record that no longer says what the drive holds. The stamp is in config/, which the record never
+# lists. A failure of either stops the build here, with the helper's own line.
+echo
+echo "Record what this drive was built with"
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "  would write config/kit-support.txt: $SUPPORT_END"
+  echo "  would write config/drive-release.json"
+else
+  stamp_exit=0
+  node_helper kit-support.txt "$KIT_SUPPORT_HELPER" --target "$TARGET" --support-end "$SUPPORT_END" || stamp_exit=$?
+  if [[ $stamp_exit -ne 0 ]]; then
+    echo "  write-kit-support.mjs failed (exit $stamp_exit): the build stops here" >&2
+    exit 1
+  fi
+  record_exit=0
+  node_helper drive-release.json "$RELEASE_HELPER" --target "$TARGET" || record_exit=$?
+  if [[ $record_exit -ne 0 ]]; then
+    echo "  write-drive-release.mjs failed (exit $record_exit): the build stops here" >&2
+    exit 1
+  fi
 fi
 fi # end of steps 1-6 (skipped by --verify-only)
 

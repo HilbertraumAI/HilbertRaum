@@ -2083,8 +2083,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `buildChecksumsJson(root, manifests) → ChecksumsJson` (generate-mode capture of present-weight hashes).
 ✅ **`scripts/`** (repo root, self-contained; no Node/npm needed to prep a drive):
 - `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
-  `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
-  `config/{drive,policy}.json`. Idempotent; config only (re)written with `--force`.
+  `-Dev`/`--dev`, `-Kit`/`--kit`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
+  `config/{drive,policy}.json`; idempotent, those two only (re)written with `--force`. At its end it writes
+  `config/drive-release.json` through `scripts/lib/write-drive-release.mjs` (`node --no-warnings`, W-20) when node is on
+  `PATH`, on every run (derived from the drive, unknown fields kept); no node, or a helper that fails, is one line and
+  never the exit code; `--kit` leaves the record to the Kit builder. Never writes `config/kit-support.txt`.
 - `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`, `-Strict`/`--strict`,
   `-Kit`/`--kit`. Flat-YAML line-parses the
   manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
@@ -2316,12 +2319,21 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   line goes to stderr (#767). The TS build plan (`planCommercialDrive`/`formatPlan`) had no caller and was removed (#770).
 ✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline; `-Target`/`--target`
   (req), `-AcceptLicense`, `-AppArtifact` (pre-built signed apps to copy, one per platform), `-Platforms` (default all
-  three), `-KiwixSourceDir`, `-SkipPackage`, `-VerifyOnly`, `-DryRun` (each also `--kebab-case` in the .sh).
-  Orchestrates prepare-drive (`-Force`) → fetch-models `--bundled` → fetch-runtime (every OS, `--commercial`) →
+  three), `-KiwixSourceDir`, `-SupportEnd` (`YYYY-MM`, required unless `-VerifyOnly`, a dry run included), `-SkipPackage`,
+  `-VerifyOnly`, `-DryRun` (each also `--kebab-case` in the .sh).
+  Orchestrates prepare-drive (`-Force -Kit`) → fetch-models `--bundled` → fetch-runtime (every OS, `--commercial`) →
   [kiwix source bundle, then kiwix_tools] → (package = manual) → copy launchers+docs → verify-models `--generate` →
-  native pre-flight (verify-models `--kit` for the weights) + the canonical gate above, which alone prints SELLABLE.
-  Before step 1 it refuses a missing `-AppArtifact` and a differently named prior app at the root (exit 1). PS uses
-  **hashtable** splatting for named params.
+  [un-numbered, the last writes: `scripts/lib/write-kit-support.mjs` writes `config/kit-support.txt` (W-17: the month
+  and one LF, 8 bytes, created exclusively; the same month kept, another refused), then
+  `scripts/lib/write-drive-release.mjs` writes `config/drive-release.json`; both `node --no-warnings`, only their own
+  lines shown, a non-zero exit stops the build] → native pre-flight (verify-models `--kit` for the weights) + the
+  canonical gate above, which alone prints SELLABLE. Before step 1 it refuses a missing or invalid `-SupportEnd` (a
+  month as `YYYY-MM`, not before this computer's current UTC month; exit 2), then a missing `-AppArtifact` and a
+  differently named prior app at the root, a missing node and a `config/kit-support.txt` that holds another month or
+  is no builder stamp (exit 1), and echoes the month in words. `-VerifyOnly` and `-DryRun` write neither file. The
+  stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`: `absent`, `unreadable`
+  (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
+  `tests/fixtures/readers/f13-drive-release/kit-support.json`). PS uses **hashtable** splatting for named params.
 ✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
   `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
   env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).

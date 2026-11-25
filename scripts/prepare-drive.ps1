@@ -10,7 +10,15 @@
   config/{drive,policy}.json files. It does NOT download model weights or sidecar binaries
   (those are git-ignored and not in the repo, R5) — it tells you where to drop them.
 
-  Idempotent: re-running is safe. config/*.json are only (re)written with -Force.
+  Idempotent: re-running is safe. config/drive.json and config/policy.json are only
+  (re)written with -Force: they are the drive owner's to edit.
+
+  At its end it writes config/drive-release.json, the record of the apps, start files and
+  engines on the drive (docs/app-updates.md section 8.5), when node 22.18 or later is on PATH:
+  the record is derived from the drive, so it is rewritten on every run, -Force or not, and
+  keeps the fields it does not know. Without node it says so and goes on (the drive works
+  without the record). With -Kit it leaves the record to build-commercial-drive, which writes
+  it as its last step.
 
   The canonical, unit-tested reference for this layout + the config shapes is
   apps/desktop/src/main/services/drive.ts. Keep the two in sync.
@@ -101,6 +109,10 @@ $DefaultModelIds = @(
 # split dirs and config across two locations (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
+# The target as the node helper is handed it. Native-arg quoting (PS 5.1): a trailing backslash before the closing
+# quote of a space-containing path escapes the quote, so it goes; a bare drive root like E:\ keeps its backslash.
+$NodeTarget = $Target.TrimEnd('\')
+if ($NodeTarget -match '^[A-Za-z]:$') { $NodeTarget += '\' }
 
 # Repo root = parent of this script's directory.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -139,6 +151,22 @@ $Dirs = @(
 
 function Join-DrivePath([string]$rel) {
   return (Join-Path $Target ($rel -replace '/', [IO.Path]::DirectorySeparatorChar))
+}
+
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $prefix; returns its exit code. stderr is merged so those lines can be picked out; in
+# PowerShell 5.1 a merged stderr line is an error record, which 'Stop' turns into a terminating error, so the call runs
+# under 'Continue', in this function's scope only. build-commercial-drive.ps1 holds the same function (script-drift.test.ts).
+function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {
+  $ErrorActionPreference = 'Continue'
+  $global:LASTEXITCODE = 0
+  $lines = @(& $node --no-warnings @helperArgs 2>&1)
+  $code = $LASTEXITCODE
+  foreach ($line in $lines) {
+    $text = "$line"
+    if ($text.StartsWith($prefix)) { Write-Host "  $text" }
+  }
+  return $code
 }
 
 # --- Build config payloads (snake_case shapes parsePolicy/resolvePaths accept) ------
@@ -382,6 +410,28 @@ if ($WithAssets) {
   Write-Host "     or re-run with -WithAssets to download + verify them (scripts\fetch-models.ps1)."
   Write-Host '  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/ (or -WithAssets).'
   Write-Host "  3. Run scripts\verify-models.ps1 -Target '$Target' to verify checksums."
+}
+Write-Host ''
+
+# --- The drive's release record (app-update W-20; docs/app-updates.md section 8.5) -----
+# config/drive-release.json: the apps, start files and engines now on the drive, written by the node helper the Kit
+# builder calls too, so every drive built with node carries the same record for the same drive. Optional: a DIY drive
+# is still built on a machine without node, so a missing node or a helper that fails is one line, never this script's
+# exit code. Under -Kit the builder writes the record as its last step instead (hashing runtime/ once).
+Write-Host 'Release record:'
+if ($Kit) {
+  Write-Host '  skip config/drive-release.json (build-commercial-drive writes it as its last step)'
+} elseif ($DryRun) {
+  Write-Host '  + config/drive-release.json'
+} else {
+  $helperNode = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $helperNode) {
+    Write-Host '  skip config/drive-release.json (no node on PATH; the drive works without it)' -ForegroundColor Yellow
+  } else {
+    $ReleaseHelper = Join-Path $PSScriptRoot 'lib/write-drive-release.mjs'
+    $recordExit = Invoke-NodeHelper $helperNode.Source 'drive-release.json' @($ReleaseHelper, '--target', $NodeTarget)
+    if ($recordExit -ne 0) { Write-Host "  note: config/drive-release.json not written (exit $recordExit); the drive works without it" -ForegroundColor Yellow }
+  }
 }
 Write-Host ''
 Write-Host 'Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan

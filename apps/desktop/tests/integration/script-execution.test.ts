@@ -43,6 +43,41 @@ const NUL = String.fromCharCode(0)
 const C1 = String.fromCharCode(0x85)
 const UTF8_LOCALE = process.platform === 'linux' ? 'C.UTF-8' : 'en_US.UTF-8'
 
+/** A Kit's support end five years ahead (W-17): a builder run without the verify-only flag needs one (T3.3b). */
+const SUPPORT_END = `${new Date().getUTCFullYear() + 5}-06`
+
+// The F-13 golden (tests/fixtures/readers/f13-drive-release/): T3.3a's tree and the record the helper writes for it,
+// T3.3b's stamp bytes. prepare-drive calls the same helper as the Kit builders, so on every leg its twin over that tree
+// must leave exactly the golden record (06 T3.3a: "each CI leg's builder twin produces that same file").
+type F13Part = { text: string } | { base64: string }
+const F13_DIR = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f13-drive-release')
+const F13 = JSON.parse(readFileSync(join(F13_DIR, 'vectors.json'), 'utf8')) as {
+  tree: { files: Record<string, string> }
+  writes: { vectors: Array<{ id: string; stdout?: string; existing?: F13Part[]; append?: string }> }
+}
+const F13_RECORD = readFileSync(join(F13_DIR, 'expected-record.json'))
+const F13_STAMP = (JSON.parse(readFileSync(join(F13_DIR, 'kit-support.json'), 'utf8')) as { builder: { text: string } }).builder.text
+const f13Write = (id: string) => F13.writes.vectors.find((v) => v.id === id)!
+const f13Bytes = (parts: F13Part[]): Buffer => Buffer.concat(parts.map((p) => ('text' in p ? Buffer.from(p.text, 'utf8') : Buffer.from(p.base64, 'base64'))))
+
+const NODE_NAMES = ['node', 'node.exe', 'node.cmd', 'node.bat']
+const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+/** This PATH without node: a Windows folder holding it is dropped, a POSIX one is mirrored without it (it holds the tools
+ *  the scripts need too). */
+function pathWithoutNode(): string {
+  const dirs: string[] = []
+  for (const dir of (process.env[pathKey] ?? '').split(delimiter)) {
+    if (!dir) continue
+    if (!NODE_NAMES.some((n) => existsSync(join(dir, n)))) dirs.push(dir)
+    else if (process.platform !== 'win32') {
+      const mirror = mkdtempSync(join(tmpdir(), 'hilbertraum-path-'))
+      for (const name of readdirSync(dir)) if (!NODE_NAMES.includes(name)) symlinkSync(join(dir, name), join(mirror, name))
+      dirs.push(mirror)
+    }
+  }
+  return dirs.join(delimiter)
+}
+
 /** A runtime-sources.yaml whose sha256 fields are all `sha`; URLs on a reserved TLD. */
 function runtimeSourcesYaml(sha: string): string {
   return [
@@ -519,6 +554,97 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
+    // App-update W-20, F-13 (T3.3b): prepare-drive writes config/drive-release.json through the helper the Kit builders
+    // call, when node is on PATH; a DIY drive is still built on a machine without node, and a helper failure is a note,
+    // never the exit code. Under the Kit flag the builder writes the record as its last step instead. It never writes
+    // config/kit-support.txt (only the Kit builder does, once).
+    describe('prepare-drive writes the drive release record when node is there (W-20, F-13)', () => {
+      const preparer = `prepare-drive.${leg.ext}`
+      const record = (root: string): string => join(root, 'config', 'drive-release.json')
+      /** The F-13 golden tree under a `scriptRoot()`, with a Kit's stamp in the builder bytes; made here, never committed
+       *  (`models/`, `logs/`, `workspace/` and `*.log` are git-ignored). */
+      function goldenTree(prefix: string): string {
+        const root = scriptRoot(prefix)
+        for (const [rel, text] of Object.entries(F13.tree.files)) writeDriveFile(root, rel, text)
+        writeDriveFile(root, 'config/kit-support.txt', F13_STAMP)
+        return root
+      }
+
+      it('over the F-13 golden tree it leaves the golden record byte for byte, and the stamp as it was', () => {
+        const root = goldenTree('script-record-')
+        const r = leg.run(preparer, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(readFileSync(record(root))).toEqual(F13_RECORD)
+        expect(readFileSync(join(root, 'config', 'kit-support.txt'), 'latin1')).toBe(F13_STAMP)
+        expect(r.stdout).toContain(`  ${f13Write('W01').stdout}`)
+      })
+
+      // The record is derived from the drive, not an owner-edited file: rewritten on every run, while the two policy
+      // files keep the force-flag rule; an existing record's unknown fields stay (the golden's W15).
+      it('a re-run rewrites the record without the force flag and keeps its unknown fields, while drive.json and policy.json are skipped', () => {
+        const root = goldenTree('script-record-again-')
+        const w15 = f13Write('W15')
+        writeFileSync(record(root), f13Bytes(w15.existing!))
+        const r = leg.run(preparer, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        for (const name of ['drive.json', 'policy.json']) {
+          expect(out).toContain(`skip config/${name}`)
+          expect(readFileSync(join(root, 'config', name), 'utf8')).toBe(F13.tree.files[`config/${name}`])
+        }
+        expect(readFileSync(record(root))).toEqual(Buffer.from(F13_RECORD.toString('utf8').replace(/\n}\n$/, `,\n${w15.append}\n}\n`), 'utf8'))
+      })
+
+      it('without node on PATH it lays the drive out, says it left the record, and exits 0', () => {
+        const root = scriptRoot('script-record-no-node-')
+        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: pathWithoutNode() } })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        for (const dir of DRIVE_LAYOUT_DIRS) expect(existsSync(join(root, ...dir.split('/'))), dir).toBe(true)
+        expect(out).toContain('skip config/drive-release.json (no node on PATH; the drive works without it)')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      // A stub node that prints a line naming a path, then a line of the helper's own, and fails: the run shows the
+      // helper's line only, notes the failure, and still exits 0.
+      it("a node that fails is a note, never the exit code, and only the helper's own lines are shown", () => {
+        const stubDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
+        if (leg.ext === 'ps1') {
+          writeFileSync(join(stubDir, 'node.cmd'), '@echo off\r\n>&2 echo at C:\\someone\\checkout\\x.mjs:1\r\n>&2 echo drive-release.json: stub refusal; nothing written\r\nexit /b 1\r\n')
+        } else {
+          writeFileSync(join(stubDir, 'node'), '#!/bin/sh\necho "at /home/someone/checkout/x.mjs:1" >&2\necho "drive-release.json: stub refusal; nothing written" >&2\nexit 1\n', { mode: 0o755 })
+        }
+        const root = scriptRoot('script-record-stub-')
+        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: `${stubDir}${delimiter}${pathWithoutNode()}` } })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(existsSync(join(root, 'config', 'policy.json')), 'the layout went on').toBe(true)
+        expect(out).toContain('  drive-release.json: stub refusal; nothing written')
+        expect(out).toContain('note: config/drive-release.json not written (exit 1); the drive works without it')
+        expect(out).not.toContain('someone')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      it('with the Kit flag it leaves the record to the builder, which writes it as its last step', () => {
+        const root = goldenTree('script-record-kit-')
+        const r = leg.run(preparer, [f('Target'), root, f('Kit')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain('skip config/drive-release.json (build-commercial-drive writes it as its last step)')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      it('a dry run plans the record and writes none', () => {
+        const root = goldenTree('script-record-dry-')
+        const r = leg.run(preparer, [f('Target'), root, f('DryRun')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain('+ config/drive-release.json')
+        expect(existsSync(record(root))).toBe(false)
+      })
+    })
+
     describe('build-commercial-drive verify-only gate (#233)', () => {
       it.skipIf(!toolBuilt)('runs the canonical gate offline and prints NOT SELLABLE for an empty target', () => {
         const root = scriptRoot('script-gate-')
@@ -598,7 +724,7 @@ for (const leg of SCRIPT_LEGS) {
         const src = mkdtempSync(join(tmpdir(), 'hilbertraum-script-artifact-'))
         const artifact = join(src, 'HilbertRaum-0.1.59-portable.exe')
         writeFileSync(artifact, 'new')
-        const r = leg.run(builder, [f('Target'), root, f('AppArtifact'), artifact, f('DryRun')])
+        const r = leg.run(builder, [f('Target'), root, f('AppArtifact'), artifact, f('DryRun'), f('SupportEnd'), SUPPORT_END])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('HilbertRaum-0.1.58-portable.exe')
@@ -1947,7 +2073,7 @@ for (const leg of SCRIPT_LEGS) {
         'a dry run reaches the canonical verdict: NOT SELLABLE on an empty target',
         () => {
           const root = scriptRoot('script-dry-')
-          const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun')], { timeoutMs: 240_000 })
+          const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun'), f('SupportEnd'), SUPPORT_END], { timeoutMs: 240_000 })
           const out = outputOf(r)
           expect(r.status, out).toBe(1)
           expect(out).toContain('NOT SELLABLE')

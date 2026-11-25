@@ -771,6 +771,9 @@ fetch-runtime                     # verified llama.cpp sidecar builds: per OS th
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json (a skipped manifest is left out)
+record what the drive was built with   # un-numbered, the build's last writes (W-17, W-20): config/kit-support.txt
+                                  # (--support-end, written once per Kit), then config/drive-release.json (the
+                                  # apps, start files and engines now on the drive), by two node helpers
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
              commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied)
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
@@ -787,17 +790,49 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
 
 ```powershell
 # Windows (supply the pre-built, signed artifact(s); or -SkipPackage to assemble + sign yourself — NOT SELLABLE until the apps are on the drive)
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan; the gate still runs and prints its verdict
-.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -KiwixSourceDir D:\kiwix-source-archive -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -DryRun   # print the plan; the gate still runs and prints its verdict
+.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is; writes nothing
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -KiwixSourceDir D:\kiwix-source-archive -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
 ```
 ```bash
 # macOS / Linux (--app-artifact repeats, one per platform in --platforms)
-scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --platforms mac-arm64,linux-x64 \
+scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --support-end 2031-12 --platforms mac-arm64,linux-x64 \
     --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0-mac-arm64.app.zip --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0.AppImage \
     --kiwix-source-dir ~/kiwix-source-archive
 ```
+
+**The support end and the release record (app-update W-17, W-20; [`app-updates.md`](app-updates.md)
+§8.4, §8.5).** `-SupportEnd`/`--support-end <YYYY-MM>` is the month this Kit's support period ends.
+It is required on every run but `-VerifyOnly`, a `-DryRun` included (a rehearsal fails where the run
+would), and must be an exact `YYYY-MM` (ASCII digits, a month 01-12) not before this computer's
+current month (UTC); there is no upper bound, so the month is echoed in words before step 1
+(`kit-support.txt: support ends December 2031 (2031-12)`): read it. A missing or invalid value exits 2
+before step 1. Between step 6 and the final check an un-numbered block writes the build's last two
+files: first `config/kit-support.txt` (the month and one line feed, 8 bytes, written once per Kit),
+then `config/drive-release.json` (the apps, start files and engines now on the drive), each by a node
+helper under `scripts/lib/` (`write-kit-support.mjs`, `write-drive-release.mjs`, run as
+`node --no-warnings …`), so the builder needs node 22.18 or later on `PATH`; it checks node, the
+month and an existing `config/kit-support.txt` before step 1 (exit 1). **The support end is written
+once:** a re-run with the same month keeps the file untouched (a run that ended NOT SELLABLE, or
+`-SkipPackage` followed by a run with `-AppArtifact`); another month, or a file that is not the
+builder's 8 bytes, is refused before any download. To re-stamp unsold stock, delete
+`config/kit-support.txt` on purpose and run again. `-VerifyOnly` writes neither file; `-DryRun` plans
+both and writes neither.
+
+**Apps copied by hand.** `-SkipPackage` (or a run without `-AppArtifact`) still writes the support end
+and a release record, but one without an app version (no app was at the root). After copying the
+signed apps onto the drive yourself, write the record again before the final check, because
+`-VerifyOnly` writes nothing:
+
+```powershell
+node --no-warnings scripts/lib/write-drive-release.mjs --target E:\
+.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly
+```
+
+or run the whole builder again with `-AppArtifact` (and the same `-SupportEnd`), which copies the apps
+and writes the record as its last step. A record that does not name the apps on the drive will make
+the sell gate's record check fail (T3.8).
 
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
 `.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
@@ -1295,7 +1330,10 @@ These sessions create a workspace, documents and logs. Run them on a scratch dri
 that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
 `logs/` but keep the two folders, and delete `config/workspace.json`, `config/working-copy-lost.json`
 and any `.<suffix>` copy of either), then run `build-commercial-drive` with `-VerifyOnly`
-(`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
+(`--verify-only`) again: the sell gate names every file the wipe missed (#893). `-VerifyOnly` writes
+nothing, so if the session changed an app, a start file or an engine on the Kit, write the release
+record again first (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive>`, see
+"Apps copied by hand" above); never touch `config/kit-support.txt`. On a Mac, Finder
 writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
 files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts
 both. Delete them too before that final check, or do not browse `workspace/` and `logs/` in Finder.

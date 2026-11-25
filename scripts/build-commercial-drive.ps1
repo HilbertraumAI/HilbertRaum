@@ -19,6 +19,13 @@
        requires the app artifact + launcher for every platform in -Platforms and a
        recorded, matching hash for every sidecar binary.
 
+  Between steps 6 and 7 an un-numbered block writes the build's last two files: the Kit's
+  support end, config/kit-support.txt (from -SupportEnd, written once per Kit), then the
+  drive's release record, config/drive-release.json (the apps, start files and engines now
+  on the drive; docs/app-updates.md sections 8.4 and 8.5). Both are written by node helpers
+  under scripts/lib, so node 22.18 or later must be on PATH; the month, node and an existing
+  support end are checked before step 1.
+
   The verdict is assertCommercialDrive's (apps/desktop/src/main/services/commercial-drive.ts,
   the CANONICAL, unit-tested gate). This script orchestrates the existing scripts; it does NOT
   re-implement them. The order of the steps lives here and in the .sh twin alone
@@ -54,19 +61,29 @@
   without their source. Omitted (default): this Kit ships no kiwix-tools at all; the buyer
   installs the family in-app instead. See docs/packaging.md.
 
+.PARAMETER SupportEnd
+  The month this Kit's support period ends, as YYYY-MM (for example 2031-12): written once
+  into config/kit-support.txt (W-17). Required on every run but -VerifyOnly, a -DryRun
+  included; not before this computer's current month. The month is echoed in words before
+  step 1. A drive that already holds another month is refused before step 1: to re-stamp
+  unsold stock, delete config/kit-support.txt on purpose and run again.
+
 .PARAMETER SkipPackage
   Skip the packaging/signing step entirely (assemble layout + assets + launchers + verify).
-  The drive is NOT SELLABLE until the app artifacts are on it.
+  The drive is NOT SELLABLE until the app artifacts are on it. The support end and a release
+  record without an app version are still written; after copying the apps by hand, write the
+  record again (docs/packaging.md) before the -VerifyOnly check.
 
 .PARAMETER VerifyOnly
-  Skip steps 1-6 and run only the final gate against the drive as it is.
+  Skip steps 1-6 and the record block and run only the final gate against the drive as it
+  is: nothing is written, and -SupportEnd is not needed (given, it is ignored).
 
 .PARAMETER DryRun
   Print the plan, download and change nothing -- the final gate still runs and prints
   its verdict for the target as it is.
 
 .EXAMPLE
-  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
+  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -AppArtifact .\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
 #>
 [CmdletBinding()]
 param(
@@ -75,6 +92,7 @@ param(
   [string[]] $AppArtifact,
   [string[]] $Platforms = @('win-x64', 'mac-arm64', 'linux-x64'),
   [string] $KiwixSourceDir,
+  [string] $SupportEnd,
   [switch] $SkipPackage,
   [switch] $VerifyOnly,
   [switch] $DryRun
@@ -88,6 +106,10 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 # Normalize -Target to a full path before passing it to the child scripts (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
+# The target as the node helpers are handed it. Native-arg quoting (PS 5.1): a trailing backslash before the closing
+# quote of a space-containing path escapes the quote, so it goes; a bare drive root like E:\ keeps its backslash.
+$NodeTarget = $Target.TrimEnd('\')
+if ($NodeTarget -match '^[A-Za-z]:$') { $NodeTarget += '\' }
 
 # The platforms a kit can be sold for -- keep in sync with KIT_PLATFORMS in
 # apps/desktop/src/shared/runtime-sources.ts (script-drift test).
@@ -109,6 +131,13 @@ foreach ($p in $Platforms) {
     Write-Host "Unknown platform '$p' -- known: $($KitPlatforms -join ', ')" -ForegroundColor Red
     exit 2
   }
+}
+# A Kit's support end (W-17): required on every run that writes, a dry run included, so a rehearsal fails where the run
+# would. Checked as a plain string here; the helper below checks the month itself (no binder attribute: a binding error
+# prints PowerShell's own text, exits 1 and would be demanded under -VerifyOnly too).
+if (-not $VerifyOnly -and -not $SupportEnd) {
+  Write-Host "-SupportEnd <YYYY-MM> is required: the month this Kit's support ends (config/kit-support.txt)" -ForegroundColor Red
+  exit 2
 }
 # The version the artifacts must carry = the desktop package's (electron-builder and the
 # release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
@@ -146,11 +175,45 @@ function Run([string]$script, [hashtable]$params) {
   & $path @params
   if ($LASTEXITCODE -ne 0) { Write-Host "$script failed (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 }
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $prefix; returns its exit code. stderr is merged so those lines can be picked out; in
+# PowerShell 5.1 a merged stderr line is an error record, which 'Stop' turns into a terminating error, so the call runs
+# under 'Continue', in this function's scope only. prepare-drive.ps1 holds the same function (script-drift.test.ts).
+function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {
+  $ErrorActionPreference = 'Continue'
+  $global:LASTEXITCODE = 0
+  $lines = @(& $node --no-warnings @helperArgs 2>&1)
+  $code = $LASTEXITCODE
+  foreach ($line in $lines) {
+    $text = "$line"
+    if ($text.StartsWith($prefix)) { Write-Host "  $text" }
+  }
+  return $code
+}
 
 Write-Host "Build a COMMERCIAL (sellable) drive at: $Target" -ForegroundColor Green
 Write-Host "  platforms: $($Platforms -join ', ') | app version: $AppVersion"
 if ($DryRun) { Write-Host '(dry run -- nothing will be changed; the final gate still runs)' -ForegroundColor Yellow }
 if ($VerifyOnly) { Write-Host '(verify only -- steps 1-6 skipped)' -ForegroundColor Yellow }
+
+# The Kit's support end and the drive's release record (W-17, W-20; docs/app-updates.md sections 8.4, 8.5) are the
+# build's last writes, by two node helpers. Both are checked here, before any download: node itself, the month (in a
+# dry run too) and whatever config/kit-support.txt holds already (it is written once per Kit), so a build that could
+# not finish stops before step 1, as a missing artifact does (#769). The month is echoed in words for the owner to read.
+$KitSupportHelper = Join-Path $RepoRoot 'scripts/lib/write-kit-support.mjs'
+$ReleaseHelper = Join-Path $RepoRoot 'scripts/lib/write-drive-release.mjs'
+if ($VerifyOnly) {
+  if ($SupportEnd) { Write-Host '(verify only -- -SupportEnd ignored: nothing is written)' -ForegroundColor Yellow }
+} else {
+  $helperNode = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $helperNode) {
+    Write-Host 'build-commercial-drive needs node 22.18 or later on PATH: it writes config/kit-support.txt and config/drive-release.json' -ForegroundColor Red
+    exit 1
+  }
+  $checkExit = Invoke-NodeHelper $helperNode.Source 'kit-support.txt' @($KitSupportHelper, '--target', $NodeTarget, '--support-end', $SupportEnd, '--check')
+  if ($checkExit -eq 2) { exit 2 }
+  if ($checkExit -ne 0) { exit 1 }
+}
 
 if (-not $VerifyOnly) {
 # --- 1. Lay out the drive with the COMMERCIAL policy --------------------------------
@@ -275,6 +338,24 @@ if ($DryRun) {
   Write-Host '  (dry run: skipping verify-models)'
 } else {
   Run 'verify-models.ps1' @{ Target = $Target; Generate = $true }
+}
+
+# --- Record what this drive was built with (W-17, W-20) ------------------------------
+# UN-NUMBERED, like the kiwix bundle: the build's last writes, after step 6 and before the final check, inside the
+# verify-only guard (-VerifyOnly writes neither file). First the Kit's support end, config/kit-support.txt (written once
+# per Kit: the same month is kept, another one refused; docs/app-updates.md section 8.4), then the drive's release
+# record, config/drive-release.json (the apps, start files and engines now on the drive, section 8.5), which must come
+# last: a change after it leaves a record that no longer says what the drive holds. The stamp is in config/, which the
+# record never lists. A failure of either stops the build here, with the helper's own line.
+Write-Host "`nRecord what this drive was built with" -ForegroundColor Cyan
+if ($DryRun) {
+  Write-Host "  would write config/kit-support.txt: $SupportEnd"
+  Write-Host '  would write config/drive-release.json'
+} else {
+  $stampExit = Invoke-NodeHelper $helperNode.Source 'kit-support.txt' @($KitSupportHelper, '--target', $NodeTarget, '--support-end', $SupportEnd)
+  if ($stampExit -ne 0) { Write-Host "  write-kit-support.mjs failed (exit $stampExit): the build stops here" -ForegroundColor Red; exit 1 }
+  $recordExit = Invoke-NodeHelper $helperNode.Source 'drive-release.json' @($ReleaseHelper, '--target', $NodeTarget)
+  if ($recordExit -ne 0) { Write-Host "  write-drive-release.mjs failed (exit $recordExit): the build stops here" -ForegroundColor Red; exit 1 }
 }
 } # end of steps 1-6 (skipped by -VerifyOnly)
 

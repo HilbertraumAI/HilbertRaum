@@ -44,6 +44,10 @@ From the root, these paths are derived and created (idempotently) on first run:
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
+                           #   drive-release.json: what the drive was built with (apps, start files,
+                           #   engines; written by the drive scripts, app-updates.md §8.5)
+                           #   kit-support.txt: a Kit's support end, one line YYYY-MM, written once by
+                           #   the Kit builder, never by the app (app-updates.md §8.4)
                            #   working-copy-lost.json: only after a lock that kept the last saved state
                            #   because the working file was gone or damaged (#875), or a start that
                            #   shredded the session an unclean end left (#892); content-free, bound
@@ -132,7 +136,11 @@ HILBERTRAUM/
 ├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
 │                                                #   drive, by the same sell-gate rule (#893)
 ├── docs/                                       # user guide, privacy, troubleshooting
-└── config/{drive.json,policy.json,checksums.json}  # + workspace.json once a workspace exists, and
+└── config/{drive.json,policy.json,checksums.json}  # + drive-release.json (the record of the apps, start
+                                                #   files and engines, the build's last write; on a DIY
+                                                #   drive when node was on PATH), kit-support.txt on a Kit
+                                                #   only (its support end, YYYY-MM, written once; the sell
+                                                #   gate reads both), workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
                                                 #   saved state (#875) or a start shredded the session an
                                                 #   unclean end left (#892); a workspace created here removes a
@@ -207,6 +215,10 @@ drive is the same flow as building it, run again from a machine with the repo:
    notices (the workspace and weights are untouched). Run it **without** `--force`: an existing
    `config/drive.json` and `config/policy.json` are kept, and `--force` would rewrite both to the
    defaults, resetting a drive owner's policy (`docs/packaging.md`, "To move a drive to the repo's pin").
+   `config/drive-release.json` is different: it is derived from what the drive holds, so every run
+   (with node on `PATH`) writes it again, keeping the fields it does not know. Run `prepare-drive`
+   again after the new build is copied in (step 3), so the record names it. `config/kit-support.txt`
+   is never touched.
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
    An engine that the app updated past the drive's pin is kept as it is (#873); `--allow-downgrade`
    replaces it with the drive's pin.
@@ -243,7 +255,8 @@ interrupted password change, which run first; the copy it decrypted to try is re
 ## Preparing a drive (scripts)
 
 The `scripts/` directory lays out and verifies a drive. The scripts are **self-contained**
-(no Node/npm needed to prepare a drive); their logic mirrors the unit-tested
+(no Node/npm needed to prepare a drive; with node 22.18 or later on `PATH`, `prepare-drive` also
+writes the release record, below); their logic mirrors the unit-tested
 `services/drive.ts`. See [`packaging.md`](packaging.md) for the full flow.
 
 ```powershell
@@ -273,6 +286,20 @@ for a plaintext developer drive). `DRIVE-NOTICES.md` is a committed, GENERATED f
 (`node scripts/generate-drive-notices.mjs` — derived from `model-manifests/**` + the pinned texts
 under `licenses/`); the commercial sell gate fails a drive where any of the three is missing or
 empty (see [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md)).
+
+At its end `prepare-drive` writes **`config/drive-release.json`**, the record of what the drive was
+built with: the version of the apps at the root (only when exactly one app per system is there and all
+carry one version, or an existing value a root app still carries), the systems they are for, and the
+path and SHA-256 of each root app, start file and file under `runtime/` (app-update W-20,
+[`app-updates.md`](app-updates.md) §8.5). One node helper writes it,
+`scripts/lib/write-drive-release.mjs`, the same one the Kit builder runs as its last write, so it
+needs node 22.18 or later on `PATH`; without node the script says so in one line and goes on (an
+absent record means no constraint), and a helper that fails is a note, never the script's exit code.
+The record is rewritten on every run, `--force` or not, and keeps any field it does not know. With
+`--kit` (only `build-commercial-drive` passes it) the record is left to the builder, which writes it
+after the apps, start files and engines are on the drive. `prepare-drive` never writes
+`config/kit-support.txt`: a Kit's support end is written once, by `build-commercial-drive`
+(`--support-end`, [`packaging.md`](packaging.md)), and a DIY drive has none.
 
 By default it does **not** download artifacts. `--with-assets`/`-WithAssets`
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is
@@ -399,7 +426,8 @@ carries ONLY the language data under `ocr/`:
   without its `config/workspace.json` (the lock screen says the key file is missing or can't be
   read, #807), and `config/workspace.json` alone opens nothing (the lock screen says the encrypted
   workspace file is missing, #911). The rest of `config/`
-  (`drive.json`, `policy.json`, `checksums.json`) belongs to the drive and stays (troubleshooting,
+  (`drive.json`, `policy.json`, `checksums.json`, `drive-release.json`, a Kit's `kit-support.txt`)
+  belongs to the drive and stays (troubleshooting,
   "I forgot my workspace password", #931).
 
 ### Filesystem

@@ -26,6 +26,13 @@
 # passes it, at its step 1. Without it no "updates" key is written, so a DIY drive's
 # policy.json is the same as before the key existed.
 #
+# config/drive.json and config/policy.json are only (re)written with --force: they are the drive
+# owner's to edit. At its end it writes config/drive-release.json, the record of the apps, start
+# files and engines on the drive (docs/app-updates.md §8.5), when node 22.18 or later is on PATH:
+# the record is derived from the drive, so it is rewritten on every run, --force or not, and keeps
+# the fields it does not know. Without node it says so and goes on (the drive works without the
+# record). With --kit it leaves the record to build-commercial-drive, which writes it as its last step.
+#
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
 #       [--dev] [--kit] [--with-assets] [--all-models] [--accept-license]
@@ -213,6 +220,19 @@ for lic in "${LICENSE_ARTIFACTS[@]}"; do
 done
 echo
 
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $1; returns its exit code. build-commercial-drive.sh holds the same function
+# (script-drift.test.ts).
+node_helper() {
+  local prefix="$1" out line code=0
+  shift
+  out="$(node --no-warnings "$@" 2>&1)" || code=$?
+  while IFS= read -r line; do
+    case "$line" in "$prefix"*) echo "  $line" ;; esac
+  done <<< "$out"
+  return "$code"
+}
+
 write_json() {
   local rel="$1" content="$2" full="$TARGET/$1"
   if [[ $DRY_RUN -eq 1 ]]; then echo "  + $rel"; return; fi
@@ -319,6 +339,28 @@ else
   echo "     or re-run with --with-assets to download + verify them (scripts/fetch-models.sh)."
   echo "  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/ (or --with-assets)."
   echo "  3. Run scripts/verify-models.sh --target \"$TARGET\" to verify checksums."
+fi
+echo
+
+# The drive's release record (app-update W-20; docs/app-updates.md §8.5), config/drive-release.json: the apps, start files
+# and engines now on the drive, written by the node helper the Kit builder calls too, so every drive built with node
+# carries the same record for the same drive. Optional: a DIY drive is still built on a machine without node, so a
+# missing node or a helper that fails is one line, never this script's exit code. Under --kit the builder writes the
+# record as its last step instead (hashing runtime/ once).
+echo "Release record:"
+if [[ $KIT -eq 1 ]]; then
+  echo "  skip config/drive-release.json (build-commercial-drive writes it as its last step)"
+elif [[ $DRY_RUN -eq 1 ]]; then
+  echo "  + config/drive-release.json"
+elif ! command -v node >/dev/null 2>&1; then
+  echo "  skip config/drive-release.json (no node on PATH; the drive works without it)"
+else
+  RELEASE_HELPER="$SCRIPT_DIR/lib/write-drive-release.mjs"
+  record_exit=0
+  node_helper drive-release.json "$RELEASE_HELPER" --target "$TARGET" || record_exit=$?
+  if [[ $record_exit -ne 0 ]]; then
+    echo "  note: config/drive-release.json not written (exit $record_exit); the drive works without it"
+  fi
 fi
 echo
 echo "Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:"

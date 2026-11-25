@@ -37,6 +37,9 @@ const POLICY_BYTES = JSON.parse(repoText('apps', 'desktop', 'tests', 'fixtures',
   'ps1' | 'sh',
   Record<'diy' | 'dev', string>
 >
+/** A Kit's support end five years ahead (W-17): every run without the verify-only flag needs one, a dry run too (T3.3b). */
+const SUPPORT_YEAR = new Date().getUTCFullYear() + 5
+const SUPPORT_END = `${SUPPORT_YEAR}-06`
 /** A committed model outside the default set: --with-assets must leave it alone. */
 const OTHER_ID = String(MANIFEST_DOCS.find((d) => !DEFAULT_IDS.includes(String(d.doc.id)) && d.doc.download)!.doc.id)
 /** One model of the Kit's bundled set (#766), so the builder's step 2 plans a fetch and passes. */
@@ -195,7 +198,8 @@ for (const leg of SCRIPT_LEGS) {
       seed(root, [BUNDLED_ID])
       return root
     }
-    const dry = (root: string, extra: string[]) => leg.run(builder, [f('Target'), root, f('DryRun'), ...extra], { timeoutMs: HEAVY_MS })
+    const dry = (root: string, extra: string[], supportEnd: string[] = [f('SupportEnd'), SUPPORT_END]) =>
+      leg.run(builder, [f('Target'), root, f('DryRun'), ...supportEnd, ...extra], { timeoutMs: HEAVY_MS })
 
     // A dry run's verdict on a drive with no app is NOT SELLABLE (exit 1); what matters is that the run got there.
     it('skipping the package step still reaches the final check [7], with no missing-app notice', () => {
@@ -296,6 +300,86 @@ for (const leg of SCRIPT_LEGS) {
       expect(out).toContain('refusing to fetch kiwix-tools binaries without their source')
       expect(out.replace(/\\/g, '/')).not.toMatch(/into:.*\/runtime\/kiwix-tools\//)
       expect(out).not.toMatch(step(4))
+    })
+
+    // App-update W-17, W-20 (T3.3b): a Kit's support end is required and checked before step 1, a dry run included (a
+    // rehearsal fails where the run would), and echoed in words; the build's last writes are the stamp, then the release
+    // record, un-numbered between step 6 and the final check. A dry run plans both and writes neither.
+    it('the support end is echoed before step 1, and the dry run plans the stamp, then the record, between [6] and [7]', () => {
+      const root = kitTarget('orch-record-')
+      const r = dry(root, [f('SkipPackage')])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(1) // NOT SELLABLE: a dry target holds no app
+      const lines = r.stdout.split(/\r?\n/)
+      const lineOf = (what: string, test: (line: string) => boolean): number => {
+        const i = lines.findIndex(test)
+        expect(i, `${what}\n${out}`).toBeGreaterThanOrEqual(0)
+        return i
+      }
+      const order = [
+        lineOf('the echo', (l) => l.trim() === `kit-support.txt: support ends June ${SUPPORT_YEAR} (${SUPPORT_END})`),
+        lineOf('[1]', (l) => l.startsWith('[1] ')),
+        lineOf('[6]', (l) => l.startsWith('[6] ')),
+        lineOf('the stamp', (l) => l.trim() === `would write config/kit-support.txt: ${SUPPORT_END}`),
+        lineOf('the record', (l) => l.trim() === 'would write config/drive-release.json'),
+        lineOf('[7]', (l) => l.startsWith('[7] '))
+      ]
+      expect(order).toEqual([...order].sort((a, b) => a - b))
+      for (const name of ['kit-support.txt', 'drive-release.json']) expect(existsSync(join(root, 'config', name)), name).toBe(false)
+    })
+
+    const notAMonth = 'kit-support.txt: the support end must be a month as YYYY-MM'
+    it.each<[string, string[], string]>([
+      ['no support end', [], `${f('SupportEnd')} <YYYY-MM> is required: the month this Kit's support ends`],
+      ['month 13', [f('SupportEnd'), `${SUPPORT_YEAR}-13`], notAMonth],
+      ['a two-digit year', [f('SupportEnd'), '31-12'], notAMonth],
+      ['a trailing space', [f('SupportEnd'), `${SUPPORT_END} `], notAMonth],
+      ['a past month', [f('SupportEnd'), '2020-01'], 'kit-support.txt: the support end 2020-01 is before this month']
+    ])('%s: refused before step 1 with exit 2', (_title, supportEnd, line) => {
+      const r = dry(kitTarget('orch-support-'), [], supportEnd)
+      const out = outputOf(r)
+      expect(r.status, out).toBe(2)
+      expect(out).toContain(line)
+      expect(out).not.toMatch(step(1))
+    })
+
+    it.each<[string, string[]]>([
+      ['without a support end', []],
+      ['with one, which it ignores', [f('SupportEnd'), SUPPORT_END]]
+    ])('the verify-only flag %s writes neither file and reaches the final check [7]', (title, supportEnd) => {
+      const root = kitTarget('orch-verify-')
+      const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), ...supportEnd], { timeoutMs: HEAVY_MS })
+      const out = outputOf(r)
+      expect(r.status, out).toBe(1) // NOT SELLABLE: an empty target
+      expect(out).toMatch(step(7))
+      expect(out).not.toMatch(step(1))
+      expect(out).not.toContain('is required')
+      if (supportEnd.length > 0) expect(out).toContain(`(verify only -- ${f('SupportEnd')} ignored: nothing is written)`)
+      else expect(out).not.toContain(`${f('SupportEnd')} ignored`)
+      for (const name of ['kit-support.txt', 'drive-release.json']) expect(existsSync(join(root, 'config', name)), `${title}: ${name}`).toBe(false)
+    })
+
+    // Written once per Kit (W-17, record §8.4): a stamp of another month is refused before any download; unsold stock is
+    // re-stamped by deleting the file on purpose. The same month is kept, so a re-run goes on.
+    it('a target whose stamp holds another month is refused before step 1 (exit 1), naming both months', () => {
+      const root = kitTarget('orch-stamp-other-')
+      const other = `${SUPPORT_YEAR + 1}-11`
+      writeDriveFile(root, 'config/kit-support.txt', `${other}\n`)
+      const r = dry(root, [])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(1)
+      expect(out).toContain(`kit-support.txt: this drive's support end is already ${other}; refusing to change it to ${SUPPORT_END}.`)
+      expect(out).not.toMatch(step(1))
+      expect(readFileSync(join(root, 'config', 'kit-support.txt'), 'latin1')).toBe(`${other}\n`)
+    })
+
+    it('a target whose stamp holds the same month goes on to the final check, and the echo says so', () => {
+      const root = kitTarget('orch-stamp-same-')
+      writeDriveFile(root, 'config/kit-support.txt', `${SUPPORT_END}\n`)
+      const r = dry(root, [f('SkipPackage')])
+      const out = outputOf(r)
+      expect(out).toContain(`kit-support.txt: support ends June ${SUPPORT_YEAR} (${SUPPORT_END}, already on this drive)`)
+      expect(out).toMatch(step(7))
     })
   })
 }
