@@ -99,11 +99,12 @@ function contentDigest(dir: string): Record<string, string> {
  * are left out of the real tar's run), then exits non-zero, as GNU tar does there (2; bsdtar exits 1). `hold`: a tar
  * wedged after its last write, whose exit comes only once the extractor kills it. `short`: members tar wrote only
  * half of (an I/O error on a stick, a full drive). `folders`: members with a folder in their place, left out of the
- * run too.
+ * run too. `linkAt`: a link to the folder tar unpacks in, as tar makes one on a drive that does hold links (a
+ * junction on Windows, which needs no privilege and which Node reads as a symbolic link; a symbolic link elsewhere).
  */
 function tarOnLinklessDrive(
   refused: string[],
-  opts: { hold?: boolean; short?: string[]; folders?: string[] } = {}
+  opts: { hold?: boolean; short?: string[]; folders?: string[]; linkAt?: string } = {}
 ): ExtractSpawn {
   return (command, args, options) => {
     const left = [...refused, ...(opts.folders ?? [])]
@@ -113,6 +114,7 @@ function tarOnLinklessDrive(
       real.on('close', (code) => {
         for (const m of opts.short ?? []) truncateSync(at(m), Math.floor(statSync(at(m)).size / 2))
         for (const m of opts.folders ?? []) mkdirSync(at(m), { recursive: true })
+        if (opts.linkAt) symlinkSync(String(options.cwd), at(opts.linkAt), 'junction')
         resolve(code)
       })
     )
@@ -297,6 +299,22 @@ describe('engine archives with version links on a drive that holds no links (#10
       'tar failed and files the archive lists cannot be sized or are not the size it gives',
       { archive: ARCHIVE_NAME, exitCode: 2, count: 1, files: [ggml] }
     ])
+  })
+
+  // T8.5c round 3 (R2 N-2): the repair is for a drive that holds no links. On one that does, a link tar made could
+  // take a copy outside the folder whatever the names say, so a stage holding any link is never repaired and tar's
+  // failure stands, as before #1045. The link here is contained (it names the folder itself): any link at all is enough.
+  it('a stage that holds a link is not repaired: tar’s failure stands, and nothing is swapped', async () => {
+    const { rootPath, manifestsDir, pin } = linuxDrive()
+    const archive = release()
+    pin(archive)
+    const before = contentDigest(join(rootPath, 'runtime'))
+    const { mgr, logs } = manager(archive, makeTarExtractor({ spawn: tarOnLinklessDrive(LINKS, { linkAt: `${RELEASE}/folder-link` }) }))
+    const { job, ends } = await update(rootPath, manifestsDir, mgr)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends.map((e) => e.reason)).toEqual(['install'])
+    expect(contentDigest(join(rootPath, 'runtime'))).toEqual(before)
+    expect(logs).toContainEqual(['tar failed and the folder holds a link: no repair', { archive: ARCHIVE_NAME, exitCode: 2 }])
   })
 
   // Only a tar that ran to its end is mended: one stopped by the deadline (or a cancel) may have cut a member short.
