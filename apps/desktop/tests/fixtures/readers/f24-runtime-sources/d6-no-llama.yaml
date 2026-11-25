@@ -1,0 +1,9 @@
+whisper_cpp:
+  version: v1.8.6
+  builds:
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://example.invalid/whisper-bin-x64.zip
+      sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      extract_to: runtime/whisper.cpp/win

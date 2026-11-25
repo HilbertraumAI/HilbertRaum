@@ -1,0 +1,31 @@
+id: g23-nested-key-first
+display_name: Golden nested key first
+family: golden
+mmproj:
+  local_path: models/vision/g23-nested-key-first-mmproj.gguf
+  sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  role: hologram
+  min_app_version: 99.0.0
+  download:
+    url: https://example.invalid/g23-nested-key-first-mmproj.gguf
+    sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+role: vision
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 0.000001
+recommended_min_ram_gb: 1
+recommended_ram_gb: 1
+recommended_context_tokens: 2048
+local_path: models/vision/g23-nested-key-first.gguf
+sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+download:
+  url: https://example.invalid/g23-nested-key-first.gguf
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  size_bytes: 9
+  license_url: https://example.invalid/LICENSE
+license_review:
+  status: approved
+  reviewed_by: golden
+  reviewed_at: '2026-11-25'
+  notes: T2.10 reader golden

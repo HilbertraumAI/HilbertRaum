@@ -1,0 +1,287 @@
+{
+  "contract": "F-25, the skills contract (plan Appendix B), with W-65 as T2.14 built it (commit 73639b94)",
+  "readers": [
+    "parseSkillMarkdown -> validateSkillManifest, skillNeedsNewerApp, failedSkillNeedsNewerApp (src/shared/skill-manifest.ts)",
+    "discoverSkillsInDir, reconcileSkills, createSkillRegistry().reconcileStatus() (src/main/services/skills/registry.ts)"
+  ],
+  "verdicts": {
+    "discovery": "valid | invalidManifest | needsNewerApp | invalidFolderName | ignored (no code, no row)",
+    "gate": "skillNeedsNewerApp on a valid skill: compatible | needsNewerApp",
+    "row": "the row a first reconcile of the folder as an app skill leaves: { enabled, reason } (disabled_reason), or null for no row"
+  },
+  "appVersion": "0.1.66",
+  "appVersions": [
+    "0.1.66",
+    "0.1.66-beta.1",
+    ""
+  ],
+  "skills": [
+    {
+      "folder": "g25-base",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "a valid instruction skill (kind defaults to instruction)"
+    },
+    {
+      "folder": "g25-tool-kind",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "tool, the other member of the closed kind set"
+    },
+    {
+      "folder": "g25-min-equal",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "at": {
+        "0.1.66-beta.1": {
+          "discovery": "valid",
+          "gate": "needsNewerApp",
+          "row": {
+            "enabled": false,
+            "reason": "min_app_version"
+          }
+        },
+        "": {
+          "discovery": "valid",
+          "gate": "compatible",
+          "row": {
+            "enabled": true,
+            "reason": null
+          }
+        }
+      },
+      "why": "minAppVersion equal to the app; a pre-release of that release is older (the pre-release row)"
+    },
+    {
+      "folder": "g25-min-below",
+      "class": "accepts",
+      "discovery": "valid",
+      "gate": "compatible",
+      "row": {
+        "enabled": true,
+        "reason": null
+      },
+      "why": "minAppVersion below the app: parts compare as numbers"
+    },
+    {
+      "folder": "g25-min-above",
+      "class": "lists",
+      "discovery": "valid",
+      "gate": "needsNewerApp",
+      "row": {
+        "enabled": false,
+        "reason": "min_app_version"
+      },
+      "at": {
+        "": {
+          "discovery": "valid",
+          "gate": "compatible",
+          "row": {
+            "enabled": true,
+            "reason": null
+          }
+        }
+      },
+      "why": "minAppVersion above the app: listed and kept off; fail-open on an app version the gate cannot read"
+    },
+    {
+      "folder": "g25-min-malformed",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a minAppVersion that is not MAJOR.MINOR.PATCH is invalid"
+    },
+    {
+      "folder": "g25-kind-unknown",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a kind outside the closed set is invalid"
+    },
+    {
+      "folder": "g25-kind-unknown-min-above",
+      "class": "lists",
+      "discovery": "needsNewerApp",
+      "row": null,
+      "at": {
+        "": {
+          "discovery": "invalidManifest",
+          "row": null
+        }
+      },
+      "why": "W-65's typed case: invalid here, but its well-formed minAppVersion is above the app, so it is counted as made for a newer version (fail-open: invalid on an app version the gate cannot read)"
+    },
+    {
+      "folder": "g25-kind-unknown-min-equal",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "at": {
+        "0.1.66-beta.1": {
+          "discovery": "needsNewerApp",
+          "row": null
+        }
+      },
+      "why": "a new kind is invalid whatever version it declares unless that version is above the app (it is, to a pre-release of it)"
+    },
+    {
+      "folder": "g25-kind-unknown-min-below",
+      "class": "drops",
+      "discovery": "invalidManifest",
+      "row": null,
+      "why": "a new kind declaring an older version is invalid"
+    },
+    {
+      "folder": "G25_Bad_Name",
+      "class": "drops",
+      "discovery": "invalidFolderName",
+      "row": null,
+      "why": "a folder name that is no skill id"
+    },
+    {
+      "folder": "g25-no-skill-md",
+      "class": "ignores",
+      "discovery": "ignored",
+      "row": null,
+      "why": "a folder without SKILL.md is no skill package"
+    },
+    {
+      "folder": ".g25-dot-folder",
+      "class": "ignores",
+      "discovery": "ignored",
+      "row": null,
+      "why": "dot-named folders are never skill packages"
+    }
+  ],
+  "sequences": [
+    {
+      "name": "only min_app_version comes back on, and only on a known app version",
+      "folder": "g25-min-above",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": false,
+            "reason": "min_app_version",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "",
+          "expect": {
+            "enabled": false,
+            "reason": "min_app_version",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "0.2.0-beta.1",
+          "expect": {
+            "enabled": false,
+            "reason": "min_app_version",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "0.2.0",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "the user's switch-off is never undone",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "userDisables": true,
+          "expect": {
+            "enabled": false,
+            "reason": "user",
+            "available": true
+          }
+        },
+        {
+          "reconcileAt": "9.0.0",
+          "expect": {
+            "enabled": false,
+            "reason": "user",
+            "available": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "a vanished folder marks its row unavailable, never deletes it",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "removeFolder": true,
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "a folder turned invalid marks its row unavailable, never deletes it",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": true
+          }
+        },
+        {
+          "replaceWith": "g25-kind-unknown",
+          "reconcileAt": "0.1.66",
+          "expect": {
+            "enabled": true,
+            "reason": null,
+            "available": false
+          }
+        }
+      ]
+    }
+  ]
+}

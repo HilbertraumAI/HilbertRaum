@@ -1,0 +1,22 @@
+llama_cpp:
+  version: b9585
+  builds:
+    - os: win
+      arch: x64
+      backend: vulkan
+      url: https://example.invalid/llama-b9585-win-x64-vulkan.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://example.invalid/llama-b9585-win-x64-cpu.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win/cpu
+ocr:
+  version: 4.0.0_best_int
+  files:
+    - lang: deu
+      url: https://example.invalid/deu.traineddata.gz
+      sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      dest: ../outside/deu.traineddata.gz

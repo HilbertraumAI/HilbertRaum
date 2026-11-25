@@ -404,6 +404,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   (today's behaviour, no worse; a marker is #311's containment decision to make). No `ModelInfo`/
   Models-screen per-file view yet.
 
+- **Release rules (W-62).** The first sold release reads every manifest a later release puts on a
+  drive, for ever: see "Release rules for changing a manifest" below.
+
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
 - **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
@@ -476,6 +479,52 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   prints `RESTORED` or `RE-PREFILLED` with the advice. An older app ignores the key (unknown keys
   are ignored), which is the cache-on behaviour it already had. Evidence: `model-benchmarks.md`
   §6.6 "#512 amendment".
+
+## Release rules for changing a manifest (W-62, F-23)
+
+The first release sold on a Kit ("release 1") is the oldest app that will ever read this folder: after
+an update it still runs on a computer that has not taken the update, and after "Go back". It reads
+every manifest a later release writes into the drive's `model-manifests/`, by the rules above, and they
+can never change in the field. So every later release keeps these rules (the record:
+[`app-updates.md`](app-updates.md) §6.11):
+
+- **New keys freely.** Release 1 ignores a key it does not know.
+- **Anything release 1 would refuse, only behind `min_app_version`:** a new value rule, a new enum value,
+  a new role, a new engine requirement, `speculative_decoding` or `disable_prompt_cache` on a role other
+  than chat. With the field release 1 lists the manifest under "Needs a newer HilbertRaum"; without
+  it, release 1 drops the file with a log line (a role it does not know alone is listed either way).
+- **`min_app_version` is exactly `MAJOR.MINOR.PATCH`.** Release 1 reads any other value as newer.
+- **A changed rule for an existing id** ships as a second file with the same id and `min_app_version`,
+  beside the manifest release 1 uses: a usable manifest always keeps its id. Never put
+  `min_app_version` on the only manifest of an id release 1 runs.
+- **`default_for_role`:** never make the flagged manifest unusable for release 1 without flagging a
+  usable replacement in the same release.
+- **Never repoint a hash in place; retire a model with `download.withdrawn`**, never by deleting a
+  manifest whose weights may be on the drive. App-owned chat manifests are refreshed all or nothing.
+- **Never rename an app-owned manifest or give it a new id in place:** `prepare-drive` copies without
+  deleting, so both files would stay on a refreshed drive as a duplicate id.
+- **Key order for the scripts.** `fetch-models` and `verify-models` read a manifest flat, first match
+  wins (they run with no Node): no key nested in a block may come before a top-level key of the same
+  name (`local_path`, `sha256`, `url`, `size_bytes`, `license_url`, `runtime`, `format`, `license`,
+  `status`, `withdrawn`, `bundled_on_preconfigured_drive`); `id`, `role` and `min_app_version` are
+  top-level keys at column 0. `committed-catalog.test.ts` holds that read to the YAML parser on every
+  committed manifest, for every key the scripts read.
+
+**The scripts skip what their checkout's app cannot use** (W-62 (b)). Both twins of `fetch-models` and
+`verify-models` skip a manifest whose `role` is not one of the six or whose `min_app_version` is above
+the version in the checkout's `apps/desktop/package.json`, by the app's rule (exactly
+`MAJOR.MINOR.PATCH`, parts compared as whole numbers, a pre-release older than its release; any other
+value, or a checkout whose version cannot be read, counts as newer; never a `[version]` cast). Each
+skip is one line, `SKIP   <id>: needs a newer HilbertRaum (<why>)`. `fetch-models` fetches nothing of
+it and adds `| for a newer HilbertRaum <n>` to its summary line; `--only` naming a model only such a
+manifest carries exits 2. `verify-models` judges none of its files, so `--strict` ignores its weight,
+lists it nowhere in `config/checksums.json` (`--generate`), prints the count, and fails `--kit` on
+any skip: a Kit is built with its own app, so such a manifest is a defect there, and the canonical gate
+says the same. The role list is a second spelling of `shared/manifest.ts`'s (`script-drift.test.ts`).
+
+**The golden set** `apps/desktop/tests/fixtures/readers/f23-manifests/` holds manifests written from
+these rules and what release 1 does with each: accepts, lists, drops or ignores, at its own version, at
+a pre-release of it and with no known version, and what the scripts do. A verdict there never changes.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:

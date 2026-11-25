@@ -21,6 +21,13 @@
 # --only <id> fetches one model. An id no manifest carries, or one whose manifest declares no
 # download block, exits 2: an explicit request that names nothing fetchable.
 #
+# A manifest this checkout's app cannot use is skipped with one SKIP line and counted in the
+# summary (W-62 (b), the app-update wave): a role the app does not know, or a min_app_version
+# above the version in apps/desktop/package.json (exactly MAJOR.MINOR.PATCH, as the app compares;
+# anything else, or a checkout whose version cannot be read, counts as newer). The app lists such
+# a manifest under "Needs a newer HilbertRaum" and never uses it, so nothing of it is fetched.
+# --only naming a model only such a manifest carries exits 2.
+#
 # Half a download pair (#767): a model whose top-level download has no partner on its mmproj
 # projector or on a files: member (or the other way round) is refused with the validator's
 # message (BLOCK, exit 1), whatever is on disk and whatever --accept-license says: the app
@@ -123,6 +130,137 @@ files_member_records() {
 clean_value() { printf '%s\n' "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
+
+# --- W-62 (b), the app-update wave: skip a manifest this checkout's app cannot use -------------------
+# The app lists a manifest whose role it does not know, or whose min_app_version is above its own
+# version, under "Needs a newer HilbertRaum" and never uses it (shared/manifest.ts, F-23). Release 1's
+# scripts meet every later release's manifests, so they skip the same files, by the same rule. The same
+# block as verify-models.sh's (script-drift.test.ts holds both twins of both scripts to the app).
+# The roles the app knows: a second spelling of shared/manifest.ts ROLES.
+MODEL_ROLES=(
+  chat
+  embeddings
+  reranker
+  transcriber
+  vision
+  translation
+)
+# The version the app built from this checkout reports: apps/desktop/package.json's "version". Empty
+# when it cannot be read: then every min_app_version counts as newer, as in an app without a version.
+APP_PACKAGE_JSON="$REPO_ROOT/apps/desktop/package.json"
+APP_VERSION=""
+if [[ -f "$APP_PACKAGE_JSON" ]]; then
+  APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_PACKAGE_JSON" | head -n1)" || APP_VERSION=""
+fi
+# The app's two version rules, spelled without character ranges: a minimum is EXACTLY MAJOR.MINOR.PATCH
+# (no leading zero); the app's own version may add a -pre.release and a +build.
+MIN_APP_VERSION_RE='^(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)$'
+APP_VERSION_RE='^(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)(-[0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]+)?(\+[0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]+)?$'
+APP_KNOWN=0
+APP_V1=''
+APP_V2=''
+APP_V3=''
+APP_PRE=''
+if [[ "$APP_VERSION" =~ $APP_VERSION_RE ]]; then
+  APP_KNOWN=1
+  APP_V1="${BASH_REMATCH[1]}"
+  APP_V2="${BASH_REMATCH[2]}"
+  APP_V3="${BASH_REMATCH[3]}"
+  APP_PRE="${BASH_REMATCH[4]:-}"
+fi
+if [[ $APP_KNOWN -eq 1 ]]; then CHECKOUT="this checkout is $APP_VERSION"; else CHECKOUT="this checkout's version is unknown"; fi
+
+# num_lt A B — A < B for two runs of digits without leading zeros, of any length (no arithmetic: no overflow).
+num_lt() { [[ ${#1} -lt ${#2} || ( ${#1} -eq ${#2} && "$1" < "$2" ) ]]; }
+
+# min_app_version_newer VALUE — the app's rule for a min_app_version that is there (manifestNeedsNewerApp):
+# newer when VALUE is not exactly MAJOR.MINOR.PATCH, when this checkout's version is unknown, or when VALUE
+# is above it (a pre-release does not meet its own release). Parts compare as whole numbers, never by a
+# version cast, which would read `1.2` as a version.
+min_app_version_newer() {
+  local n1 n2 n3
+  [[ "$1" =~ $MIN_APP_VERSION_RE ]] || return 0
+  n1="${BASH_REMATCH[1]}"
+  n2="${BASH_REMATCH[2]}"
+  n3="${BASH_REMATCH[3]}"
+  [[ $APP_KNOWN -eq 1 ]] || return 0
+  if [[ "$APP_V1" != "$n1" ]]; then num_lt "$APP_V1" "$n1"; return; fi
+  if [[ "$APP_V2" != "$n2" ]]; then num_lt "$APP_V2" "$n2"; return; fi
+  if [[ "$APP_V3" != "$n3" ]]; then num_lt "$APP_V3" "$n3"; return; fi
+  [[ -n "$APP_PRE" ]]
+}
+
+known_role() {
+  local r
+  for r in "${MODEL_ROLES[@]}"; do [[ "$r" == "$1" ]] && return 0; done
+  return 1
+}
+
+# gate_fields MANIFEST — its id, min_app_version and role, read at column 0 only (a key nested in a
+# block never answers), the first of each: "<id>\037<min>\037<role>". min and role are N (absent, or
+# YAML null: no value, ~, null), B (a block below the key: no string) or S and the value (quotes
+# unwrapped; unquoted, cut at " #"). One awk, not `field`'s five processes per key.
+gate_fields() {
+  awk -v sq="'" -v dq='"' '
+    function scalar(v,   c, e) {
+      sub(/^[ \t]+/, "", v)
+      c = substr(v, 1, 1)
+      if (c == dq || c == sq) {
+        v = substr(v, 2); e = index(v, c)
+        return "S" (e ? substr(v, 1, e - 1) : v)
+      }
+      sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v)
+      if (v == "") return "E"
+      if (v == "~" || v == "null" || v == "Null" || v == "NULL") return "N"
+      return "S" v
+    }
+    { sub(/\r$/, "") }
+    pending != "" {
+      if ($0 ~ /^[ \t]*(#.*)?$/) next
+      if ($0 ~ /^[ \t]/ || $0 ~ /^-([ \t]|$)/) val[pending] = "B"
+      pending = ""
+    }
+    /^(id|min_app_version|role)[ \t]*:/ {
+      key = $0; sub(/[ \t]*:.*$/, "", key)
+      if (key in val) next
+      rest = $0; sub(/^[^:]*:/, "", rest)
+      v = scalar(rest)
+      if (v == "E") { val[key] = "N"; pending = key } else val[key] = v
+    }
+    END {
+      id = ("id" in val) ? val["id"] : "N"
+      printf "%s\037%s\037%s\n", (id ~ /^S/ ? substr(id, 2) : ""), (("min_app_version" in val) ? val["min_app_version"] : "N"), (("role" in val) ? val["role"] : "N")
+    }
+  ' "$1"
+}
+
+# skip_reason MANIFEST — why this checkout's app cannot use the manifest, into GATE_WHY (empty: it can),
+# and its id, read at column 0, into GATE_ID. A missing or blank role is no reason (the app calls such a
+# file invalid, and these scripts never validate a manifest).
+skip_reason() {
+  local rec min role
+  rec="$(gate_fields "$1")"
+  IFS="$SEP" read -r GATE_ID min role <<< "$rec"
+  GATE_WHY=""
+  case "$min" in
+    N) ;;
+    B) GATE_WHY="min_app_version is no version string; $CHECKOUT" ;;
+    S*) min="${min#S}"; if min_app_version_newer "$min"; then GATE_WHY="min_app_version ${min:-(empty)}; $CHECKOUT"; fi ;;
+  esac
+  if [[ -z "$GATE_WHY" ]]; then
+    case "$role" in
+      N) ;;
+      B) GATE_WHY="a role that is no name" ;;
+      S*)
+        role="${role#S}"
+        role="${role#"${role%%[![:space:]]*}"}"
+        role="${role%"${role##*[![:space:]]}"}"
+        if [[ -n "$role" ]] && ! known_role "$role"; then GATE_WHY="role \"$role\""; fi
+        ;;
+    esac
+  fi
+  return 0
+}
 
 # Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
 file_state() {
@@ -249,9 +387,9 @@ while IFS= read -r mf; do
 done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
          ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
 
-planned=0; fetched=0; skipped=0; had_failure=0
+planned=0; fetched=0; skipped=0; had_failure=0; newer_count=0
 # --only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
-only_seen=0; only_unbundled=0; only_fetchable=0
+only_seen=0; only_unbundled=0; only_fetchable=0; only_newer=0
 
 echo "Fetch models -> $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be downloaded)"
@@ -266,6 +404,15 @@ for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
   if [[ -n "$ONLY" ]]; then
     [[ "$id" != "$ONLY" ]] && continue
     only_seen=1
+  fi
+  # W-62 (b): a manifest this checkout's app cannot use is skipped with one line and counted, whatever else
+  # it says: nothing of it is fetched (the app never uses it). Before --bundled, so a Kit build names it too.
+  skip_reason "$mf"
+  if [[ -n "$GATE_WHY" ]]; then
+    printf '  SKIP   %s: needs a newer HilbertRaum (%s)\n' "${id:-$(basename "$mf")}" "$GATE_WHY"
+    newer_count=$((newer_count + 1))
+    [[ -n "$ONLY" ]] && only_newer=1
+    continue
   fi
   # One grep, and only under --bundled: under Git Bash every fork counts.
   if [[ $BUNDLED -eq 1 ]] && ! grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf"; then
@@ -439,6 +586,10 @@ if [[ -n "$ONLY" && $only_seen -eq 0 ]]; then
   echo "No model manifest with id '$ONLY' under '$MANIFESTS_DIR'." >&2
   exit 2
 fi
+if [[ -n "$ONLY" && $only_fetchable -eq 0 && $only_newer -eq 1 ]]; then
+  echo "Model '$ONLY' needs a newer HilbertRaum: nothing to fetch." >&2
+  exit 2
+fi
 if [[ -n "$ONLY" && $only_unbundled -eq 1 ]]; then
   echo "Model '$ONLY' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." >&2
   exit 2
@@ -449,7 +600,11 @@ if [[ -n "$ONLY" && $only_fetchable -eq 0 ]]; then
 fi
 
 echo
-printf 'Planned %d | fetched %d | skipped %d\n' "$planned" "$fetched" "$skipped"
+if [[ $newer_count -gt 0 ]]; then
+  printf 'Planned %d | fetched %d | skipped %d | for a newer HilbertRaum %d\n' "$planned" "$fetched" "$skipped" "$newer_count"
+else
+  printf 'Planned %d | fetched %d | skipped %d\n' "$planned" "$fetched" "$skipped"
+fi
 # A Kit with nothing to preload fails at step 2, not after the builder's runtime downloads (#766).
 if [[ $BUNDLED -eq 1 && $planned -eq 0 ]]; then
   echo "No bundled model (bundled_on_preconfigured_drive: true) with a download block: a Kit has nothing to preload." >&2

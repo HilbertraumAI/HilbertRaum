@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { existsSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { failedSkillNeedsNewerApp, parseSkillMarkdown, skillNeedsNewerApp } from '../../src/shared/skill-manifest'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 import type { Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
 import { listTables, tempRoot, openFreshDb } from '../helpers/db-fixtures'
@@ -624,6 +626,123 @@ describe('skills registry — disabled reason (#846)', () => {
 
     reconcileSkills(db, at(dirs, '1.0.0', T3))
     expect(enabledOf(db, 'app:kept')).toBe(true) // never switched off by a stale reason
+  })
+})
+
+// App-update wave T2.10 (W-62, F-25): release 1 reads the drive's app-skills/ and every user skill a later release leaves,
+// for ever. `tests/fixtures/readers/f25-skills/` holds skill folders written from the contract, with W-65's verdict as
+// T2.14 built it, and `verdicts.json` says what release 1 makes of each at three app versions: the parse and the gate, the
+// discovery code, the row a first reconcile leaves; then four reconcile sequences. The verdicts are data; these rows only
+// compare them with the real readers. The folders are copied to a temp root: the reconcile writes beside them.
+type F25Discovery = 'valid' | 'invalidManifest' | 'needsNewerApp' | 'invalidFolderName' | 'ignored'
+interface F25Verdict {
+  discovery: F25Discovery
+  gate?: 'compatible' | 'needsNewerApp'
+  row: { enabled: boolean; reason: string | null } | null
+}
+interface F25Data {
+  appVersions: string[]
+  skills: Array<F25Verdict & { folder: string; class: string; at?: Record<string, F25Verdict> }>
+  sequences: Array<{
+    name: string
+    folder: string
+    steps: Array<{
+      reconcileAt?: string
+      userDisables?: true
+      removeFolder?: true
+      replaceWith?: string
+      expect: { enabled: boolean; reason: string | null; available: boolean }
+    }>
+  }>
+}
+
+describe('F-25 golden skill folders: what release 1 accepts, lists, drops and ignores (T2.10, W-62)', () => {
+  const SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f25-skills')
+  const data = JSON.parse(readFileSync(join(SET, 'verdicts.json'), 'utf8')) as F25Data
+  const goldenDirs = (): SkillDirs => {
+    const dirs = makeDirs()
+    cpSync(join(SET, 'skills'), dirs.appSkillsDir, { recursive: true })
+    return dirs
+  }
+  const at = (s: F25Data['skills'][number], appVersion: string): F25Verdict => s.at?.[appVersion] ?? s
+  const stateOf = (db: Db, installId: string): { enabled: boolean; reason: string | null; available: boolean } | null => {
+    const row = db.prepare('SELECT enabled, disabled_reason, unavailable_at FROM skills WHERE install_id = ?').get(installId) as
+      | { enabled: number; disabled_reason: string | null; unavailable_at: string | null }
+      | undefined
+    return row ? { enabled: row.enabled === 1, reason: row.disabled_reason, available: row.unavailable_at === null } : null
+  }
+
+  it('every folder of the set has a verdict, and every class occurs', () => {
+    expect(data.skills.map((s) => s.folder).sort()).toEqual(readdirSync(join(SET, 'skills')).sort())
+    expect(new Set(data.skills.map((s) => s.class))).toEqual(new Set(['accepts', 'lists', 'drops', 'ignores']))
+  })
+
+  it.each(data.appVersions.map((v) => [JSON.stringify(v), v] as const))(
+    'each folder, at app version %s: the parse and the gate, the discovery code, the row and the counts a reconcile leaves',
+    (_label, appVersion) => {
+      const dirs = goldenDirs()
+      for (const s of data.skills) {
+        const want = at(s, appVersion)
+        const md = join(dirs.appSkillsDir, s.folder, 'SKILL.md')
+        if (want.discovery === 'ignored' || want.discovery === 'invalidFolderName') continue
+        const parsed = parseSkillMarkdown(readFileSync(md, 'utf8'))
+        expect(parsed.ok, s.folder).toBe(want.discovery === 'valid')
+        if (parsed.ok) {
+          const gate = skillNeedsNewerApp(parsed.manifest!.compatibility.minAppVersion, appVersion) ? 'needsNewerApp' : 'compatible'
+          expect(gate, s.folder).toBe(want.gate)
+        } else {
+          expect(failedSkillNeedsNewerApp(parsed, appVersion), s.folder).toBe(want.discovery === 'needsNewerApp')
+        }
+      }
+
+      const found = discoverSkillsInDir(dirs.appSkillsDir, 'app', { appVersion })
+      // A folder is named by its skill or its error line; a folder name that is no skill id never rides the line
+      // (§22-M1), so those errors are matched by count. A folder neither names, and no unnamed error, is ignored.
+      const named = (folder: string): F25Discovery | 'unnamed' => {
+        if (found.skills.some((x) => x.folderName === folder)) return 'valid'
+        const i = found.errors.findIndex((e) => e.startsWith(`app-skills/${folder}: `))
+        return i >= 0 ? (found.errorCodes[i] as F25Discovery) : 'unnamed'
+      }
+      const unnamedCodes = found.errorCodes.filter((_code, i) => found.errors[i].startsWith('app-skills: '))
+      const want = (s: F25Data['skills'][number]): F25Discovery | 'unnamed' => {
+        const d = at(s, appVersion).discovery
+        return d === 'ignored' || d === 'invalidFolderName' ? 'unnamed' : d
+      }
+      expect(Object.fromEntries(data.skills.map((s) => [s.folder, named(s.folder)]))).toEqual(
+        Object.fromEntries(data.skills.map((s) => [s.folder, want(s)]))
+      )
+      expect(unnamedCodes).toEqual(data.skills.filter((s) => at(s, appVersion).discovery === 'invalidFolderName').map(() => 'invalidFolderName'))
+
+      const db = freshDb()
+      const registry = createSkillRegistry({ getDb: () => db, ...dirs, appVersion })
+      registry.reconcile()
+      const rows = Object.fromEntries(listSkills(db).map((r) => [r.installId, stateOf(db, r.installId)]))
+      const wantRows = Object.fromEntries(
+        data.skills.flatMap((s) => {
+          const row = at(s, appVersion).row
+          return row ? [[`app:${s.folder}`, { ...row, available: true }]] : []
+        })
+      )
+      expect(rows).toEqual(wantRows)
+      const count = (codes: F25Discovery[]): number => data.skills.filter((s) => codes.includes(at(s, appVersion).discovery)).length
+      const newer = count(['needsNewerApp'])
+      const status = registry.reconcileStatus()
+      expect(status.errorCount).toBe(count(['invalidManifest', 'invalidFolderName']))
+      expect(status.needsNewerAppCount).toBe(newer > 0 ? newer : undefined)
+    }
+  )
+
+  it.each(data.sequences.map((q) => [q.name, q] as const))('%s', (_name, q) => {
+    const dirs = goldenDirs()
+    const db = freshDb()
+    const installId = `app:${q.folder}`
+    for (const [i, step] of q.steps.entries()) {
+      if (step.removeFolder) rmSync(join(dirs.appSkillsDir, q.folder), { recursive: true, force: true })
+      if (step.replaceWith) copyFileSync(join(SET, 'skills', step.replaceWith, 'SKILL.md'), join(dirs.appSkillsDir, q.folder, 'SKILL.md'))
+      if (step.userDisables) expect(setSkillEnabled(db, installId, false)).toBe(true)
+      if (step.reconcileAt !== undefined) reconcileSkills(db, { ...dirs, appVersion: step.reconcileAt })
+      expect(stateOf(db, installId), `step ${i + 1}`).toEqual(step.expect)
+    }
   })
 })
 

@@ -7,14 +7,20 @@
 #   real hash, file differs                   -> MISMATCH  (exit 1)
 #   file absent                               -> MISSING
 #
-# --generate writes <target>/config/checksums.json from the present weights.
+# A manifest this checkout's app cannot use is skipped with one SKIP line and counted (W-62 (b),
+# the app-update wave): a role the app does not know, or a min_app_version above the version in
+# apps/desktop/package.json (exactly MAJOR.MINOR.PATCH, as the app compares; anything else, or a
+# checkout whose version cannot be read, counts as newer). The app lists such a manifest under
+# "Needs a newer HilbertRaum" and never uses it, so none of its files is judged.
+#
+# --generate writes <target>/config/checksums.json from the present weights (usable manifests only).
 # --strict   ship gate: exit 1 unless every manifest weight is VERIFIED (and >= 1
-#            exists).
+#            exists). A skipped manifest's weight is not judged (intended: it is not this app's).
 # --kit      the Kit ship gate, --strict over what a preconfigured Kit ships (#766): every
 #            bundled model (bundled_on_preconfigured_drive: true, >= 1 of them) and every
 #            model with any file on the drive. A model with no file on the drive is the in-app
 #            download catalog, listed as CATALOG and not verified. Mirrors commercial-drive.ts
-#            assertCommercialDrive.
+#            assertCommercialDrive. Fails on any skipped manifest: a Kit ships its own app.
 #
 # Usage:
 #   scripts/verify-models.sh --target /Volumes/HILBERTRAUM [--generate] [--strict | --kit]
@@ -123,6 +129,136 @@ supported_format_for() {
 # under Git Bash every fork counts, and --kit asks this of every manifest.
 is_bundled() { grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$1"; }
 
+# --- W-62 (b), the app-update wave: skip a manifest this checkout's app cannot use -------------------
+# The app lists a manifest whose role it does not know, or whose min_app_version is above its own
+# version, under "Needs a newer HilbertRaum" and never uses it (shared/manifest.ts, F-23). Release 1's
+# scripts meet every later release's manifests, so they skip the same files, by the same rule.
+# The roles the app knows: a second spelling of shared/manifest.ts ROLES (script-drift.test.ts).
+MODEL_ROLES=(
+  chat
+  embeddings
+  reranker
+  transcriber
+  vision
+  translation
+)
+# The version the app built from this checkout reports: apps/desktop/package.json's "version". Empty
+# when it cannot be read: then every min_app_version counts as newer, as in an app without a version.
+APP_PACKAGE_JSON="$REPO_ROOT/apps/desktop/package.json"
+APP_VERSION=""
+if [[ -f "$APP_PACKAGE_JSON" ]]; then
+  APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_PACKAGE_JSON" | head -n1)" || APP_VERSION=""
+fi
+# The app's two version rules, spelled without character ranges: a minimum is EXACTLY MAJOR.MINOR.PATCH
+# (no leading zero); the app's own version may add a -pre.release and a +build.
+MIN_APP_VERSION_RE='^(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)$'
+APP_VERSION_RE='^(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)\.(0|[123456789][0123456789]*)(-[0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]+)?(\+[0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]+)?$'
+APP_KNOWN=0
+APP_V1=''
+APP_V2=''
+APP_V3=''
+APP_PRE=''
+if [[ "$APP_VERSION" =~ $APP_VERSION_RE ]]; then
+  APP_KNOWN=1
+  APP_V1="${BASH_REMATCH[1]}"
+  APP_V2="${BASH_REMATCH[2]}"
+  APP_V3="${BASH_REMATCH[3]}"
+  APP_PRE="${BASH_REMATCH[4]:-}"
+fi
+if [[ $APP_KNOWN -eq 1 ]]; then CHECKOUT="this checkout is $APP_VERSION"; else CHECKOUT="this checkout's version is unknown"; fi
+
+# num_lt A B — A < B for two runs of digits without leading zeros, of any length (no arithmetic: no overflow).
+num_lt() { [[ ${#1} -lt ${#2} || ( ${#1} -eq ${#2} && "$1" < "$2" ) ]]; }
+
+# min_app_version_newer VALUE — the app's rule for a min_app_version that is there (manifestNeedsNewerApp):
+# newer when VALUE is not exactly MAJOR.MINOR.PATCH, when this checkout's version is unknown, or when VALUE
+# is above it (a pre-release does not meet its own release). Parts compare as whole numbers, never by a
+# version cast, which would read `1.2` as a version.
+min_app_version_newer() {
+  local n1 n2 n3
+  [[ "$1" =~ $MIN_APP_VERSION_RE ]] || return 0
+  n1="${BASH_REMATCH[1]}"
+  n2="${BASH_REMATCH[2]}"
+  n3="${BASH_REMATCH[3]}"
+  [[ $APP_KNOWN -eq 1 ]] || return 0
+  if [[ "$APP_V1" != "$n1" ]]; then num_lt "$APP_V1" "$n1"; return; fi
+  if [[ "$APP_V2" != "$n2" ]]; then num_lt "$APP_V2" "$n2"; return; fi
+  if [[ "$APP_V3" != "$n3" ]]; then num_lt "$APP_V3" "$n3"; return; fi
+  [[ -n "$APP_PRE" ]]
+}
+
+known_role() {
+  local r
+  for r in "${MODEL_ROLES[@]}"; do [[ "$r" == "$1" ]] && return 0; done
+  return 1
+}
+
+# gate_fields MANIFEST — its id, min_app_version and role, read at column 0 only (a key nested in a
+# block never answers), the first of each: "<id>\037<min>\037<role>". min and role are N (absent, or
+# YAML null: no value, ~, null), B (a block below the key: no string) or S and the value (quotes
+# unwrapped; unquoted, cut at " #"). One awk, not `field`'s five processes per key.
+gate_fields() {
+  awk -v sq="'" -v dq='"' '
+    function scalar(v,   c, e) {
+      sub(/^[ \t]+/, "", v)
+      c = substr(v, 1, 1)
+      if (c == dq || c == sq) {
+        v = substr(v, 2); e = index(v, c)
+        return "S" (e ? substr(v, 1, e - 1) : v)
+      }
+      sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v)
+      if (v == "") return "E"
+      if (v == "~" || v == "null" || v == "Null" || v == "NULL") return "N"
+      return "S" v
+    }
+    { sub(/\r$/, "") }
+    pending != "" {
+      if ($0 ~ /^[ \t]*(#.*)?$/) next
+      if ($0 ~ /^[ \t]/ || $0 ~ /^-([ \t]|$)/) val[pending] = "B"
+      pending = ""
+    }
+    /^(id|min_app_version|role)[ \t]*:/ {
+      key = $0; sub(/[ \t]*:.*$/, "", key)
+      if (key in val) next
+      rest = $0; sub(/^[^:]*:/, "", rest)
+      v = scalar(rest)
+      if (v == "E") { val[key] = "N"; pending = key } else val[key] = v
+    }
+    END {
+      id = ("id" in val) ? val["id"] : "N"
+      printf "%s\037%s\037%s\n", (id ~ /^S/ ? substr(id, 2) : ""), (("min_app_version" in val) ? val["min_app_version"] : "N"), (("role" in val) ? val["role"] : "N")
+    }
+  ' "$1"
+}
+
+# skip_reason MANIFEST — why this checkout's app cannot use the manifest, into GATE_WHY (empty: it can),
+# and its id, read at column 0, into GATE_ID. A missing or blank role is no reason (the app calls such a
+# file invalid, and these scripts never validate a manifest).
+skip_reason() {
+  local rec min role
+  rec="$(gate_fields "$1")"
+  IFS="$SEP" read -r GATE_ID min role <<< "$rec"
+  GATE_WHY=""
+  case "$min" in
+    N) ;;
+    B) GATE_WHY="min_app_version is no version string; $CHECKOUT" ;;
+    S*) min="${min#S}"; if min_app_version_newer "$min"; then GATE_WHY="min_app_version ${min:-(empty)}; $CHECKOUT"; fi ;;
+  esac
+  if [[ -z "$GATE_WHY" ]]; then
+    case "$role" in
+      N) ;;
+      B) GATE_WHY="a role that is no name" ;;
+      S*)
+        role="${role#S}"
+        role="${role#"${role%%[![:space:]]*}"}"
+        role="${role%"${role##*[![:space:]]}"}"
+        if [[ -n "$role" ]] && ! known_role "$role"; then GATE_WHY="role \"$role\""; fi
+        ;;
+    esac
+  fi
+  return 0
+}
+
 # Whether ANY file of a model is on the drive: its weight, its projector, or an extra file of a
 # multi-file weight (#766). Args: local_path mmproj_local files_block.
 any_file_present() {
@@ -171,8 +307,21 @@ done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
 # app's buildChecksumsJson do), and --strict / --kit still fail below (#767).
 [[ ${#MANIFEST_FILES[@]} -eq 0 ]] && echo "No model manifests found under '$MANIFESTS_DIR' — nothing to verify." >&2
 
+# W-62 (b): set aside, one line each, every manifest this checkout's app cannot use; nothing below sees it.
+USABLE_FILES=()
+newer_count=0
 # Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
 for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
+  skip_reason "$mf"
+  if [[ -n "$GATE_WHY" ]]; then
+    printf '  SKIP   %s: needs a newer HilbertRaum (%s)\n' "${GATE_ID:-$(basename "$mf")}" "$GATE_WHY"
+    newer_count=$((newer_count + 1))
+  else
+    USABLE_FILES+=("$mf")
+  fi
+done
+
+for mf in ${USABLE_FILES[@]+"${USABLE_FILES[@]}"}; do
   id="$(field "$mf" id)"
   local_path="$(field "$mf" local_path)"
   sha="$(field "$mf" sha256 | tr '[:upper:]' '[:lower:]')"
@@ -261,7 +410,7 @@ if [[ $GENERATE -eq 1 ]]; then
     echo '  "algorithm": "sha256",'
     echo '  "entries": ['
     first=1
-    for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
+    for mf in ${USABLE_FILES[@]+"${USABLE_FILES[@]}"}; do
       id="$(field "$mf" id)"; local_path="$(field "$mf" local_path)"
       [[ -z "$local_path" ]] && continue
       mmproj_local="$(field_in "$(block_of "$mf" mmproj)" local_path)"
@@ -283,6 +432,11 @@ if [[ $GENERATE -eq 1 ]]; then
   echo "Wrote $out"
 fi
 
+# W-62 (b): outside --kit a skip is counted, not a failure (--kit fails on it below).
+if [[ $newer_count -gt 0 && $KIT -eq 0 ]]; then
+  echo "$newer_count manifest(s) skipped: they need a newer HilbertRaum ($CHECKOUT)."
+fi
+
 if [[ $had_mismatch -eq 1 ]]; then
   echo "One or more weights FAILED checksum verification." >&2
   exit 1
@@ -291,6 +445,12 @@ fi
 # --strict = the sellable posture (assertCommercialDrive parity): every weight must
 # be VERIFIED against a REAL manifest hash, and there must be at least one weight.
 if [[ $STRICT -eq 1 ]]; then
+  # W-62 (b), sheet decision 8: a Kit is built with its own app, so a manifest that app cannot use is a
+  # defect on it (the canonical gate says the same), and a Kit is never silently smaller.
+  if [[ $KIT -eq 1 && $newer_count -gt 0 ]]; then
+    echo "KIT: $newer_count manifest(s) need a newer HilbertRaum ($CHECKOUT) — a Kit ships only manifests its own app can use." >&2
+    exit 1
+  fi
   if [[ $KIT -eq 1 && $bundled_models -eq 0 ]]; then
     echo "KIT: no bundled model (bundled_on_preconfigured_drive: true) — a Kit ships its bundled set preloaded." >&2
     exit 1

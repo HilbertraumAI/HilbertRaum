@@ -1526,30 +1526,113 @@ to the version kept in `updates/previous/`.
 
 ### 6.11 What release 1 reads that later versions change (F-23, F-24, F-25)
 
-Three old-reader contracts are **as built on master** and freeze as they are; P2 adds their golden
-"release 1 accepts / lists / ignores" fixture sets and their two reviews.
-- **Model manifests (F-23)**, #847/#848: unknown keys ignored; a bad value of a known key or a missing
-  required key drops the file with a log line; an unknown `role` or a `min_app_version` above the app
-  (exactly `MAJOR.MINOR.PATCH`; anything else counts as newer) lists the file under "Needs a newer
-  HilbertRaum", never selectable; a usable manifest always keeps its id over a same-id newer one
-  ([`data-contracts.md`](data-contracts.md), "A manifest for a newer HilbertRaum").
+Three old-reader contracts are **as built on master** and freeze as they are. Release 1 is the oldest
+reader of every manifest, engine marker, `runtime-sources.yaml` and skill folder a later release puts
+on a drive, for ever. P2 (T2.10) froze what release 1 does with each in golden fixture sets, written
+from the contract text and locked by `tests/fixtures/golden-fixtures.sha256`; the rules below say
+what a later release may change freely and what only behind `min_app_version` or a new key.
+- **Model manifests (F-23)**, #847/#848: unknown keys ignored (the goldens hold them at the top level
+  and inside `download` and `license_review`); a bad value of a known key
+  or a missing required key drops the file with a log line; an unknown `role` or a `min_app_version`
+  above the app (exactly `MAJOR.MINOR.PATCH`; anything else, or an app that does not know its version,
+  counts as newer; a pre-release app is older than its release) lists the file under "Needs a newer
+  HilbertRaum", read for its display fields only, never selectable; one id space: a usable manifest
+  always keeps its id over a same-id newer one, and among newer ones the first in walk order wins;
+  the walk sorts each folder by code unit; `default_for_role` picks among usable manifests, else the
+  first usable one of the role; `speculative_decoding` and `disable_prompt_cache` outside chat stay
+  rejected ([`data-contracts.md`](data-contracts.md), "A manifest for a newer HilbertRaum").
 - **The AI engine (F-24)**, #516/#842/#843/#873: pins only from the app's bundled
   `runtime-sources.yaml`; the version relation orders `bNNNNN` and dotted tags (`older` → the update is
   offered; `newer` → never replaced, started anyway; any other shape → `unknown`, reported, never
   updated); a reinstall replaces with the pin whatever the relation; the yaml validator is whole-file;
-  and §6.7.
-- **Skills (F-25)**, #846: app skills read from the drive's `app-skills/` only; `kind` is the closed set
-  `instruction` / `tool`, checked before `compatibility.minAppVersion`; `skills.disabled_reason`
-  records why a row is off, and the reconcile re-enables only `min_app_version` on a known app version;
-  a vanished or invalid folder marks its row unavailable, never deletes it.
+  the install marker is read as one of absent, unreadable, damaged or a marker (#1028); and §6.7.
+- **Skills (F-25)**, #846, with W-65: app skills read from the drive's `app-skills/` only; `kind` is the
+  closed set `instruction` / `tool`, checked before `compatibility.minAppVersion`, so a new kind is
+  invalid whatever version it declares, except W-65's typed case: a skill that fails validation but
+  declares a well-formed `minAppVersion` above the app is counted as made for a newer version; the
+  version gate is fail-open on a version it cannot read, and a pre-release app is older than its own
+  release; `skills.disabled_reason` records why a row is off, and the reconcile re-enables only
+  `min_app_version` on a known app version; a vanished or invalid folder marks its row unavailable,
+  never deletes it.
 
-**Release rules for changing definitions** (W-62), written into [`model-policy.md`](model-policy.md) by
-P2: a per-pull-request check that release 1's reader snapshot (§10.1) accepts every committed manifest,
-skill and yaml block; a change that makes release 1 drop a file fails unless the file carries
-`min_app_version` (manifests) or is a new kind bundled only (skills); an app-owned manifest or skill is
-never renamed or given a new id in place; the flat reads of `fetch-models` and `verify-models` run over
-every committed manifest; never a new `os` or `arch` value inside an existing family block of the yaml;
-never repoint a hash in place.
+**The golden sets** (`apps/desktop/tests/fixtures/readers/`, each with its `PROVENANCE.md`):
+
+| Set | What it holds | Verdicts | Run by |
+|---|---|---|---|
+| `f23-manifests/` | 45 single files, four scenario trees (id space, walk order, `default_for_role`), one flat-read probe | accepts / lists / drops / ignores at `0.1.66`, at `0.1.66-beta.1` and at an unknown version; what the scripts do at each | `manifest.test.ts`, `committed-catalog.test.ts`, `script-execution.test.ts` |
+| `f24-runtime-sources/` | 14 whole yaml files | accepts (with the families it yields) / drops (the whole file) | `runtime-sources.test.ts` |
+| `f24-markers/` | 18 marker vectors of one engine copy, base64 where the repo's byte nets refuse the bytes | per reader: the shared reading, the pre-spawn check, both `fetch-runtime` twins in both modes; and the record every writer writes | `assets.test.ts`, `script-execution.test.ts` |
+| `f25-skills/` | 13 skill folders, four reconcile sequences | the parse and the gate, the discovery code, the row a reconcile leaves, at three app versions | `skills-registry.test.ts` |
+
+A verdict in these sets never changes: a later release adds files and lines only. Two marker verdicts
+differ from the plan's wording of W-62 and are frozen as built: "a map without the program" is damaged
+at the pre-spawn check and in a Kit build (`fetch-runtime --commercial`), but a marker to the shared
+reading and to the twins outside commercial mode; and a new `arch` value inside a family block of the
+yaml is accepted (a build no Kit selects), where the duty below still forbids one.
+
+**Release rules for model manifests (F-23)**, also in [`model-policy.md`](model-policy.md) ("Release
+rules for changing a manifest"):
+- new keys freely, but no key nested in a block before a top-level key of the same name
+  (`local_path`, `sha256`, `url`, `size_bytes`, `license_url`, `runtime`, `format`, `license`,
+  `status`, `withdrawn`, `bundled_on_preconfigured_drive`): release 1's scripts read those flat, first
+  match wins; `id`, `role` and `min_app_version` stay top-level keys at column 0;
+- a new value rule, enum value, role or engine requirement, and `speculative_decoding` or
+  `disable_prompt_cache` on a role other than chat, only behind `min_app_version`;
+- `min_app_version` is exactly `MAJOR.MINOR.PATCH`: release 1 reads any other value (a pre-release
+  minimum, a fourth part) as newer, for ever;
+- a changed rule for an existing id only as a second same-id file with `min_app_version`, beside the one
+  release 1 uses; never `min_app_version` on the only manifest of an id release 1 runs;
+- never make the `default_for_role` manifest unusable for release 1 without flagging a usable
+  replacement in the same release;
+- never repoint a hash in place; retire a model with `download.withdrawn`, never by deleting a manifest
+  whose weights may be on the drive; app-owned chat manifests are refreshed all or nothing (§6.3);
+- an app-owned manifest or skill is never renamed or given a new id in place (W-62 (a)):
+  `prepare-drive` copies without deleting, so the old and the new file would both stay on a refreshed
+  drive as a duplicate id; a retired file leaves a Kit only through §6.3's owned-hash removal.
+
+**Release rules for the AI engine (F-24).** The marker rules are in [`data-contracts.md`](data-contracts.md)
+(the engine install marker, #1028): `binaries` stays a map of relative path (`/`) to lower-case SHA-256
+hex of every file of the copy, the program first (a map without the program makes release 1 refuse the
+copy at its start); anything new goes into a new top-level field; no key named `version`, `backend`,
+`os`, `arch` or `binaries` below the top level; those four stay strings and `version` keeps the
+upstream tag shapes; the marker stays one line of UTF-8 JSON, without a byte-order mark or blanks,
+with no `{`, `}`, `"`, `,` or `\` inside a key or value, under 64 KiB. In `runtime-sources.yaml`:
+families are added as new top-level keys and build fields as new keys; never a new `os` or `arch`
+value inside an existing family block (a new `os` value makes release 1 refuse the whole file, and so
+run no engine); one block release 1 refuses disables every engine it reads from that file. The
+engine folders (§6.6, §6.7): never move, write or delete release 1's `runtime/<family>/<os>/` while
+"Go back" to release 1 is offered; a later engine lives beside it; `engine_min` is never above the
+oldest pin a supported Kit may run; never move, rewrite or re-sign a recorded file in release 1's
+folder (a signing record is a new top-level marker field). **Five more duties release 1's own engine
+install relies on** (T8.5c's reviews, F-24's amendment): a later version
+1. leaves nothing at the four leftover names (`<os>.new`, `<os>.old`, `<os>/cpu.new`, `<os>/cpu.old`):
+   release 1's start recovery acts on exactly those names;
+2. puts no link at `<os>`;
+3. puts no marker file directly in `runtime/<family>/`;
+4. puts no `cpu/…` keys in a main marker;
+5. leaves no marker that release 1 would read as damaged in `<os>/` beside a leftover.
+
+**Release rules for skills (F-25).** The new version bundles its app skills and never rewrites the drive's
+`app-skills/` (W-24, §6.2), so release 1 always meets the skills its Kit shipped. A skill of a new
+`kind` reaches release 1 only as a user skill; one that declares a well-formed
+`compatibility.minAppVersion` (exactly `MAJOR.MINOR.PATCH`) above release 1 is counted as made for a
+newer version, any other is invalid there. A new `disabled_reason` value is left alone by release 1
+(the row stays off); only `min_app_version` is ever switched back on.
+
+**The scripts (W-62 (b), built in P2).** `fetch-models` and `verify-models` (both twins) skip a manifest
+whose `role` their checkout's app does not know or whose `min_app_version` is above the checkout's
+`apps/desktop/package.json` version, by the app's exact rule (never a `[version]` cast), each with
+one line ("SKIP <id>: needs a newer HilbertRaum (…)"); `fetch-models` adds the count to its summary
+line and exits 2 on `--only` of a model only such a manifest carries; `verify-models` prints the count,
+judges no file of a skipped manifest (so `--strict` ignores its weight), leaves it out of
+`config/checksums.json` (`--generate`), and fails `--kit` on any skip, so a sold Kit is never silently
+smaller (the canonical gate refuses the same drive). `committed-catalog.test.ts` holds the scripts'
+flat read of every key they read to the YAML parser on every committed manifest; `script-drift.test.ts`
+holds their role list to the app's and names the version source.
+
+**Still owed:** the per-pull-request run of release 1's reader snapshot (§10.1) over every committed
+manifest, skill and yaml block (T11.7, P11b); a change that makes release 1 drop a file fails it unless
+the file carries `min_app_version` (manifests) or is a new kind bundled only (skills).
 
 ---
 

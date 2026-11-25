@@ -1,16 +1,21 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import { readRuntimeMarkerState, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
-import { REPO_ROOT, repoText } from '../helpers/repo-files'
+import { discoverManifests, setManifestAppVersion } from '../../src/main/services/models'
+import { makeZip } from '../helpers/archives'
+import { DESKTOP_ROOT, REPO_ROOT, repoText } from '../helpers/repo-files'
 import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
-import { MARKER_ROWS, type MarkerFamily } from '../helpers/fetch-runtime-markers'
+import { MARKER_GOLDENS, MARKER_ROWS, markerBytes, type MarkerFamily } from '../helpers/fetch-runtime-markers'
 import { testBudgetMs } from '../helpers/hang-budget'
 import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
 
@@ -313,6 +318,41 @@ function installKiwixWin(root: string, present: readonly string[], hashed: reado
     JSON.stringify({ version: '3.8.1', backend: 'cpu', os: 'win', arch: 'x64', binaries })
   )
 }
+
+// App-update wave T2.10 (W-62 (b)): the model scripts skip a manifest their checkout's app cannot use. The version they
+// compare with is the checkout's apps/desktop/package.json, so a copy of scripts/ with a package.json of its own beside it
+// runs the rule at any version, and a copy with none is an app that does not know its version.
+function scriptsAt(version: string): string {
+  const dir = isolatedScripts()
+  if (version !== '') writeDriveFile(dirname(dir), 'apps/desktop/package.json', `${JSON.stringify({ name: '@hilbertraum/desktop', version }, null, 2)}\n`)
+  return dir
+}
+
+/** The F-23 golden manifests and, per app version, what both twins of the model scripts do with each file (`scripts`). */
+const F23_SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f23-manifests')
+const F23 = JSON.parse(readFileSync(join(F23_SET, 'verdicts.json'), 'utf8')) as {
+  appVersion: string
+  appVersions: string[]
+  single: { dir: string; files: Array<{ file: string; id?: string; scripts?: Record<string, 'use' | 'skip'> }> }
+}
+/** The files the scripts judge: every manifest of the set with an id and a verdict for them. */
+const F23_JUDGED = F23.single.files.filter((x) => x.id !== undefined && x.scripts !== undefined) as Array<{
+  file: string
+  id: string
+  scripts: Record<string, 'use' | 'skip'>
+}>
+/** A drive whose model-manifests/ holds the whole single set, the files that are no manifest included. */
+function f23Drive(): string {
+  const root = scriptRoot('script-f23-')
+  mkdirSync(join(root, 'model-manifests'))
+  for (const x of F23.single.files) copyFileSync(join(F23_SET, F23.single.dir, x.file), join(root, 'model-manifests', x.file))
+  return root
+}
+/** The one line a twin prints for a manifest it skips. */
+const SKIP_LINE = (id: string): string => `SKIP   ${id}: needs a newer HilbertRaum`
+/** About forty manifests per run: a few seconds on PowerShell and Linux, far longer under Git Bash, where a fork is dear. */
+const GOLDEN_RUN_MS = testBudgetMs(240_000)
+const GOLDEN_TEST_MS = testBudgetMs(300_000)
 
 // A shell + a node child per case: well under a second on Linux, several seconds under
 // PowerShell or Git Bash on a loaded Windows runner — give every case in this file real headroom.
@@ -772,6 +812,98 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
+    // App-update wave T2.10 (W-62 (b), 10.10, 10.16): both twins of both model scripts skip, with one line each, a manifest
+    // whose role this checkout's app does not know or whose min_app_version is above the checkout's version, by the app's
+    // exact rule (MAJOR.MINOR.PATCH, anything else newer, never a version cast). The F-23 golden set says, per version, what
+    // the scripts do with each file; the copy of scripts/ carries that version in its own apps/desktop/package.json.
+    describe("the model scripts skip what this checkout's app cannot use (W-62 (b), the F-23 goldens)", () => {
+      const statusLine = (id: string): RegExp => new RegExp(`^\\s+(MISSING|UNSUPPORTED|VERIFIED|UNVERIFIED|MISMATCH)\\s+${id}\\s*$`, 'm')
+      const fetchLine = (id: string): RegExp => new RegExp(`^\\s+fetch  ${id}\\s*$`, 'm')
+
+      it.each(F23.appVersions.map((v) => [JSON.stringify(v), v] as const))(
+        'verify-models over the golden set at version %s: one line per skip, a status line per manifest it uses, the count',
+        (_label, version) => {
+          const r = leg.run(`verify-models.${leg.ext}`, [f('Target'), f23Drive()], { scriptsDir: scriptsAt(version), timeoutMs: GOLDEN_RUN_MS })
+          const out = outputOf(r)
+          expect(r.status, out).toBe(0)
+          for (const x of F23_JUDGED) {
+            expect(out.includes(SKIP_LINE(x.id)), `${x.file}: ${x.scripts[version]}`).toBe(x.scripts[version] === 'skip')
+            expect(statusLine(x.id).test(out), `${x.file}: ${x.scripts[version]}`).toBe(x.scripts[version] === 'use')
+          }
+          const skipped = F23_JUDGED.filter((x) => x.scripts[version] === 'skip').length
+          expect(out).toContain(`${skipped} manifest(s) skipped: they need a newer HilbertRaum`)
+          expect(out).not.toContain('g23-reserved-name') // runtime-sources.yaml is never a model manifest
+        },
+        GOLDEN_TEST_MS
+      )
+
+      it(
+        'fetch-models over the golden set: every manifest it uses planned, every other one skipped and counted in the summary',
+        () => {
+          const version = F23.appVersion
+          const r = leg.run(`fetch-models.${leg.ext}`, [f('Target'), f23Drive(), f('DryRun')], { scriptsDir: scriptsAt(version), timeoutMs: GOLDEN_RUN_MS })
+          const out = outputOf(r)
+          expect(r.status, out).toBe(0)
+          for (const x of F23_JUDGED) {
+            expect(out.includes(SKIP_LINE(x.id)), `${x.file}: ${x.scripts[version]}`).toBe(x.scripts[version] === 'skip')
+            expect(fetchLine(x.id).test(out), `${x.file}: ${x.scripts[version]}`).toBe(x.scripts[version] === 'use')
+          }
+          const used = F23_JUDGED.filter((x) => x.scripts[version] === 'use').length
+          expect(out).toContain(`Planned ${used} | fetched 0 | skipped 0 | for a newer HilbertRaum ${F23_JUDGED.length - used}`)
+        },
+        GOLDEN_TEST_MS
+      )
+    })
+
+    // 10.11, 10.13 (W-62 (b), sheet decision 8): a drive holding a manifest for a newer HilbertRaum beside one this checkout
+    // uses. --generate lists the usable one only, exactly what the app's own writer writes for the manifests its reader can
+    // use; --strict judges the usable weight only (intended: the skipped weight is not this app's); --kit fails on the skip,
+    // so a sold Kit is never silently smaller. The real scripts at this checkout's version: 99999.0.0 is above any of them.
+    describe('verify-models on a drive with a manifest for a newer HilbertRaum (W-62 (b))', () => {
+      const verifier = `verify-models.${leg.ext}`
+      const newerDrive = (): string =>
+        modelsTarget(
+          [
+            manifestYaml({ id: 'u-model', localPath: 'models/chat/u-model.gguf', sha256: sha256('u') }, [BUNDLED]),
+            manifestYaml({ id: 'n-model', localPath: 'models/chat/n-model.gguf', sha256: sha256('n') }, [BUNDLED, 'min_app_version: 99999.0.0'])
+          ],
+          { 'models/chat/u-model.gguf': 'u', 'models/chat/n-model.gguf': 'n' }
+        )
+
+      it.each<[string, string[], number, string[], string[]]>([
+        ['no flag: the newer one is skipped and counted', [], 0, ['1 manifest(s) skipped: they need a newer HilbertRaum'], ['STRICT', 'KIT']],
+        ['--strict judges the usable weight only', [f('Strict')], 0, ['STRICT: all 1 weight(s) VERIFIED.', '1 manifest(s) skipped'], ['KIT']],
+        ['--kit fails on the skip', [f('Kit')], 1, ['KIT: 1 manifest(s) need a newer HilbertRaum'], ['STRICT: all']]
+      ])('%s', (_title, flags, status, contains, absent) => {
+        const r = leg.run(verifier, [f('Target'), newerDrive(), ...flags])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(status)
+        expect(out).toContain(SKIP_LINE('n-model'))
+        expect(out).toMatch(/VERIFIED\s+u-model/)
+        expect(out).not.toMatch(/(VERIFIED|MISSING|CATALOG)\s+n-model/)
+        for (const text of contains) expect(out).toContain(text)
+        for (const text of absent) expect(out).not.toContain(text)
+      })
+
+      it("--generate lists only the usable manifest: what the app's writer writes for the manifests its reader uses (10.11)", async () => {
+        const root = newerDrive()
+        const r = leg.run(verifier, [f('Target'), root, f('Generate')])
+        expect(r.status, outputOf(r)).toBe(0)
+        const written = JSON.parse(readFileSync(join(root, 'config', 'checksums.json'), 'utf8')) as ChecksumsJson
+        setManifestAppVersion(APP_VERSION)
+        let found: ReturnType<typeof discoverManifests>
+        try {
+          found = discoverManifests(join(root, 'model-manifests'))
+        } finally {
+          setManifestAppVersion('')
+        }
+        expect(found.unsupported.map((u) => u.manifest.id)).toEqual(['n-model'])
+        const app = await buildChecksumsJson(root, found.manifests.map((m) => m.manifest))
+        expect({ ...written, generated_at: '' }).toEqual({ ...app, generated_at: '' })
+        expect(written.entries.map((e) => e.id)).toEqual(['u-model'])
+      })
+    })
+
     // Real manifests, the real script, no network: a dry run stops short of every download. The real
     // downloads (resume, the size-guarded delete, aria2) are script-fetch-models.test.ts.
     describe('fetch-models plans offline (--dry-run)', () => {
@@ -854,6 +986,60 @@ for (const leg of SCRIPT_LEGS) {
             status: 1,
             contains: ['Planned 0', 'No bundled model (bundled_on_preconfigured_drive: true) with a download block'],
             absent: ['fetch  a-model']
+          }
+        ],
+        // App-update wave T2.10 (W-62 (b)): a manifest this checkout's app cannot use is skipped with one line and counted
+        // in the summary. 99999.0.0 is above every checkout, 0.0.0 met by every one: the real scripts read their version.
+        [
+          'a role the app does not know, or a min_app_version above the checkout, is skipped with one line and counted (W-62 (b))',
+          {
+            manifests: [fetchable('a-model'), fetchable('n-model', { extra: ['min_app_version: 99999.0.0'] }), fetchable('r-model').replace('role: chat', 'role: hologram')],
+            status: 0,
+            contains: [
+              'SKIP   n-model: needs a newer HilbertRaum (min_app_version 99999.0.0',
+              'SKIP   r-model: needs a newer HilbertRaum (role "hologram"',
+              'fetch  a-model',
+              'Planned 1 | fetched 0 | skipped 0 | for a newer HilbertRaum 2'
+            ],
+            absent: ['fetch  n-model', 'fetch  r-model']
+          }
+        ],
+        [
+          'a min_app_version every checkout meets is planned as before, with no count (W-62 (b))',
+          {
+            manifests: [fetchable('o-model', { extra: ['min_app_version: 0.0.0'] })],
+            status: 0,
+            contains: ['fetch  o-model', 'Planned 1 | fetched 0 | skipped 0'],
+            absent: ['SKIP', 'for a newer HilbertRaum']
+          }
+        ],
+        [
+          'a usable manifest keeps its id over a newer one of the same id: only the usable one is planned (W-62 (b))',
+          {
+            manifests: [fetchable('s-model', { extra: ['min_app_version: 99999.0.0'] }).replace('example.invalid/s-model.gguf', 'example.invalid/s-model-newer.gguf'), fetchable('s-model')],
+            status: 0,
+            contains: ['SKIP   s-model: needs a newer HilbertRaum', 'fetch  s-model', 'https://example.invalid/s-model.gguf', 'Planned 1 | fetched 0 | skipped 0 | for a newer HilbertRaum 1'],
+            absent: ['s-model-newer.gguf']
+          }
+        ],
+        [
+          '--only naming a model only a newer manifest carries is a usage error (W-62 (b))',
+          {
+            manifests: [fetchable('n-model', { extra: ['min_app_version: 99999.0.0'] }), fetchable('a-model')],
+            extra: [f('Only'), 'n-model'],
+            status: 2,
+            contains: ['SKIP   n-model: needs a newer HilbertRaum', "Model 'n-model' needs a newer HilbertRaum: nothing to fetch."],
+            absent: ['fetch  n-model', 'fetch  a-model', 'SKIP   a-model']
+          }
+        ],
+        [
+          '--bundled whose only bundled model needs a newer HilbertRaum fails at once: the skipped one is not counted as bundled (W-62 (b))',
+          {
+            manifests: [fetchable('n-model', { extra: [BUNDLED, 'min_app_version: 99999.0.0'] }), fetchable('a-model')],
+            extra: [f('Bundled')],
+            status: 1,
+            contains: ['SKIP   n-model: needs a newer HilbertRaum', 'Planned 0 | fetched 0 | skipped 0 | for a newer HilbertRaum 1', 'No bundled model'],
+            absent: ['fetch  n-model', 'fetch  a-model']
           }
         ],
         [
@@ -1283,6 +1469,66 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
+    // App-update wave T2.10 (W-62, F-24, 10.17, 10.18): the golden install markers (MARKER_GOLDENS, beside MARKER_ROWS)
+    // through this twin's reader, in both modes; assets.test.ts holds the app's readers to the same vectors. Each vector is
+    // the marker of a copy whose files are all there and whose pin it matches, so "skip" means the twin read it as the
+    // pinned install and "refetch" that it could not. fetch-runtime itself is not changed (it is release 1's reader).
+    describe('fetch-runtime reads the golden install markers as release 1 does (T2.10, W-62)', () => {
+      const { copy, record, vectors } = MARKER_GOLDENS
+      /** A drive pinned to the golden copy (its version, or `pin`), holding the copy's files and `marker`. */
+      const goldenDrive = (marker: Buffer | null, pin = copy.version): { root: string; dir: string } => {
+        const root = scratchTarget(REAL_SHA, (y) => y.replace(`  version: ${copy.version}\n`, `  version: ${pin}\n`))
+        const dir = join(root, ...copy.extractTo.split('/'))
+        mkdirSync(dir, { recursive: true })
+        for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(dir, name), bytes)
+        if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
+        return { root, dir }
+      }
+      const verdictOf = (root: string, mode: 'default' | 'commercial', opts: { env?: NodeJS.ProcessEnv; scriptsDir?: string } = {}): string => {
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), copy.os, f('DryRun'), ...(mode === 'commercial' ? [f('Commercial')] : [])], opts)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        if (/skip \(llama-server\.exe already installed/.test(out)) return 'skip'
+        return out.includes('llama-server.exe present but') ? 'refetch' : `neither:\n${out}`
+      }
+
+      it.each(vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
+        const env = v.shLocale === 'utf8' && leg.ext === 'sh' ? { LC_ALL: UTF8_LOCALE } : undefined
+        for (const mode of ['default', 'commercial'] as const) {
+          expect(verdictOf(goldenDrive(markerBytes(v), v.pin).root, mode, { env }), mode).toBe(v.twins[mode])
+        }
+      })
+
+      // 10.18: the in-app stage writes its marker with writeRuntimeMarker, so this row is that writer's too.
+      it("writeRuntimeMarker's marker of the copy is read as the pinned install in both modes", () => {
+        const { root, dir } = goldenDrive(null)
+        writeRuntimeMarker(dir, { ...record, os: copy.os })
+        for (const mode of ['default', 'commercial'] as const) expect(verdictOf(root, mode), mode).toBe('skip')
+      })
+
+      // 10.18: the marker this twin writes after a real install (an archive of the copy behind a file:// URL, offline) is the
+      // record, written exactly as writeRuntimeMarker writes it, so the other twin reads it as the row above shows on its leg.
+      it('the marker this twin writes after an install is the record, in the bytes writeRuntimeMarker writes, read back by the app and by this twin', () => {
+        const archive = makeZip(Object.entries(copy.files).map(([name, bytes]) => ({ name, data: Buffer.from(bytes) })))
+        const source = join(mkdtempSync(join(tmpdir(), 'hilbertraum-golden-src-')), 'llama-golden-bin-win-vulkan-x64.zip')
+        writeFileSync(source, archive)
+        const zipSha = createHash('sha256').update(archive).digest('hex')
+        const root = scratchTarget(zipSha, (y) => y.replace('https://example.invalid/llama-b9585-bin-win-vulkan-x64.zip', pathToFileURL(source).href))
+        const scripts = isolatedScripts()
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), copy.os], { env: downloadEnv(), scriptsDir: scripts })
+        expect(r.status, outputOf(r)).toBe(0)
+        const dir = join(root, ...copy.extractTo.split('/'))
+        const text = readFileSync(runtimeMarkerPath(dir), 'utf8')
+        const written = JSON.parse(text) as typeof record
+        expect(written).toEqual(record)
+        const canonical = mkdtempSync(join(tmpdir(), 'hilbertraum-golden-writer-'))
+        writeRuntimeMarker(canonical, { ...written, os: copy.os })
+        expect(text).toBe(readFileSync(runtimeMarkerPath(canonical), 'utf8'))
+        expect(readRuntimeMarkerState(dir)).toEqual({ kind: 'marker', marker: record })
+        expect(verdictOf(root, 'commercial', { scriptsDir: scripts })).toBe('skip')
+      })
+    })
+
     // build-commercial-drive provisions every OS from one host, so it leans on both rules. Each CI leg has
     // one discriminating row: mac on x64 hosts, linux on the arm64 macOS runner.
     describe('fetch-runtime picks a build', () => {
@@ -1582,6 +1828,13 @@ for (const leg of SCRIPT_LEGS) {
           'a bundled model missing from the drive',
           (root) => addManifest(root, 'bundled-model', { sha: REAL_SHA, extra: [BUNDLED] }),
           [kitWeights, 'weight "bundled-model" is not VERIFIED (status: missing']
+        ],
+        // 10.12 (W-62 (b), sheet decision 8): both gates refuse a Kit holding a manifest its own app cannot use, and neither
+        // counts that weight: verify-models --kit fails on the skip, the canonical gate names the manifest.
+        [
+          'a bundled manifest for a newer HilbertRaum, its weight on the drive (W-62 (b))',
+          (root) => addManifest(root, 'newer-model', { sha: writeDriveFile(root, 'models/chat/newer-model.gguf', 'n'), extra: [BUNDLED, 'min_app_version: 99999.0.0'] }),
+          [kitWeights, 'KIT: 1 manifest(s) need a newer HilbertRaum', 'model manifest for a newer HilbertRaum']
         ],
         [
           'no bundled model, though the one weight on the drive verifies',
