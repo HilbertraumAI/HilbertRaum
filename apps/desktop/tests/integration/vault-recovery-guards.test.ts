@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
+import { openRawDb } from '../helpers/db-fixtures'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
   decryptFile,
   encryptFile,
   WorkspaceController,
+  QUARANTINE_SUFFIX,
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
@@ -121,6 +123,9 @@ const failures = vi.hoisted(() => ({
   renameThrowsPlainErrorOnStagedSidecar: false,
   /** #1015 round 3: renameSync throws EBUSY for exactly this staged file while set: one stuck file among several. */
   renameThrowForStage: null as string | null,
+  /** P2 exit (CR-1): renameSync throws this error code when it moves exactly this path away while set: a file another
+   *  program holds without delete sharing. Counted in `hits.renameThrowFor`. */
+  renameThrowFor: null as { path: string; code: string } | null,
   /** #1001 review round 2: renameSync throws this error code for a stored copy the unlock moved aside (`….enc.tmp` under
    *  `documents/` or `images/`) moved back onto its own name while set: the move back after a failed swap fails too. */
   renameThrowOnAsideRestore: null as string | null,
@@ -137,8 +142,13 @@ const failures = vi.hoisted(() => ({
   /** #1014 round 4: lstatSync throws this error code for exactly this path while set: a hold, a permission or an I/O
    *  error on a folder the journal's containment walks, or on a file the unlock judges, that proves nothing. */
   lstatThrow: null as { path: string; code: string } | null,
-  /** #1014 round 4: realpathSync throws this error code for exactly this path while set. */
+  /** #1014 round 4: realpathSync throws this error code for exactly this path while set. T2.16 (R1 B-1): and so does
+   *  `realpathSync.native`, which the containment test uses since. */
   realpathThrow: null as { path: string; code: string } | null,
+  /** T2.16 (R1 B-4 = R2 B1): every wrapped fs call whose path holds this text is recorded in `touches` and refused as
+   *  ENOENT (`existsSync`: false), never passed on to the file system: a path on a host the start must never contact. */
+  untouchable: null as string | null,
+  touches: [] as string[],
   /** #1014 round 6: rmSync throws this error code for exactly this path while set: a file another program holds without
    *  delete sharing (the rotated log, the journal itself). */
   rmThrowFor: null as { path: string; code: string } | null,
@@ -187,7 +197,8 @@ const failures = vi.hoisted(() => ({
     statThrow: 0,
     openThrowFor: 0,
     journalHeld: 0,
-    encHeld: 0
+    encHeld: 0,
+    renameThrowFor: 0
   }
 }))
 
@@ -221,9 +232,28 @@ vi.mock('node:fs', async (importOriginal) => {
   const inStore = (p: unknown): boolean => /[\\/](documents|images)[\\/]/.test(String(p))
   const isPendingSidecarTarget = (p: unknown): boolean =>
     failures.sidecarTargetDeletePending !== null && String(p) === failures.sidecarTargetDeletePending
+  /** T2.16: records a call that names an `untouchable` path; the caller then refuses it without passing it on. */
+  const untouched = (fn: string, ...paths: unknown[]): boolean => {
+    const mark = failures.untouchable
+    if (mark === null || !paths.some((p) => String(p).includes(mark))) return false
+    failures.touches.push(`${fn} ${paths.map(String).join(' -> ')}`)
+    return true
+  }
+  const refusedAsAbsent = (fn: string): NodeJS.ErrnoException => errnoError('ENOENT', `ENOENT: ${fn} (an untouchable path)`)
+  /** A pass-through wrapper of `name` that refuses an untouchable first path. */
+  const guarded = <K extends 'readdirSync' | 'unlinkSync' | 'mkdirSync' | 'writeFileSync'>(name: K) =>
+    vi.fn((...args: unknown[]) => {
+      if (untouched(name, args[0])) throw refusedAsAbsent(name)
+      return (actual[name] as unknown as (...a: unknown[]) => unknown)(...args)
+    })
   const mocked = {
     ...actual,
+    readdirSync: guarded('readdirSync'),
+    unlinkSync: guarded('unlinkSync'),
+    mkdirSync: guarded('mkdirSync'),
+    writeFileSync: guarded('writeFileSync'),
     existsSync: vi.fn((path: Parameters<typeof actual.existsSync>[0]) => {
+      if (untouched('existsSync', path)) return false
       if (failures.encDeletePending && isEnc(path)) {
         failures.hits.encStat += 1
         return false
@@ -235,6 +265,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return actual.existsSync(path)
     }),
     renameSync: vi.fn((from: Parameters<typeof actual.renameSync>[0], to: Parameters<typeof actual.renameSync>[1]) => {
+      if (untouched('renameSync', from, to)) throw refusedAsAbsent('rename')
       if (failures.renameThrowOnExistingRecoveryTarget && isRecovery(to) && actual.existsSync(to)) {
         failures.hits.renameSync += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, rename (held .recovery target)')
@@ -243,6 +274,11 @@ vi.mock('node:fs', async (importOriginal) => {
       if (heldStage !== null && isStagedSidecar(from) && String(to) === String(from).slice(0, -'.new'.length)) {
         failures.hits.renameStagedSidecar += 1
         throw errnoError(heldStage, `${heldStage}: rename (a held staged document copy)`)
+      }
+      const heldFrom = failures.renameThrowFor
+      if (heldFrom !== null && String(from) === heldFrom.path) {
+        failures.hits.renameThrowFor += 1
+        throw errnoError(heldFrom.code, `${heldFrom.code}: rename (a held file)`)
       }
       if (failures.renameThrowForStage !== null && String(from) === failures.renameThrowForStage) {
         failures.hits.renameStagedSidecar += 1
@@ -279,6 +315,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return actual.renameSync(from, to)
     }),
     openSync: vi.fn((path: Parameters<typeof actual.openSync>[0], flags: Parameters<typeof actual.openSync>[1], mode?: Parameters<typeof actual.openSync>[2]) => {
+      if (untouched('openSync', path)) throw refusedAsAbsent('open')
       const openFor = failures.openThrowFor
       if (openFor !== null && String(path) === openFor.path) {
         failures.hits.openThrowFor += 1
@@ -321,6 +358,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return fd
     }),
     rmSync: vi.fn((path: Parameters<typeof actual.rmSync>[0], options?: Parameters<typeof actual.rmSync>[1]) => {
+      if (untouched('rmSync', path)) throw refusedAsAbsent('rm')
       if (failures.rmThrowOnRecoveryPath && isRecovery(path)) {
         failures.hits.rmSync += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, unlink (held .recovery)')
@@ -340,6 +378,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return actual.rmSync(path, options)
     }),
     readFileSync: vi.fn((path: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]) => {
+      if (untouched('readFileSync', path)) throw refusedAsAbsent('open')
       if (
         failures.holdJournalAfterStagedEnc === 'exclusive' &&
         failures.hits.renameStagedEnc > 0 &&
@@ -368,6 +407,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return read
     }),
     lstatSync: vi.fn((...args: unknown[]) => {
+      if (untouched('lstatSync', args[0])) throw refusedAsAbsent('lstat')
       if (failures.lstatThrow !== null && String(args[0]) === failures.lstatThrow.path) {
         failures.hits.statThrow += 1
         throw errnoError(failures.lstatThrow.code, `${failures.lstatThrow.code}: lstat (a stat that proves nothing)`)
@@ -394,6 +434,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return stats
     }),
     statSync: vi.fn((...args: unknown[]) => {
+      if (untouched('statSync', args[0])) throw refusedAsAbsent('stat')
       if (failures.statThrowOnWorkingFile && String(args[0]).endsWith('hilbertraum.sqlite')) {
         failures.hits.statSync += 1
         throw errnoError('EIO', 'EIO: i/o error, stat (the working file)')
@@ -422,13 +463,24 @@ vi.mock('node:fs', async (importOriginal) => {
     }),
     realpathSync: Object.assign(
       vi.fn((...args: unknown[]) => {
+        if (untouched('realpathSync', args[0])) throw refusedAsAbsent('realpath')
         if (failures.realpathThrow !== null && String(args[0]) === failures.realpathThrow.path) {
           failures.hits.statThrow += 1
           throw errnoError(failures.realpathThrow.code, `${failures.realpathThrow.code}: realpath (a stat that proves nothing)`)
         }
         return (actual.realpathSync as unknown as (...a: unknown[]) => unknown)(...args)
       }),
-      { native: actual.realpathSync.native }
+      {
+        // T2.16 (R1 B-1): the containment test resolves with the OS's own realpath, so the same failure reaches it.
+        native: vi.fn((...args: unknown[]) => {
+          if (untouched('realpathSync.native', args[0])) throw refusedAsAbsent('realpath')
+          if (failures.realpathThrow !== null && String(args[0]) === failures.realpathThrow.path) {
+            failures.hits.statThrow += 1
+            throw errnoError(failures.realpathThrow.code, `${failures.realpathThrow.code}: realpath (a stat that proves nothing)`)
+          }
+          return (actual.realpathSync.native as unknown as (...a: unknown[]) => unknown)(...args)
+        })
+      }
     )
   }
   return { ...mocked, default: mocked }
@@ -468,6 +520,7 @@ beforeEach(() => {
   failures.renameThrowOnStagedSidecar = null
   failures.renameThrowsPlainErrorOnStagedSidecar = false
   failures.renameThrowForStage = null
+  failures.renameThrowFor = null
   failures.renameThrowOnAsideRestore = null
   failures.statReportsNoInode = false
   failures.openThrowOnSidecarTarget = null
@@ -475,6 +528,8 @@ beforeEach(() => {
   failures.lstatReportsNoLinkCount = null
   failures.lstatThrow = null
   failures.realpathThrow = null
+  failures.untouchable = null
+  failures.touches = []
   failures.rmThrowFor = null
   failures.openThrowFor = null
   failures.holdJournalAfterStagedEnc = false
@@ -504,7 +559,8 @@ beforeEach(() => {
     statThrow: 0,
     openThrowFor: 0,
     journalHeld: 0,
-    encHeld: 0
+    encHeld: 0,
+    renameThrowFor: 0
   }
   ipcState.handlers.clear()
 })
@@ -732,7 +788,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       statThrow: 0,
       openThrowFor: 0,
       journalHeld: 0,
-      encHeld: 0
+      encHeld: 0,
+      renameThrowFor: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -1121,6 +1178,74 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     expect(created).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
     ctl.shutdown()
   })
+
+  // T2.16 fix round (R1 B-2): with `.enc` missing the start replays the `-wal` into the working file with SQLite, before
+  // any password, and SQLite writes whatever the three names lead to. Review 1's probe: with the working file's name a
+  // second hard link of a text file elsewhere and a `-wal` beside it, the replay wrote the WAL's pages into that file.
+  // Now the replay is made only into a working file that is a regular file no other name shares, beside a `-wal` and a
+  // `-shm` that are none either (on Windows SQLite writes both through a link at their names). Otherwise it is not made,
+  // and the start blocks with every file left, as it does for a replay that cannot finish (#242).
+  type SidecarName = '' | '-wal' | '-shm'
+  /** A `-wal` at `dest` with committed frames from a database made from scratch, page 1 among them (review 1's probe's
+   *  `makeWal`): copied while its connection is open, so it is never checkpointed away. */
+  const walFromScratch = (root: string, dest: string): void => {
+    const src = join(root, 'wal-src.sqlite')
+    const db = openRawDb(src)
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;')
+      db.exec("CREATE TABLE planted (t TEXT); INSERT INTO planted VALUES ('PLANTED-BY-WAL');")
+      copyFileSync(`${src}-wal`, dest)
+    } finally {
+      db.close()
+    }
+  }
+  const linkAt =(kind: 'hard' | 'symbolic', victim: string, name: string): void =>
+    kind === 'hard' ? linkSync(victim, name) : symlinkSync(victim, name, 'file')
+  const canFileLink = (kind: 'hard' | 'symbolic'): boolean => {
+    const root = freshVaultPaths('recovery-guards-can').root
+    writeFileSync(join(root, 'target'), 'x')
+    try {
+      linkAt(kind, join(root, 'target'), join(root, 'link'))
+      return true
+    } catch {
+      return false
+    }
+  }
+  const SALVAGE_LINKS: Array<[string, SidecarName, 'hard' | 'symbolic']> = [
+    ['the working file', '', 'hard'],
+    ['the working file', '', 'symbolic'],
+    ['the -wal', '-wal', 'hard'],
+    ['the -shm', '-shm', 'hard']
+  ]
+  for (const [what, suffix, kind] of SALVAGE_LINKS) {
+    it.skipIf(!canFileLink(kind))(`with .enc removed after a session ended unlocked, ${what} a ${kind} link to a file elsewhere: no replay, the start blocks, the file it leads to keeps its bytes`, () => {
+      const vp = lockedVault('recovery-guards', 'pw')
+      endedUnlocked(vp, 9119)
+      rmSync(vp.encPath)
+      const name = `${vp.dbPath}${suffix}`
+      // What lies elsewhere: for the working file a text file, as in review 1's probe, beside a `-wal` that carries page 1
+      // (SQLite then takes the database's header from the WAL and writes every page into the file); for the `-wal` the
+      // bytes that were there (its replay's own test stays true); for the `-shm` a filler SQLite rebuilds and writes.
+      const victim = join(vp.root, `elsewhere${suffix || '.txt'}`)
+      if (suffix === '') {
+        writeFileSync(victim, 'a file outside the workspace folder, not a database\n'.repeat(400))
+        walFromScratch(vp.root, `${vp.dbPath}-wal`)
+      } else if (suffix === '-wal') writeFileSync(victim, readFileSync(name))
+      else writeFileSync(victim, Buffer.alloc(statSync(name).size, 0xab))
+      rmSync(name)
+      linkAt(kind, victim, name)
+      const files = [victim, vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]
+      const before = files.map((path) => readFileSync(path))
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+      files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+      ctl.shutdown()
+    })
+  }
 })
 
 // #807 (C S-1): the create IPC used to recognise its two refusals by their English wording, `/not permitted|already
@@ -1195,6 +1320,45 @@ describe('a file error while a workspace is created (#807)', () => {
     expect(ctl.getState().state).toBe('locked')
     ctl.shutdown()
   })
+})
+
+// App-update P2 exit (code review CR-1): on a build that allows no plaintext workspace, a create sets a leftover working
+// file aside with its `-wal`, `-shm` and `-journal`, as one set under one name (`setLeftoversAside`). A move that another
+// program held failed the create halfway: the working file was at `.quarantine` with its held `-wal` still beside the
+// working name, so the retry, finding `.quarantine` taken, moved the `-wal` to `.quarantine-1-wal`, away from the file
+// whose last commits it holds. Now the side files move first and the working file last, and a failed move first puts
+// back what moved: the set waits whole at its names, and the retry, once the hold is gone, moves it under one name.
+describe('a held file while a create sets a leftover workspace aside (P2 exit, CR-1)', () => {
+  it.each([['-wal'], ['-shm'], ['']])(
+    'the move of hilbertraum.sqlite%s is held: the create fails with every file at its own name, and the retry sets the whole set aside under one name',
+    (held) => {
+      const vp = freshVaultPaths('recovery-guards-aside')
+      const raw = openRawDb(vp.dbPath)
+      raw.exec("PRAGMA journal_mode = WAL; CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('the last commit');")
+      leaveAsKilled(vp, raw) // the working file, a -wal holding its commit, and the -shm
+      const tails = ['', '-wal', '-shm']
+      const before = tails.map((tail) => readFileSync(`${vp.dbPath}${tail}`))
+      const leftovers = (): string[] =>
+        readdirSync(dirname(vp.dbPath))
+          .filter((name) => name.startsWith(basename(vp.dbPath)))
+          .sort()
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        failures.renameThrowFor = { path: `${vp.dbPath}${held}`, code: 'EBUSY' }
+        expect(() => ctl.create('long-enough-pw', 'encrypted')).toThrow(/EBUSY/)
+        expect(failures.hits.renameThrowFor, 'the hold was reached').toBe(1)
+        expect(leftovers(), 'every file of the set at its own name').toEqual(tails.map((tail) => `${basename(vp.dbPath)}${tail}`).sort())
+        failures.renameThrowFor = null // the other program let go
+        expect(ctl.create('long-enough-pw', 'encrypted').state).toBe('unlocked')
+        const aside = `${vp.dbPath}${QUARANTINE_SUFFIX}`
+        expect(tails.map((tail) => readFileSync(`${aside}${tail}`)), 'the whole set, byte for byte, under one name').toEqual(before)
+        expect(leftovers().filter((name) => name.includes(`${QUARANTINE_SUFFIX}-1`)), 'nothing under a second name').toEqual([])
+      } finally {
+        ctl.shutdown()
+      }
+    }
+  )
 })
 
 // #973: the unlock judges a staged `.enc.new` that no journal lists (a create's leftover beside a workspace put back
@@ -2216,6 +2380,68 @@ describe('a rekey journal entry a failed stat cannot judge (#1014 round 4)', () 
     expect(next.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
     expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
     next.shutdown()
+  })
+})
+
+// T2.16 fix round (R1 B-4 = R2 B1): an entry outside the workspace folder by its text waits for the unlock, which acts on
+// it only when the open database lists its stored copy. The start still stat'ed it (and its stored copy's name) to decide
+// whether it waits (review 2's probe P2: `statSync`, `existsSync`, `existsSync` at each start), so an entry naming a
+// network path (`\\host\share\…`) made every start, before any password, open a connection to a host a file on the
+// drive chose. Now such an entry is kept as it is, with no file-system call at all. The host here is never contacted:
+// the fs mock refuses, and records, every call that names it.
+describe('a rekey journal entry outside the workspace folder by its text is never touched on disk (T2.16)', () => {
+  const HOST = 'hr-t216-never-contacted.invalid'
+  const entry = process.platform === 'win32' ? `\\\\${HOST}\\share\\letter.pdf.enc${REKEY_SUFFIX}` : `//${HOST}/share/letter.pdf.enc${REKEY_SUFFIX}`
+
+  it('a network path in the journal: two starts and the unlock make no file-system call that names it; the unlock drops it, counted', () => {
+    const vp = lockedVault('recovery-guards-b4', 'pw')
+    const journal = journalListing(vp, [entry])
+    failures.untouchable = HOST
+    try {
+      for (let start = 0; start < 2; start++) {
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        expect(journalStaged(journal), 'the journal keeps the entry for the unlock').toEqual([entry])
+        expect(ctl.takeJournalRefusals()).toBe(0)
+        ctl.shutdown()
+      }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+      expect(ctl.takeJournalRefusals(), 'no document lists its stored copy').toBe(1)
+      expect(existsSync(journal)).toBe(false)
+      ctl.shutdown()
+    } finally {
+      failures.untouchable = null
+    }
+    expect(failures.touches).toEqual([])
+  })
+
+  // R2 B2 (logs), the settle's half: a journal kept for an entry that waits keeps the rotated log's flag while that log is
+  // still at the path the app computes (#1014 round 6, V8-1), which it judged by a stat through the logs folder. Behind a
+  // linked logs folder that stat (and the removal) reached the folder elsewhere; now neither is made, and the flag stays.
+  it('the logs folder a link, a journal kept for an entry that waits and flagging the rotated log: no call reaches the log behind it, the flag stays', () => {
+    const vp = lockedVault('recovery-guards-b4', 'pw', { logs: true })
+    const logs = vp.logsPath!
+    const elsewhere = join(vp.root, 'logs-elsewhere')
+    rmSync(logs, { recursive: true, force: true })
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, 'app.1.log.enc'), 'USER FILE')
+    symlinkSync(elsewhere, logs, process.platform === 'win32' ? 'junction' : 'dir')
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    const waits = join(vp.root, 'legacy-store', `outside.txt.enc${REKEY_SUFFIX}`) // a local path outside the folder
+    writeFileSync(journal, JSON.stringify({ version: 1, staged: [waits], remove: ['app.1.log.enc'] }))
+    failures.untouchable = 'app.1.log.enc' // the log's name, below the logs folder
+    try {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(JSON.parse(readFileSync(journal, 'utf8'))).toEqual({ version: 1, staged: [waits], remove: ['app.1.log.enc'] })
+      ctl.shutdown()
+    } finally {
+      failures.untouchable = null
+    }
+    expect(failures.touches).toEqual([])
+    expect(readFileSync(join(elsewhere, 'app.1.log.enc'), 'utf8')).toBe('USER FILE')
   })
 })
 

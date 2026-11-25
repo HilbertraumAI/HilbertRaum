@@ -1,0 +1,48 @@
+{
+  "contract": "F-10 (app-update plan, Appendix B): the schema_meta table and the last_writer stamp, as the release-1 writer emits them and its reader reads them",
+  "provenance": "Written by hand on 2026-11-25 from the plan's text (Appendix B F-10; W-9; the P2 entry decision Delta-P2-3; Delta-46; F-27 duty (g)), not from the output of db.ts. The stored CREATE TABLE text is the plan's statement `CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)` as SQLite stores every CREATE TABLE: `CREATE TABLE ` followed by the statement from the table name on. Locked by golden-fixtures.sha256; changing it after M1 ships needs an owner call (C14).",
+  "table": {
+    "name": "schema_meta",
+    "storedSql": "CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    "columns": [
+      { "name": "key", "type": "TEXT", "notnull": 0, "dflt_value": null, "pk": 1, "hidden": 0 },
+      { "name": "value", "type": "TEXT", "notnull": 1, "dflt_value": null, "pk": 0, "hidden": 0 }
+    ],
+    "tableList": { "type": "table", "ncol": 2, "wr": 0, "strict": 0 },
+    "indexes": [{ "name": "sqlite_autoindex_schema_meta_1", "unique": 1, "origin": "pk", "partial": 0 }],
+    "triggers": []
+  },
+  "rows": [{ "key": "last_writer", "value": "<app version>;<applied_through>" }],
+  "appVersion": {
+    "usable": ["0.1.66", "1.0.0-beta.1", "2.0.0+build.7"],
+    "unusable": [
+      { "case": "empty", "value": "" },
+      { "case": "a semicolon", "value": "1.0;0" },
+      { "case": "a space", "value": "1.0.0 beta" },
+      { "case": "a trailing newline", "value": "1.0.0\n" },
+      { "case": "non-ASCII", "value": "1.0.0-ü" },
+      { "case": "null", "value": null },
+      { "case": "a number", "value": 42 }
+    ]
+  },
+  "reader": {
+    "maxLength": 256,
+    "readable": [
+      { "case": "a stamp as release 1 writes it", "value": "0.1.66;interim", "appVersion": "0.1.66", "appliedThrough": "interim" },
+      { "case": "a second `;`: split at the FIRST one, the rest is opaque", "value": "9.9.9;later;extra", "appVersion": "9.9.9", "appliedThrough": "later;extra" },
+      { "case": "exactly 256 characters", "build": { "prefix": "1.0.0;", "fill": "a", "length": 256 }, "appVersion": "1.0.0", "appliedThroughLength": 250 }
+    ],
+    "unreadable": [
+      { "case": "no value (no table, no row)", "value": null },
+      { "case": "empty", "value": "" },
+      { "case": "no `;`", "value": "0.1.66" },
+      { "case": "an empty version", "value": ";interim" },
+      { "case": "an empty rest", "value": "0.1.66;" },
+      { "case": "over-long (257 characters)", "build": { "prefix": "1.0.0;", "fill": "a", "length": 257 } },
+      { "case": "non-ASCII", "value": "0.1.66;über" },
+      { "case": "a control character", "value": "0.1.66;interim\nforged line" },
+      { "case": "a space", "value": "0.1.66 beta;interim" },
+      { "case": "not text", "value": 42 }
+    ]
+  }
+}

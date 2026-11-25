@@ -1,0 +1,59 @@
+{
+  "contract": "F-25, the skills contract (plan Appendix B), with W-65 as T2.14 built it and its fix round 2 (review R2-3): the reason a reconcile gives for an unavailable row",
+  "provenance": "Hand-written on 2026-11-25 at commit 1ab4685d from the review's finding R2-3 and its disposition (an installed skill whose folder a newer version rewrote reads 'Needs newer app', not 'Files missing'). An addition beside verdicts.json, which stays as T2.10 locked it; the folders are this set's own. Locked by ../../golden-fixtures.sha256.",
+  "reader": "reconcileSkills (ReconcileResult.needsNewerAppRows; src/main/services/skills/registry.ts)",
+  "verdicts": {
+    "unavailableReason": "needsNewerApp: the row is unavailable because its folder now holds a skill made for a newer version (the discovery code needsNewerApp); null otherwise: an available row, a vanished folder, an invalid one, or an app version the gate cannot read. Derived by each reconcile, never stored: enabled, reason (disabled_reason) and available (unavailable_at IS NULL) are the F-25 columns of verdicts.json"
+  },
+  "sequences": [
+    {
+      "name": "a folder a newer version rewrote reads as made for a newer version until it validates again or vanishes",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": true, "unavailableReason": null }
+        },
+        {
+          "replaceWith": "g25-kind-unknown-min-above",
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": false, "unavailableReason": "needsNewerApp" }
+        },
+        {
+          "reconcileAt": "",
+          "expect": { "enabled": true, "reason": null, "available": false, "unavailableReason": null }
+        },
+        {
+          "replaceWith": "g25-base",
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": true, "unavailableReason": null }
+        },
+        {
+          "replaceWith": "g25-kind-unknown-min-above",
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": false, "unavailableReason": "needsNewerApp" }
+        },
+        {
+          "removeFolder": true,
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": false, "unavailableReason": null }
+        }
+      ]
+    },
+    {
+      "name": "a folder turned invalid with no newer minimum stays a plain unavailable row",
+      "folder": "g25-base",
+      "steps": [
+        {
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": true, "unavailableReason": null }
+        },
+        {
+          "replaceWith": "g25-kind-unknown-min-below",
+          "reconcileAt": "0.1.66",
+          "expect": { "enabled": true, "reason": null, "available": false, "unavailableReason": null }
+        }
+      ]
+    }
+  ]
+}

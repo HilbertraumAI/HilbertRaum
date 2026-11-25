@@ -127,6 +127,22 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
     expect(screen.queryByText(/uuid-chem/)).not.toBeInTheDocument()
   })
 
+  // W-71 (T2.14, the owner's line of 2026-11-25): a ticked pack whose archive is in a newer ZIM format gets its own line,
+  // never "file missing" (the file is there).
+  it.each([
+    ['en', /Knowledge packs: 0 searched · 1 not searched or failed/, 'not searched: newer ZIM format', 'not searched: file missing'],
+    ['de', /Wissenspakete: 0 durchsucht · 1 nicht durchsucht oder fehlgeschlagen/, 'nicht durchsucht: neueres ZIM-Format', 'nicht durchsucht: Datei fehlt']
+  ] as const)('%s: a pack in a newer ZIM format says so (W-71)', async (lang, summary, line, never) => {
+    const user = userEvent.setup()
+    const answer = makeMessage({
+      packOutcomes: [outcome({ status: 'skipped', reason: 'newer-format', found: 0, admitted: 0 })]
+    })
+    renderTranscript({ messages: [answer] }, lang)
+    await user.click(screen.getByRole('button', { name: summary }))
+    expect(screen.getByText(line)).toBeInTheDocument()
+    expect(screen.queryByText(never)).not.toBeInTheDocument()
+  })
+
   it('says so explicitly for a LEGACY archive answer that recorded no outcomes', () => {
     // Persisted before `pack_outcomes_json` existed: inventing "searched" would be a lie and
     // silence would read as "nothing to report", so the notice names the gap.

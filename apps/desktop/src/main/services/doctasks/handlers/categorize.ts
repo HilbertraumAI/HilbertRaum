@@ -51,9 +51,12 @@ export async function runCategorize(
     const nowIso = new Date().toISOString()
 
     // (1) The latest statement. Auto-extract first when the user clicked categorize before extract, OR
-    // when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): categorizing
-    // rows a since-fixed parser bug mis-signed / lost a payee on is wasted work, so re-extract (replacing
-    // the stale statement) and categorize the corrected rows.
+    // when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`: NULL or a lower
+    // version): categorizing rows a since-fixed parser bug mis-signed / lost a payee on is wasted work, so
+    // re-extract (replacing the stale statement) and categorize the corrected rows. A NEWER version's
+    // statement is not stale (G-34 (a), frozen): it is categorized as stored, with its rows never replaced
+    // or deleted (the engine's guard also refuses a re-extract of a document holding one anywhere); the
+    // labels below are written on those rows as on any other (owner, 2026-11-25: a label is not a figure).
     let statementId = latestBankStatementId(db, documentId)
     if (!statementId || isBankStatementStale(db, statementId)) {
       const audit: SkillToolAudit = (type, meta) => ctx.deps.audit?.(type, type, meta)

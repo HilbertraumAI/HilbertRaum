@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join, relative, resolve } from 'node:path'
 import * as ts from 'typescript'
+import { transformWithEsbuild } from 'vite'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
+import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
+import { supportedExtensions } from '../../src/main/services/ingestion/parsers'
+import { ENCRYPTED_DOC_SUFFIX } from '../../src/main/services/workspace-vault'
 import { I18N_DIR, catalogOf } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
@@ -595,6 +601,264 @@ describe('repo hygiene — every piped stdio stream of a spawned child has an er
   })
 })
 
+// App-update plan T2.2 (Δ-40, Δ-42 row 8, row N12): node:sqlite's `defensive` default depends on the runtime (spike 7:
+// on in the packaged app's Node 24.22.1, off under vitest on Node 24.13.0, absent on Node 22.21.1), so a read-write
+// connection under src/main passes `defensive: true` itself and the tests run the database as the app does.
+// db-schema-meta's N11 proves the option in effect on an `openDatabase` handle. Nothing observable can show it on the
+// lock's WAL retry (`checkpointLeftoverWal`: a checkpoint does nothing defensive mode forbids, and node:sqlite has a
+// setter but no getter), nor on a connection added later, so this is a syntax latch: src/main constructs ONE read-write
+// connection, and it is defensive; every other constructor is read-only. Read from the syntax tree, not by text, so a
+// rename of the factory or of a variable changes nothing; an alias of the class, a spread or a computed options object
+// fails closed.
+describe('repo hygiene — every read-write node:sqlite connection under src/main is defensive (app-update T2.2)', () => {
+  const MAIN = join(DESKTOP_ROOT, 'src', 'main')
+  const relOf = (file: string): string => file.slice(DESKTOP_ROOT.length + 1).replace(/\\/g, '/')
+
+  /** A literal `true`/`false` option, `absent`, or `unreadable` (anything this check cannot judge). */
+  const option = (options: ts.Expression | undefined, name: string): boolean | 'absent' | 'unreadable' => {
+    if (options === undefined) return 'absent'
+    if (!ts.isObjectLiteralExpression(options)) return 'unreadable'
+    if (options.properties.some((p) => ts.isSpreadAssignment(p) || (p.name !== undefined && ts.isComputedPropertyName(p.name)))) {
+      return 'unreadable'
+    }
+    const prop = options.properties.find(
+      (p) => p.name !== undefined && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === name
+    )
+    if (prop === undefined) return 'absent'
+    if (!ts.isPropertyAssignment(prop)) return 'unreadable'
+    if (prop.initializer.kind === ts.SyntaxKind.TrueKeyword) return true
+    if (prop.initializer.kind === ts.SyntaxKind.FalseKeyword) return false
+    return 'unreadable'
+  }
+
+  it('src/main constructs one read-write DatabaseSync, with `defensive: true`; every other one is `readOnly: true`', () => {
+    const readWrite: Array<{ at: string; defensive: boolean | 'absent' | 'unreadable' }> = []
+    const readOnly: string[] = []
+    const unclassified: string[] = []
+    const sqliteModules = new Set<string>()
+    for (const file of filesUnder(MAIN, /\.(ts|tsx|mts)$/)) {
+      const text = readFileSync(file, 'utf8')
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const at = (n: ts.Node): string => `${relOf(file)}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}`
+      const visit = (n: ts.Node): void => {
+        // The module specifier in code (a require, an import, `typeof import(…)`), never a comment.
+        if (ts.isStringLiteral(n) && n.text === 'node:sqlite') sqliteModules.add(relOf(file))
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'enableDefensive') {
+          unclassified.push(`${at(n)} enableDefensive()`) // the setter can switch the option off again
+        }
+        if (ts.isIdentifier(n) && n.text === 'DatabaseSync') {
+          const parent = n.parent
+          if (ts.isNewExpression(parent) && parent.expression === n) {
+            const options = parent.arguments?.[1]
+            const ro = option(options, 'readOnly')
+            const defensive = option(options, 'defensive')
+            if (ro === 'unreadable' || defensive === 'unreadable') unclassified.push(`${at(n)} options`)
+            else if (ro === true) readOnly.push(at(n))
+            else readWrite.push({ at: at(n), defensive })
+          } else if (!ts.isTypeQueryNode(parent) && !(ts.isBindingElement(parent) && parent.propertyName === undefined)) {
+            unclassified.push(`${at(n)} ${parent.getText(source).slice(0, 60)}`) // an alias would construct unseen
+          }
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(source)
+    }
+    // The walk really found the module and its constructors (not a moved root): the probe's read-only open, at least.
+    expect([...sqliteModules]).toEqual(['src/main/services/db.ts'])
+    expect(readOnly.length).toBeGreaterThanOrEqual(1)
+    expect(unclassified, 'a DatabaseSync use this check cannot judge: construct it inline, or widen the check').toEqual([])
+    expect(
+      readWrite.map((s) => s.defensive),
+      `the read-write constructors under src/main (${readWrite.map((s) => s.at).join(', ')}): open every read-write ` +
+        'connection through the one factory in db.ts, which passes `defensive: true` (T2.2)'
+    ).toEqual([true])
+  })
+})
+
+// App-update plan T2.2 fix round (review 1, R1-1): an open writes the `last_writer` stamp only once the app version is
+// set (`setStampAppVersion`); unset, it writes none. Every row sets the version itself, so a release whose start lost
+// the call, or moved it below the first open (the plaintext workspace opens inside `initBackend`'s `workspace.init()`),
+// would pass the whole suite and never stamp: the one thing no later version can add to Kits already sold (G-9). Read
+// from the syntax tree: `main/index.ts` makes the call once, unconditionally at module scope, with `app.getVersion()`,
+// before the statement that starts the backend; and no `WorkspaceController` is built at module scope.
+describe('repo hygiene — the app sets the stamp version before it opens a database (app-update T2.2)', () => {
+  it('main/index.ts calls setStampAppVersion(app.getVersion()) once, at module scope, before the backend can start', () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const calls: ts.CallExpression[] = []
+    const moduleLevelControllers: ts.Node[] = []
+    const insideFunction = (n: ts.Node): boolean => {
+      for (let p = n.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p)) return true
+      return false
+    }
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'setStampAppVersion') calls.push(n)
+      if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'WorkspaceController' && !insideFunction(n)) {
+        moduleLevelControllers.push(n)
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(calls, 'exactly one setStampAppVersion(...) call in main/index.ts').toHaveLength(1)
+    const call = calls[0]!
+    // Unconditional, at module scope: the call is a statement of the file itself, not inside a function or a block.
+    const statement = call.parent
+    expect(ts.isExpressionStatement(statement) && statement.parent === source).toBe(true)
+    const [arg, ...rest] = call.arguments
+    expect(rest).toEqual([])
+    expect(
+      arg !== undefined &&
+        ts.isCallExpression(arg) &&
+        arg.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(arg.expression) &&
+        ts.isIdentifier(arg.expression.expression) &&
+        arg.expression.expression.text === 'app' &&
+        arg.expression.name.text === 'getVersion'
+    ).toBe(true)
+    // Before the first module-level statement that names `initBackend` (other than its own declaration): the start.
+    const namesInitBackend = (n: ts.Node): boolean =>
+      (ts.isIdentifier(n) && n.text === 'initBackend' && !(ts.isFunctionDeclaration(n.parent) && n.parent.name === n)) ||
+      (ts.forEachChild(n, (c) => (namesInitBackend(c) ? true : undefined)) ?? false)
+    const start = source.statements.findIndex((s) => namesInitBackend(s))
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(source.statements.indexOf(statement as ts.Statement)).toBeLessThan(start)
+    expect(moduleLevelControllers).toEqual([])
+  })
+})
+
+// App-update T2.6: X01 (`main.workspace.newer`) and C01 (`.schemaUnreadable`) name this version's number. Main fills
+// its message with the version `main/index.ts` passes the workspace IPC beside the context (`WorkspaceIpcHooks`), and
+// the gate fills its copy from the state main answers (`WorkspaceStateInfo.appVersion`). The hook is optional (the
+// test contexts leave it out), so a start that lost it would pass the whole suite and show every buyer "{version}" in
+// English, frozen in release 1. Read from the syntax tree: the one `registerWorkspaceIpc(...)` call passes an object
+// literal whose `appVersion` is `app.getVersion()`.
+describe('repo hygiene — the app passes its version to the workspace IPC (app-update T2.6)', () => {
+  it('main/index.ts calls registerWorkspaceIpc(ctx, { …, appVersion: app.getVersion() }) once', () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const calls: ts.CallExpression[] = []
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'registerWorkspaceIpc') calls.push(n)
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(calls, 'exactly one registerWorkspaceIpc(...) call in main/index.ts').toHaveLength(1)
+    const hooks = calls[0]!.arguments[1]
+    const appVersion =
+      hooks !== undefined && ts.isObjectLiteralExpression(hooks)
+        ? hooks.properties.find(
+            (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'appVersion'
+          )
+        : undefined
+    const value = appVersion?.initializer
+    expect(
+      value !== undefined &&
+        ts.isCallExpression(value) &&
+        value.arguments.length === 0 &&
+        ts.isPropertyAccessExpression(value.expression) &&
+        ts.isIdentifier(value.expression.expression) &&
+        value.expression.expression.text === 'app' &&
+        value.expression.name.text === 'getVersion',
+      'the hooks object passed to registerWorkspaceIpc carries `appVersion: app.getVersion()`'
+    ).toBe(true)
+  })
+})
+
+// App-update W-65 (T2.14 S-2): a skill folder made for a newer version is not one that "could not be read". The Skills
+// tab counts the two apart (`reconcileStatus()`: `errorCount` and `needsNewerAppCount`), and so must the start's log
+// lines, which support reads after a "Go back": a count of unreadable folders that includes the newer ones blames the
+// user's files. `main/index.ts` is composition with no harness, so the lines are read from the syntax tree: inside the
+// function that runs the start's `skills.reconcile()`, the "could not be read" line takes its count and codes from
+// `skills.reconcileStatus()`, and a second line takes `needsNewerAppCount` from it.
+describe('repo hygiene — the start logs skills made for a newer version apart from unreadable ones (app-update W-65)', () => {
+  it("main/index.ts's skill lines count from skills.reconcileStatus(): errorCount apart from needsNewerAppCount", () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const isCallOf = (n: ts.Node, object: string, method: string): n is ts.CallExpression =>
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === object &&
+      n.expression.name.text === method
+    const reconciles: ts.CallExpression[] = []
+    const findReconcile = (n: ts.Node): void => {
+      if (isCallOf(n, 'skills', 'reconcile') && n.arguments.length === 0) reconciles.push(n)
+      ts.forEachChild(n, findReconcile)
+    }
+    findReconcile(source)
+    expect(reconciles, "exactly one skills.reconcile() in main/index.ts (the start's)").toHaveLength(1)
+    let scope: ts.Node = reconciles[0]!
+    while (!ts.isFunctionLike(scope) && scope.parent !== undefined) scope = scope.parent
+    // The names bound to `skills.reconcileStatus()` in that function, and every `log.<level>(text, { … })` in it.
+    const statusNames = new Set<string>()
+    const lines: Array<{ text: string; fields: Map<string, string> }> = []
+    const walk = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && isCallOf(n.initializer, 'skills', 'reconcileStatus')) {
+        statusNames.add(n.name.text)
+      }
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        ts.isIdentifier(n.expression.expression) &&
+        n.expression.expression.text === 'log' &&
+        n.arguments.length === 2 &&
+        ts.isStringLiteralLike(n.arguments[0]!) &&
+        ts.isObjectLiteralExpression(n.arguments[1]!)
+      ) {
+        const fields = new Map<string, string>()
+        for (const p of (n.arguments[1] as ts.ObjectLiteralExpression).properties) {
+          if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) fields.set(p.name.text, p.initializer.getText(source))
+        }
+        lines.push({ text: (n.arguments[0] as ts.StringLiteralLike).text, fields })
+      }
+      ts.forEachChild(n, walk)
+    }
+    walk(scope)
+    expect(statusNames.size, 'the function binds skills.reconcileStatus() to a name').toBeGreaterThan(0)
+    const fromStatus = (expr: string | undefined, member: string): boolean =>
+      expr !== undefined && [...statusNames].some((name) => expr.replace(/\s+/g, '').includes(`${name}.${member}`))
+    const unreadable = lines.filter((l) => l.text === 'Some skill folders could not be read')
+    expect(unreadable, 'one "could not be read" line').toHaveLength(1)
+    expect(fromStatus(unreadable[0]!.fields.get('count'), 'errorCount'), 'its count is the status errorCount').toBe(true)
+    expect(fromStatus(unreadable[0]!.fields.get('codes'), 'errorCodes'), 'its codes are the status errorCodes').toBe(true)
+    const newer = lines.filter((l) => fromStatus(l.fields.get('count'), 'needsNewerAppCount'))
+    expect(newer, 'one line counts the folders made for a newer version').toHaveLength(1)
+    expect(newer[0]!.text).toMatch(/newer version/)
+  })
+})
+
+// App-update T2.6 (O15): the update address the copy names (`{address}` in X01 and C01; later F-2's refusals, F-21 and
+// the support notices of P4, P6 and P7) is one constant, `UPDATE_ADDRESS` in `shared/update-address.ts`, which main and
+// the renderer import: no other file under src/ writes it. Until P11c types the real address it is a placeholder on
+// the reserved `.invalid` domain (RFC 2606), which must never ship: release 1's version bump moves
+// apps/desktop/package.json off the version below, and from then on the address must be the real one. (A master
+// release synced into the integration branch moves the version too: then this row asks for the address early, or for
+// the version below to follow.)
+const VERSION_BEFORE_RELEASE_1 = '0.1.66'
+/** True when the address is the placeholder and the version is no longer the one before release 1's bump. */
+const placeholderAddressShips = (address: string, version: string): boolean =>
+  new URL(address).hostname.endsWith('.invalid') && version !== VERSION_BEFORE_RELEASE_1
+
+describe('repo hygiene — the update address is one constant, and its placeholder never ships (app-update T2.6)', () => {
+  it('src/ writes the update address once, in shared/update-address.ts', () => {
+    const writes = filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx)$/).flatMap((file) => {
+      const count = readFileSync(file, 'utf8').split(UPDATE_ADDRESS).length - 1
+      return count === 0 ? [] : [`${relative(DESKTOP_ROOT, file).split('\\').join('/')}: ${count}`]
+    })
+    expect(writes, 'import UPDATE_ADDRESS from shared/update-address.ts instead of writing the address').toEqual([
+      'src/shared/update-address.ts: 1'
+    ])
+  })
+
+  it('the placeholder address does not outlive version 0.1.66: release 1’s version bump needs the real address', () => {
+    const version = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')).version as string
+    expect(
+      placeholderAddressShips(UPDATE_ADDRESS, version),
+      `UPDATE_ADDRESS (${UPDATE_ADDRESS}) is still the placeholder at version ${version}: type the real address (P11c, O15)`
+    ).toBe(false)
+  })
+})
+
 // #188 wave — the bundler tripwire. `electron-vite`'s `esmShimPlugin` decides where to inject its
 // CommonJS shim by finding the LAST match of a loose "static import" regex over the whole rendered
 // chunk. That regex matches the bare word `import` (preceded by whitespace/`;`/start) followed
@@ -605,7 +869,9 @@ describe('repo hygiene — every piped stdio stream of a spawned child has an er
 //
 // It cost this wave a full debug cycle: `npm run typecheck` and the entire test suite pass, and
 // only `npm run build` fails — which is exactly why the phase gate is typecheck → build → test in
-// that order. Comments are stripped before the plugin runs, so only STRING LITERALS are the hazard.
+// that order. esbuild strips the comments BETWEEN statements before the plugin runs, so this row
+// reads string literals; the comments it keeps (inside an expression or a class body) are the next
+// row's (P2 exit).
 describe('repo hygiene — no string literal ends with the bare word "import" (#188 bundler trap)', () => {
   const walk = (dir: string): string[] => filesUnder(dir, /\.(ts|tsx)$/)
   // A quote closing immediately after ` import`, with the line NOT being a real import statement.
@@ -624,6 +890,131 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
     }
     // If this fires: reword the string so it does not END on "import" (e.g. "…was imported").
     expect(offenders).toEqual([])
+  })
+})
+
+// App-update P2 exit: the #188 trap, in comments. Vite hands each module to esbuild before Rollup joins them, and
+// esbuild drops a comment between statements but KEEPS one inside an expression or a class body (an array element's, an
+// object property's, a class member's JSDoc, an argument's: measured on esbuild 0.25.12). The plugin's regex takes such a
+// comment for an import as it takes a string: the word `import`, then a quote (`an audio import's row; the engines'`),
+// or words, `from` and a quote. The shim then lands after the last such match. Inside an array literal the build fails
+// (`Expected "(" but found "__cjs_mod__"`: T2.12's persisted-messages.ts). Inside a comment or a string the build passes
+// with the shim commented out, so main had no `require` and `tesseract.ts`'s bare `require.resolve` of the OCR worker
+// script threw into its fallback (the integration base's bundle: a class-member JSDoc of transcriber/cli.ts; that call no
+// longer needs the shim, see the next row). So the row reads
+// what the plugin reads: every module the main bundle takes in (src/main/index.ts and every relative value import under
+// it), as esbuild hands it on, against the plugin's own regex from the installed electron-vite. The only matches
+// allowed are the module's own import and export-from declarations (Rollup drops or hoists them to the chunk's head).
+describe('repo hygiene — in the main bundle, only import declarations match the esm shim regex (#188, P2 exit)', () => {
+  /** `ESMStaticImportRe` from the installed electron-vite, sticky: a dependency update that drops or renames it fails. */
+  const shimRegex = (): RegExp => {
+    const chunks = join(dirname(createRequire(join(DESKTOP_ROOT, 'package.json')).resolve('electron-vite')), 'chunks')
+    for (const name of readdirSync(chunks)) {
+      const m = /^const ESMStaticImportRe = \/(.+)\/([a-z]*);$/m.exec(readFileSync(join(chunks, name), 'utf8'))
+      if (m) return new RegExp(m[1]!, m[2]!.replace('g', '') + 'y')
+    }
+    throw new Error(`no ESMStaticImportRe in ${chunks}: re-check where electron-vite's esm shim lands in out/main/index.mjs`)
+  }
+
+  /** The modules the main bundle takes in: src/main/index.ts and every relative value import, re-export and import(). */
+  const mainModules = (): string[] => {
+    const seen = new Set<string>()
+    const unresolved: string[] = []
+    const queue = [join(DESKTOP_ROOT, 'src', 'main', 'index.ts')]
+    while (queue.length > 0) {
+      const file = queue.pop()!
+      if (seen.has(file)) continue
+      seen.add(file)
+      const visit = (n: ts.Node): void => {
+        const spec =
+          ts.isImportDeclaration(n) && !n.importClause?.isTypeOnly
+            ? n.moduleSpecifier
+            : ts.isExportDeclaration(n) && !n.isTypeOnly
+              ? n.moduleSpecifier
+              : ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword
+                ? n.arguments[0]
+                : undefined
+        if (spec !== undefined && ts.isStringLiteral(spec) && spec.text.startsWith('.')) {
+          const base = resolve(dirname(file), spec.text.replace(/\?.*$/, ''))
+          const hit = [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')].find((c) => existsSync(c) && statSync(c).isFile())
+          if (hit === undefined) unresolved.push(`${relative(DESKTOP_ROOT, file)}: ${spec.text}`)
+          else queue.push(hit)
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true))
+    }
+    expect(unresolved, 'every relative import of a main module resolves to a file').toEqual([])
+    return [...seen]
+  }
+
+  it("no comment esbuild keeps and no string of a main module matches electron-vite's ESMStaticImportRe", async () => {
+    const shim = shimRegex()
+    const modules = mainModules()
+    expect(modules.length, 'the walk follows main’s imports (303 modules at P2’s exit)').toBeGreaterThan(100)
+    const offenders: string[] = []
+    for (const file of modules) {
+      const { code } = await transformWithEsbuild(readFileSync(file, 'utf8'), file)
+      const out = ts.createSourceFile(`${file}.js`, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+      const declarations = out.statements.filter(
+        (s) => ts.isImportDeclaration(s) || (ts.isExportDeclaration(s) && s.moduleSpecifier !== undefined)
+      )
+      for (const word of code.matchAll(/(?<=\s|^|;)import/gmu)) {
+        const at = word.index
+        shim.lastIndex = at
+        if (!shim.test(code)) continue
+        if (declarations.some((d) => at >= d.getStart(out) && at < d.end)) continue
+        const line = code.slice(code.lastIndexOf('\n', at) + 1).split('\n', 1)[0]!.trim()
+        offenders.push(`${relative(DESKTOP_ROOT, file).split('\\').join('/')}: ${line}`)
+      }
+    }
+    expect(
+      offenders,
+      'reword each so the word "import" is not followed by a quote, or by words, "from" and a quote (e.g. "a row of an audio import")'
+    ).toEqual([])
+  })
+
+  // App-update P2 exit (owner call 2026-11-25): main must not NEED the shim either. The shim binds `require`,
+  // `__filename` and `__dirname` for the whole chunk, and the row above can only keep it at the chunk's head. A main
+  // module that reads one of them bare breaks again the day the shim lands wrong: in 0.1.66 tesseract.ts's bare
+  // `require.resolve` threw, and the OCR worker was started from inside app.asar instead of app.asar.unpacked. A module
+  // that needs one declares it itself from `import.meta.url`, as index.ts and ocr/rasterizer.ts do for `__dirname`
+  // (`createRequire(import.meta.url)` for `require`). Read on the TypeScript source, so a comment or a string never counts.
+  it('no main module reads a CommonJS global (require, __dirname, __filename) it does not declare itself', () => {
+    const cjsGlobals = new Set(['require', '__dirname', '__filename'])
+    const offenders: string[] = []
+    for (const file of mainModules()) {
+      const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+      const declared = new Set<string>()
+      const reads: ts.Identifier[] = []
+      const visit = (n: ts.Node): void => {
+        if (ts.isIdentifier(n) && cjsGlobals.has(n.text)) {
+          const p = n.parent
+          const named = (p as { name?: ts.Node }).name === n
+          if (
+            named &&
+            (ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isFunctionDeclaration(p) || ts.isBindingElement(p) ||
+              ts.isImportClause(p) || ts.isImportSpecifier(p) || ts.isNamespaceImport(p))
+          ) {
+            declared.add(n.text)
+          } else if (
+            !(named && (ts.isPropertyAccessExpression(p) || ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p) ||
+              ts.isMethodDeclaration(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p))) &&
+            !(ts.isQualifiedName(p) && p.right === n)
+          ) {
+            reads.push(n)
+          }
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(source)
+      for (const id of reads) {
+        if (declared.has(id.text)) continue
+        const line = source.getLineAndCharacterOfPosition(id.getStart(source)).line + 1
+        offenders.push(`${relative(DESKTOP_ROOT, file).split('\\').join('/')}:${line}: ${id.text}`)
+      }
+    }
+    expect(offenders, 'declare it from import.meta.url, e.g. createRequire(import.meta.url).resolve(…)').toEqual([])
   })
 })
 
@@ -1084,6 +1475,200 @@ describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
     expect(lines.length).toBeGreaterThanOrEqual(7)
     const notExecutable = lines.filter((l) => !l.startsWith('100755 ')).map((l) => l.split('\t')[1])
     expect(notExecutable).toEqual([])
+  })
+})
+
+// W-81 (app-update plan, T2.8): `.gitignore` had an unanchored `release/`, meant for electron-builder's output
+// (`electron-builder.yml` `directories.output: release`, i.e. apps/desktop/release/). It also ignored every file under
+// scripts/release/ (the update wave's snapshot, payload, signing and check tools) and any fixture folder named release/,
+// so a plain `git add` skipped them and a PR could merge without them. Walking the real folders cannot catch that: git
+// says nothing about a tracked file, and an ignored one never reaches CI. So the row asks git to judge MADE-UP paths by
+// the rules alone (`--no-index`): one per folder the wave commits into, one per trap name its later fixtures carry (a
+// nested release/, the drive marker, and the drive folders whose rules are anchored to the root: a bare `runtime/` once
+// un-tracked the runtime service). The build output must stay ignored, which also proves the judge can see a match.
+// Names the repo ignores everywhere on purpose (`*.log`, `*.db`, `*.sqlite`, `*.bin`, `*.key`, `models/`, `workspace/`,
+// `logs/`, `dist/`, `out/`) are not probed: a fixture avoids them. The verdict includes the box's own excludes, so a red
+// on one box only can name a personal rule (`git check-ignore -v --no-index <path>` says which).
+describe("repo hygiene — no ignore rule drops the update wave's release tools or golden fixtures (W-81)", () => {
+  let inCheckout = false
+  try {
+    inCheckout = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim() === 'true'
+  } catch {
+    inCheckout = false // not a git checkout (e.g. a source tarball) — nothing to judge
+  }
+  /** The probes git's ignore rules match (`--stdin` without `-v`, so a negated rule counts as not ignored). */
+  const ignoredAmong = (probes: string[]): string[] => {
+    try {
+      const input = `${probes.join('\n')}\n`
+      const out = execFileSync('git', ['check-ignore', '--no-index', '--stdin'], { cwd: REPO_ROOT, encoding: 'utf8', input })
+      return out.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+    } catch (err) {
+      if ((err as { status?: number }).status === 1) return [] // exit 1: no probe is ignored; 128 (git refused) rethrows
+      throw err
+    }
+  }
+  const fixtures = 'apps/desktop/tests/fixtures'
+  const notIgnored = [
+    // one per folder
+    'scripts/release/probe.mjs',
+    `${fixtures}/readers/v0.0.0/probe.cjs`,
+    `${fixtures}/updates/vectors/probe.json`,
+    `${fixtures}/workspace-history/v0.0.0/probe.json`,
+    `${fixtures}/vault-golden/v0.0.0-workspace.json`,
+    `${fixtures}/golden-fixtures.sha256`, // the golden-fixture manifest's own path
+    // one per trap name
+    `${fixtures}/readers/set/release/probe.json`,
+    `${fixtures}/readers/set/.hilbertraum-runtime.json`,
+    `${fixtures}/readers/set/runtime/probe.json`,
+    `${fixtures}/readers/set/zim/probe.json`,
+    `${fixtures}/readers/set/ocr/probe.json`,
+    `${fixtures}/readers/set/tmp/probe.json`
+  ]
+  const stayIgnored = ['apps/desktop/release/win-unpacked/HilbertRaum.exe', 'release/HilbertRaum.AppImage']
+  it.skipIf(!inCheckout)('ignores exactly the build output among the probes (scripts/release/ and the fixture folders are tracked)', () => {
+    expect(ignoredAmong([...notIgnored, ...stayIgnored])).toEqual(stayIgnored)
+  })
+})
+
+// T2.8 (app-update plan C14, W-53, W-80 (d)): the golden fixtures are captures of released code's own output (the vault
+// descriptors) and bundles of released code (the reader snapshots). Release 1 is judged against them for ever, and no
+// rerun reproduces a descriptor (its salt and key are random), so their bytes are locked here. The manifest
+// tests/fixtures/golden-fixtures.sha256 is `sha256sum` text: `<64 hex>  <path under tests/fixtures/, forward slashes>`,
+// LF only (fixtures are stored byte for byte, `.gitattributes`, so a CRLF line would be committed as one), sorted by
+// path, one line per file. Every top-level folder a line names is a golden folder (vault-golden/ and readers/ always
+// are): each of its files needs a line, so a fixture cannot join, change or go missing unseen. A later phase adds lines
+// only. By hand: `cd apps/desktop/tests/fixtures && sha256sum -c golden-fixtures.sha256`.
+describe('repo hygiene — every golden fixture matches the sha256 manifest (T2.8)', () => {
+  const fixtures = join(DESKTOP_ROOT, 'tests', 'fixtures')
+  const ALWAYS_GOLDEN = ['readers', 'vault-golden']
+  const LINE = /^([0-9a-f]{64}) {2}((?:[A-Za-z0-9_.@+-]+\/)+[A-Za-z0-9_.@+-]+)$/
+
+  it('lists every file of the golden folders once, with the sha256 of its bytes', () => {
+    const bytes = readFileSync(join(fixtures, 'golden-fixtures.sha256'))
+    const text = bytes.toString('utf8')
+    const problems: string[] = []
+    if (bytes.includes(0x0d)) problems.push('the manifest holds a carriage return (LF only)')
+    if (!text.endsWith('\n')) problems.push('the manifest does not end with a newline')
+    const listed = new Map<string, string>()
+    text.replace(/\n$/, '').split('\n').forEach((line, i) => {
+      const m = LINE.exec(line)
+      if (!m || m[2].split('/').some((s) => s === '.' || s === '..')) problems.push(`line ${i + 1} is not "<sha256>  <dir>/<file>": ${line}`)
+      else if (listed.has(m[2])) problems.push(`${m[2]} is listed twice`)
+      else listed.set(m[2], m[1])
+    })
+    const paths = [...listed.keys()]
+    if (paths.join('\n') !== [...paths].sort().join('\n')) problems.push('the lines are not sorted by path')
+    for (const [path, sha256] of listed) {
+      const file = join(fixtures, ...path.split('/'))
+      if (!existsSync(file)) problems.push(`${path} is listed but missing`)
+      else if (createHash('sha256').update(readFileSync(file)).digest('hex') !== sha256) problems.push(`${path} does not match its sha256`)
+    }
+    const golden = new Set([...ALWAYS_GOLDEN, ...paths.map((p) => p.split('/')[0])])
+    for (const dir of golden) {
+      for (const file of filesUnder(join(fixtures, dir), /./)) {
+        const path = file.slice(fixtures.length + 1).split('\\').join('/')
+        if (!listed.has(path)) problems.push(`${path} is in a golden folder but not in the manifest`)
+      }
+    }
+    expect(problems).toEqual([])
+    expect(ALWAYS_GOLDEN.every((dir) => paths.some((p) => p.startsWith(`${dir}/`)))).toBe(true) // never an empty lock
+  })
+})
+
+// App-update F-27 (W-64, rule d; docs/app-updates.md §7.7, "File names in the workspace"). At every start of an encrypted
+// workspace, before any password, `shredStalePlaintext` (workspace-vault.ts) overwrites and removes every file in
+// `workspace/documents/` and `workspace/images/` whose name passes one of two tests: it holds `.parse`, or it ends `.tmp`.
+// Those are the names of transients (a decrypted working copy, a write temp), so nothing is lost. Release 1 is the oldest
+// version that will ever open a workspace, and its sweep can never be changed in the field: a later version that stores
+// a file under a name the sweep matches loses that file at the first start after a "Go back". The stored copy of a
+// document is `<id><ext>` in a plaintext workspace and `<id><ext>.enc` in an encrypted one (`prepareDocument`,
+// ingestion/index.ts), `<id>` a UUID and `<ext>` the extension of the imported file, so a file type added to the readable
+// set (`supportedExtensions()`, the parsers' own list) is what could bring such a name in. This row fails then.
+// It reads the sweep's tests out of the function's own text (they are the frozen half) and takes the extensions from the
+// production list. Not covered: a file of a type the app refuses keeps its own extension in its stored copy, whatever it
+// is, and the image history's copies take theirs from a private table of two (`vision/history.ts`).
+describe('repo hygiene — no stored copy takes a name the start sweep shreds (app-update F-27, W-64)', () => {
+  type NameTest = { readonly method: string; readonly text: string }
+
+  /** The tests `shredStalePlaintext` applies to a file name before it shreds the file: every string-method call with one
+   *  string-literal argument (`name.includes('.parse')`) in the condition of an `if` whose branch calls `shredFile`. */
+  function sweepNameTests(vaultSource: string): NameTest[] {
+    const source = ts.createSourceFile('workspace-vault.ts', vaultSource, ts.ScriptTarget.Latest, true)
+    const tests: NameTest[] = []
+    const callsShred = (n: ts.Node): boolean => {
+      let hit = false
+      const walk = (x: ts.Node): void => {
+        if (ts.isCallExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === 'shredFile') hit = true
+        ts.forEachChild(x, walk)
+      }
+      walk(n)
+      return hit
+    }
+    const collect = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.arguments.length === 1) {
+        const arg = n.arguments[0]
+        if (ts.isStringLiteralLike(arg)) tests.push({ method: n.expression.name.text, text: arg.text })
+      }
+      ts.forEachChild(n, collect)
+    }
+    const inSweep = (n: ts.Node): void => {
+      if (ts.isIfStatement(n) && callsShred(n.thenStatement)) collect(n.expression)
+      ts.forEachChild(n, inSweep)
+    }
+    const find = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name?.text === 'shredStalePlaintext' && n.body) inSweep(n.body)
+      else ts.forEachChild(n, find)
+    }
+    find(source)
+    return tests
+  }
+
+  /** Every stored-copy name an extension list gives (plaintext and encrypted) that one of the sweep's tests matches. */
+  function storedNamesTheSweepShreds(tests: readonly NameTest[], extensions: readonly string[]): string[] {
+    const id = '0b9f6c1e-5a44-4d0c-9a57-3f6f0c1d2e7a' // a document id is a UUID: no dot in it
+    const shredded = (name: string): boolean =>
+      tests.some(({ method, text }) => {
+        if (method === 'includes') return name.includes(text)
+        if (method === 'endsWith') return name.endsWith(text)
+        if (method === 'startsWith') return name.startsWith(text)
+        throw new Error(`the sweep tests a name with .${method}(), which this row cannot apply: teach it`)
+      })
+    return extensions.flatMap((ext) => [`${id}${ext}`, `${id}${ext}${ENCRYPTED_DOC_SUFFIX}`]).filter(shredded)
+  }
+
+  const liveTests = (): NameTest[] =>
+    sweepNameTests(readFileSync(join(DESKTOP_ROOT, 'src', 'main', 'services', 'workspace-vault.ts'), 'utf8'))
+
+  // This pin is release 1's frozen pair. A later version that changes its own sweep never edits it: it adds a row for its
+  // own pair, and keeps release 1's pair as an input of the extension check below (T2.11 Opus re-check, m-16).
+  it('the sweep shreds a name that holds `.parse` or ends `.tmp`, and nothing else (frozen: release 1 runs it for ever)', () => {
+    expect(liveTests()).toEqual([
+      { method: 'includes', text: '.parse' },
+      { method: 'endsWith', text: '.tmp' }
+    ])
+  })
+
+  it('no file type the app reads gives its stored copy such a name, plaintext or encrypted', () => {
+    const extensions = supportedExtensions()
+    expect(extensions.length).toBeGreaterThan(0) // never an empty list
+    expect(extensions.filter((ext) => !/^\.[a-z0-9]+$/.test(ext))).toEqual([]) // lower case, with the dot, as the store writes it
+    expect(storedNamesTheSweepShreds(liveTests(), extensions)).toEqual([])
+  })
+
+  it('the pin itself names the copy a new type would lose, and reads a changed sweep', () => {
+    const id = '0b9f6c1e-5a44-4d0c-9a57-3f6f0c1d2e7a'
+    const live = liveTests()
+    // `<id>.tmp` is swept; `<id>.tmp.enc` is not (it does not END `.tmp`): the plaintext copy is the one lost.
+    expect(storedNamesTheSweepShreds(live, ['.pdf', '.tmp'])).toEqual([`${id}.tmp`])
+    expect(storedNamesTheSweepShreds(live, ['.parsed'])).toEqual([`${id}.parsed`, `${id}.parsed${ENCRYPTED_DOC_SUFFIX}`])
+    const widened = `export function shredStalePlaintext(): void {
+      for (const name of names) if (name.includes('.parse') || name.endsWith('.tmp') || name.endsWith('.pdf.enc')) shredFile(name)
+    }`
+    expect(sweepNameTests(widened)).toHaveLength(3)
+    expect(storedNamesTheSweepShreds(sweepNameTests(widened), ['.pdf'])).toEqual([`${id}.pdf${ENCRYPTED_DOC_SUFFIX}`])
+    // A test outside the `if` that shreds, or in another function, is not the sweep's.
+    expect(sweepNameTests(`export function other(): void { if (name.endsWith('.tmp')) shredFile(name) }`)).toEqual([])
+    expect(sweepNameTests(`export function shredStalePlaintext(): void { if (name.endsWith('.enc')) keep(name) }`)).toEqual([])
   })
 })
 

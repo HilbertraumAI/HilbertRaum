@@ -508,4 +508,19 @@ describe('the session-start heal rewrites rows a search-model failure wrote befo
 
     expect(healEngineLoadState(unlockedCtx(db), LINUX).searchModelRowsRewritten).toBe(0)
   })
+
+  // T2.12 (F-26): a newer version may store a failure as the code `hr:<key>`. This version's session-start heal only
+  // ever rewrites text it wrote itself, so a coded row (one it knows, one with a parameter, one it does not) stays
+  // byte for byte as the newer version left it.
+  it('leaves a failed row stored as a code exactly as it is', () => {
+    const db = freshDb()
+    const codes = [
+      'hr:main.ingest.searchModelFailed',
+      'hr:main.ingest.engineLibraryMissing?library=libgomp.so.1',
+      'hr:main.ingest.someFutureFailure'
+    ]
+    const ids = codes.map((code) => addDoc(db, 'failed', code))
+    expect(healEngineLoadState(unlockedCtx(db), LINUX)).toMatchObject({ rowsRewritten: 0, searchModelRowsRewritten: 0 })
+    expect(ids.map((id) => rowMessage(db, id))).toEqual(codes)
+  })
 })

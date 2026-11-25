@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -13,7 +16,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, join, parse, relative, resolve } from 'node:path'
 import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
@@ -32,15 +35,18 @@ import {
   shredFile,
   stageRekey,
   unlockEncryptedVault,
-  vaultFormatVerdict
+  vaultFormatVerdict,
+  vaultPathsFrom
 } from '../../src/main/services/workspace-vault'
 import {
   ENCRYPTION_REQUIRED,
+  FAST_ARGON,
   FAST_KDF,
   backdate,
   editDescriptor,
   failedLockState,
   freshVaultPaths,
+  leaveAsKilled,
   lockedVault,
   readStoredCopy,
   setFrameMagic,
@@ -51,6 +57,7 @@ import {
   writeNewerSchema,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 
 // #845 — the vault format guard. Every build shipped before it reads only an upper-bound-free descriptor and an
 // equality-checked `.enc` magic, so a workspace a NEWER build wrote (a multi-OS Kit where one OS's app was updated,
@@ -133,6 +140,46 @@ function plant(path: string, text: string): string {
   return path
 }
 
+/** What the start's salvage, sweep and rekey recovery act on, on the locked vault at `vp` under `PW`: a cleanly closed
+ *  working database newer than `.enc` (the salvage signature), the decrypt temp, transient document and image copies,
+ *  and a committed-looking password-change stage with its journal. Returns every path planted. */
+function failedLockLeftovers(vp: FreshVaultPaths): string[] {
+  const { db } = unlockEncryptedVault(vp, PW)
+  db.close()
+  backdate(vp.encPath)
+  const ws = dirname(vp.dbPath)
+  const planted = [
+    vp.dbPath,
+    plant(`${vp.dbPath}.tmp`, 'decrypt temp'),
+    plant(join(ws, 'documents', 'x.parse.pdf'), '%PDF-1.7'),
+    plant(join(ws, 'images', 'y.tmp'), 'image temp')
+  ]
+  const staged = stagedFrame(vp)
+  planted.push(staged, rekeyJournal(vp, 1, [staged]))
+  return planted
+}
+
+/** T2.9 fix round, R1-6: each KDF parameter this build bounds from above, with the first value past its bound (argon2id
+ *  m 1 GiB in KiB, t 8, p 16; scrypt N 2^22, a power of two, r 32, p 16; `security/crypto.ts`). T2.7 (L-1) lowered the
+ *  argon2id bounds from m 2 GiB and t 64: the first values past those stay too, and read newer as before. */
+const KDF_ABOVE_BOUNDS = [
+  ['argon2id', 'm', 2 ** 20 + 1],
+  ['argon2id', 't', 9],
+  ['argon2id', 'm', 2 ** 21 + 1],
+  ['argon2id', 't', 65],
+  ['argon2id', 'p', 17],
+  ['scrypt', 'N', 2 ** 23],
+  ['scrypt', 'r', 33],
+  ['scrypt', 'p', 17]
+] as const
+
+/** The descriptor's `kdf` as a newer build may write it: `algo`'s fast test parameters with `param` set to `value`. */
+const kdfWith =
+  (algo: 'argon2id' | 'scrypt', param: string, value: number) =>
+  (d: Record<string, unknown>): void => {
+    d.kdf = { ...(algo === 'argon2id' ? FAST_ARGON : FAST_KDF), [param]: value }
+  }
+
 interface NewerCase {
   /** Plants the newer artifact (and any crash leftovers) on a locked vault under `PW`; returns every path planted. */
   arrange: (vp: FreshVaultPaths) => string[]
@@ -174,6 +221,30 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
         ],
         what: 'kdf',
         found: 'balloon'
+      }
+    ],
+    // T2.9 fix round, R1-6: KDF parameters above the bounds this build derives with, under a KDF it knows (F-9's duty: a
+    // later build keeps them inside those bounds under descriptor version 2). The derive refused each with a plain error
+    // ("Could not open the workspace"), after the start's steps and the unlock's rekey recovery had run.
+    ...KDF_ABOVE_BOUNDS.map(([algo, param, value]): [string, NewerCase] => [
+      `a v2 descriptor whose ${algo} ${param} is above this build's bound (${value}; before: "Could not open")`,
+      {
+        arrange: (vp) => [editDescriptor(vp, kdfWith(algo, param, value)).descriptorPath],
+        what: 'kdf',
+        found: `${algo} ${param} ${value}`
+      }
+    ]),
+    [
+      // R1-6: the verdict runs before the start's steps and the unlock's rekey recovery, so none of them acts first.
+      'a failed lock’s leftovers beside a v2 descriptor whose argon2id m is above this build’s bound (before: salvaged, swept, the stage rolled over .enc, then "Could not open")',
+      {
+        arrange: (vp) => {
+          const planted = failedLockLeftovers(vp)
+          editDescriptor(vp, kdfWith('argon2id', 'm', 2 ** 21 + 1))
+          return planted
+        },
+        what: 'kdf',
+        found: `argon2id m ${2 ** 21 + 1}`
       }
     ],
     [
@@ -269,20 +340,7 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
       'a failed lock’s leftovers beside a version 3 descriptor that keeps its dataKey (before: salvaged, swept, rolled forward)',
       {
         arrange: (vp) => {
-          // A cleanly closed working database newer than `.enc` (the salvage signature), the decrypt temp, transient
-          // document and image copies, and a committed-looking password-change stage with its journal.
-          const { db } = unlockEncryptedVault(vp, PW)
-          db.close()
-          backdate(vp.encPath)
-          const ws = dirname(vp.dbPath)
-          const planted = [
-            vp.dbPath,
-            plant(`${vp.dbPath}.tmp`, 'decrypt temp'),
-            plant(join(ws, 'documents', 'x.parse.pdf'), '%PDF-1.7'),
-            plant(join(ws, 'images', 'y.tmp'), 'image temp')
-          ]
-          const staged = stagedFrame(vp)
-          planted.push(staged, rekeyJournal(vp, 1, [staged]))
+          const planted = failedLockLeftovers(vp)
           editDescriptor(vp, version3(true))
           return planted
         },
@@ -401,6 +459,84 @@ describe('a working copy or .recovery a newer build stamped is kept, never disca
       ctl.shutdown()
     }
   })
+
+  /** The `CREATE INDEX w985_future` text in the database file at `path` turned into `CREATE INDEZ` (the same length, as
+   *  `writeNewerSchema` patches it), or back with `repair`. */
+  function patchIndexText(path: string, repair = false): void {
+    const [from, to] = repair ? ['CREATE INDEZ', 'CREATE INDEX'] : ['CREATE INDEX', 'CREATE INDEZ']
+    const bytes = readFileSync(path)
+    const at = bytes.indexOf(Buffer.from(`${from} w985_future`, 'utf8'))
+    if (at < 0) throw new Error(`patchIndexText: no "${from} w985_future" in the file`)
+    Buffer.from(to, 'utf8').copy(bytes, at)
+    writeFileSync(path, bytes)
+  }
+
+  /** The stored `contextTokens` of the database at `path`, whose index text this SQLite cannot parse: read from a copy in
+   *  `root` (outside `config/` and `workspace/`) with the text repaired, removed again. */
+  function contextTokensIn(path: string, root: string): string {
+    const copy = join(root, 'repaired-copy.sqlite')
+    copyFileSync(path, copy)
+    patchIndexText(copy, true)
+    const db = openRawDb(copy, { readOnly: true })
+    try {
+      return (db.prepare("SELECT value_json FROM settings WHERE key = 'contextTokens'").get() as { value_json: string }).value_json
+    } finally {
+      db.close()
+      rmSync(copy)
+    }
+  }
+
+  /** Whether a file can be write-protected against this process (POSIX root writes any mode). */
+  const canWriteProtect = process.platform === 'win32' || process.getuid?.() !== 0
+
+  // T2.9 fix round, R1-3 = R2-1: the only copy, with `.enc` missing, and the newer build's last commit still in its
+  // `-wal`. Its schema holds text this SQLite cannot parse, so the start's replay of the `-wal` answers `damaged`
+  // (SQLITE_CORRUPT), and the start skipped its re-check of the `-wal` for that answer. Usually SQLite's close copies the
+  // `-wal` in anyway; where that copy cannot finish (here the main file is write-protected: SQLite opens it read-only, and
+  // its close copies nothing; a full drive or a hold ends the same way), the start kept the stale main file as
+  // `.recovery`, and the sweep shredded the `-wal` with that commit. Now a `-wal` that still waits blocks the start with
+  // all three files kept (#242's state), and once the copy can finish the retry keeps the whole copy.
+  it.skipIf(!canWriteProtect)(
+    'the only copy, .enc missing, a commit still in its -wal and a replay that cannot finish: the start blocks with both files byte for byte, the retry keeps the copy whole',
+    () => {
+      const vp = lockedVault('fmtguard-985', PW)
+      failedLockState(vp, 7171, PW)
+      const wal = `${vp.dbPath}-wal`
+      // The newer build's session: its stamp and an index this SQLite cannot parse, checkpointed into the main file; then
+      // one more commit, still in the `-wal` when the session ends unlocked.
+      const session = openRawDb(vp.dbPath)
+      session.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}; CREATE INDEX w985_future ON settings(key);`)
+      session.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+      expect(session.prepare("UPDATE settings SET value_json = '9292' WHERE key = 'contextTokens'").run().changes).toBe(1)
+      leaveAsKilled(vp, session)
+      // The schema page is not in the `-wal`, so the text patched below is what every reader of the schema gets.
+      expect(readFileSync(wal).includes(Buffer.from('CREATE INDEX w985_future', 'utf8')), 'the schema page in the -wal').toBe(false)
+      patchIndexText(vp.dbPath)
+      rmSync(vp.encPath)
+      chmodSync(vp.dbPath, 0o444)
+      const kept = { main: sha(vp.dbPath), wal: sha(wal) }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      try {
+        ctl.init()
+        expect(ctl.isRecoveryBlocked()).toBe(true)
+        expect(existsSync(recoveryOf(vp))).toBe(false)
+        expect(sha(vp.dbPath), 'the main file, after the start').toBe(kept.main)
+        expect(sha(wal), 'the -wal, after the start').toBe(kept.wal)
+        expect(thrownBy(() => ctl.unlock(PW)).name).toBe('VaultRecoveryBlockedError')
+        expect(sha(vp.dbPath), 'the main file, after the unlock').toBe(kept.main)
+        expect(sha(wal), 'the -wal, after the unlock').toBe(kept.wal)
+        // Writable again: the retry's replay finishes, and the copy it keeps holds the commit the `-wal` held.
+        chmodSync(vp.dbPath, 0o644)
+        expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+        expect(existsSync(vp.dbPath)).toBe(false)
+        expect(existsSync(wal)).toBe(false)
+        expect(contextTokensIn(recoveryOf(vp), vp.root)).toBe('9292')
+      } finally {
+        for (const path of [vp.dbPath, recoveryOf(vp)]) if (existsSync(path)) chmodSync(path, 0o644)
+        ctl.shutdown()
+      }
+    }
+  )
 
   /** A `.recovery` a newer build stamped, `olderBy` ms older than the (backdated) `.enc` when positive, else newer. */
   function newerRecovery(olderBy: number): FreshVaultPaths {
@@ -737,14 +873,31 @@ describe('what is not newer (#845)', () => {
     }
   })
 
-  // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): written by the released v0.1.65 and v0.1.50
-  // code itself, on a scratch root, with a throwaway password. The release's key schedule must hold (derive, verify,
+  // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): one per published tag from v0.1.50 to v0.1.66
+  // (sixteen; v0.1.51 was never published), each written by that tag's released code itself, on a scratch root, with a
+  // throwaway password, and locked by tests/fixtures/golden-fixtures.sha256. The release's key schedule must hold (derive, verify,
   // unwrap), a vault built around its data key must unlock and lock, and the descriptor must stay byte for byte.
   // #974: so must one an editor saved again with a UTF-8 byte-order mark in front (Windows PowerShell 5.1
   // `Set-Content -Encoding utf8`, older Notepad): it read as unreadable, and the unlock said the key file was missing.
   it.each([
     ['v0.1.65', 'v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4', false],
     ['v0.1.50', 'v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c', false],
+    // T2.8 (app-update plan W-80 (d)): one per other published tag, each written by that tag's own code
+    // (scripts/release/golden-descriptors.mjs; v0.1.51 was never published). Rows added only: this is F-9's golden test.
+    ['v0.1.52', 'v0.1.52', 'golden-throwaway-v0.1.52', '6b65f30f2335da9fff59580d95fe686a105eb1975927ebe35b252a844f458aa7', false],
+    ['v0.1.53', 'v0.1.53', 'golden-throwaway-v0.1.53', 'f27698d22067937211c682d91587e5597613c80254f0134622b1f16a89b9a29d', false],
+    ['v0.1.54', 'v0.1.54', 'golden-throwaway-v0.1.54', '3dd42ab32459165cf44c312e369be2b86809a7ba5e31c57349c11a57c430a80f', false],
+    ['v0.1.55', 'v0.1.55', 'golden-throwaway-v0.1.55', '27b43bc4ef6bf1ebe1e12c8c34172d6be12bf5738bad57e47a28e93251f2ca1a', false],
+    ['v0.1.56', 'v0.1.56', 'golden-throwaway-v0.1.56', 'c236decd45e141f2d02a6054ec972c924053428a430486c7e2300ec2aa33c518', false],
+    ['v0.1.57', 'v0.1.57', 'golden-throwaway-v0.1.57', 'a8eb5930dc4dd3947a19a11bfd7d7bb86f5877839930db801f835b75fba6a843', false],
+    ['v0.1.58', 'v0.1.58', 'golden-throwaway-v0.1.58', '265712e921f47f69518ba911fbd5250e6084bb77441c8bbf3adf18bde6a78e05', false],
+    ['v0.1.59', 'v0.1.59', 'golden-throwaway-v0.1.59', '29e4c6b567f416f22bf148675322bb1578cb7a4f32a0edaad10cf07d76466c61', false],
+    ['v0.1.60', 'v0.1.60', 'golden-throwaway-v0.1.60', 'd5f03b5b32f407ca07b3f37089df9de7bbe25ff45865e7f09ffe26fddfabea89', false],
+    ['v0.1.61', 'v0.1.61', 'golden-throwaway-v0.1.61', '49731bf60d575e085bd9ddb3165698606f3443f0e85a6cdea1ad3dee8d233bb8', false],
+    ['v0.1.62', 'v0.1.62', 'golden-throwaway-v0.1.62', 'ecf2e4265a0d76d781e7544dd70a3f64e14f35a96288882a2d2b368dfcd6ce42', false],
+    ['v0.1.63', 'v0.1.63', 'golden-throwaway-v0.1.63', '542d4550a66ec8201984ca823d5a134164a524e886fb4882acfae7a8e94139de', false],
+    ['v0.1.64', 'v0.1.64', 'golden-throwaway-v0.1.64', '9ecc217c7d085c68c7755fc03b9b8e66bbbd0c7d97557e4251efe5eda22da2ad', false],
+    ['v0.1.66', 'v0.1.66', 'golden-throwaway-v0.1.66', 'd277868c63b1ff684be9d19c44f49987769a42ecf02705851966189a0c2fab57', false],
     [
       'v0.1.65, saved again with a byte-order mark (#974),',
       'v0.1.65',
@@ -1058,6 +1211,51 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       expect(ctl.takeStageOutcome()).toBe('removed')
     } finally {
       ctl.shutdown()
+    }
+  })
+
+  // T2.7 security fix round (L-5): an entry is resolved against the app's working folder, which the launchers set to the
+  // drive root, so an entry by a relative name (`workspace/hilbertraum.sqlite.enc.new`) resolved inside the workspace
+  // and vouched: the start rolled a stage nothing proves is this workspace's over `.enc`, with no key check. Every
+  // journal a release wrote names its entries by their full path (they are built from the drive root the launcher
+  // passes). An entry that is not one (on Windows: no drive letter and no `\\` share) now never vouches: it is judged as
+  // an entry outside the workspace, and the stage stays in doubt for the unlock's key check.
+  it.each<[string, string]>([
+    ['a relative name', join('workspace', 'hilbertraum.sqlite.enc.new')],
+    ...(process.platform === 'win32'
+      ? ([['a name rooted on the working folder’s drive', '\\{root}\\workspace\\hilbertraum.sqlite.enc.new']] as Array<[string, string]>)
+      : [])
+  ])('a journal that names the stage by %s, the working folder at the drive root: it never vouches for a crash leftover (L-5)', (_case, spelled) => {
+    // The workspace by its real path, as `process.cwd()` answers after the chdir below. On macOS the temp folder is
+    // reached through a link (`/var` is `/private/var`): spelled through it, the entry resolved against the working folder
+    // lay outside the workspace by its text, so the start never vouched for it there, L-5's fix or not, and the row
+    // proved nothing.
+    const made = workspaceWithMarker('fmtguard-l5')
+    const root = realpathSync.native(made.root)
+    const real = (path: string): string => join(root, relative(made.root, path))
+    const vp: FreshVaultPaths = { ...vaultPathsFrom({ configPath: real(dirname(made.descriptorPath)), dbPath: real(made.dbPath) }), root }
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const rootOnDrive = vp.root.slice(parse(vp.root).root.length)
+    rekeyJournal(vp, 1, [spelled.replace('{root}', rootOnDrive)])
+    const before = snapshot(vp.root)
+    const cwd = process.cwd()
+    process.chdir(vp.root)
+    try {
+      expect(resolve(spelled.replace('{root}', rootOnDrive)), 'the entry resolves to the stage').toBe(resolve(stagedOf(vp)))
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(snapshot(vp.root)).toEqual(before)
+        ctl.unlock(PW)
+        expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+        expect(existsSync(stagedOf(vp))).toBe(false)
+        expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+        expect(ctl.takeStageOutcome()).toBe('removed')
+      } finally {
+        ctl.shutdown()
+      }
+    } finally {
+      process.chdir(cwd)
     }
   })
 
@@ -1567,6 +1765,50 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
     }
   })
 
+  // T2.16 fix round (R2 B4): nor for a link at the name. A journal entry inside the workspace counted when a stat (which
+  // follows a link) found a file there, so a symbolic link or a second hard link at a listed staged name had the start
+  // shred the stored copy and rename the link onto its name: that document was lost, and its name then led to a file
+  // elsewhere. A stage is now a regular file no other name shares (`lstat`, as the unlock judges an outside stage): the
+  // start leaves the stage, the stored copy and the file the link leads to byte for byte, the journal keeps the entry,
+  // and the pass counts it.
+  const linkedStage = (kind: 'hard' | 'symbolic') => (elsewhere: string, staged: string): void =>
+    kind === 'hard' ? linkSync(elsewhere, staged) : symlinkSync(elsewhere, staged, 'file')
+  const canFileLink = (kind: 'hard' | 'symbolic'): boolean => {
+    const root = tempRoot('fmtguard-b4-link')
+    writeFileSync(join(root, 'target'), 'x')
+    try {
+      linkedStage(kind)(join(root, 'target'), join(root, 'link'))
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const kind of ['hard', 'symbolic'] as const) {
+    it.skipIf(!canFileLink(kind))(`a journal that lists a ${kind} link at the staged name of a stored document copy: the start leaves the stage, the stored copy and the file it leads to, and keeps the entry`, async () => {
+      const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+      const elsewhere = plant(join(vp.root, 'elsewhere.bin'), 'a file outside the workspace folder')
+      const staged = `${copies.documents}${REKEY_SUFFIX}`
+      linkedStage(kind)(elsewhere, staged)
+      const journal = rekeyJournal(vp, 1, [staged])
+      const before = { stored: sha(copies.documents), elsewhere: sha(elsewhere) }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(sha(copies.documents), 'the stored copy').toBe(before.stored)
+        expect(sha(elsewhere), 'the file the link leads to').toBe(before.elsewhere)
+        expect(lstatSync(staged).isFile() && lstatSync(staged).nlink === 1, 'the link at the staged name').toBe(false)
+        expect(JSON.parse(readFileSync(journal, 'utf8')).staged, 'the journal keeps the entry').toEqual([staged])
+        expect(ctl.takeJournalRefusals()).toBe(1)
+        ctl.unlock(PW)
+        expect(sha(copies.documents)).toBe(before.stored)
+        expect(sha(elsewhere)).toBe(before.elsewhere)
+        expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      } finally {
+        ctl.shutdown()
+      }
+    })
+  }
+
   // A journal vouches for a stage only by its full path (#973 review round 3 F1): one that cannot be read lists nothing,
   // and one written under another drive root lists other paths. Either leaves the stage in doubt.
   it.each<[string, (vp: FreshVaultPaths, staged: string) => void]>([
@@ -1596,22 +1838,22 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
 
   // #1014 round 4: a journal entry the start refuses vouches for nothing. Here `documents/` itself is a junction (no
   // privilege needed on Windows) to a folder elsewhere, and the journal lists the stage by its path through it. The
-  // containment refuses that entry, but the scan, whose `readdir` follows the link, still finds the stage; listed by the
+  // containment refuses that entry, but the scan, whose `readdir` followed the link, still found the stage; listed by the
   // journal as written, it was no doubt, and the start shredded the stored copy behind the link and renamed the stage
-  // over it. Now the stage is a #1001 doubt: the start leaves both files, and the unlock judges the stage under the data
-  // key. A stage under another key fails its tag and is removed; one that opens under the data key (a store the user
-  // keeps behind a link of their own) still rolls forward, which is why the scan does not skip a linked folder.
-  // Round 5: the entry through the link waits for the unlock (as an out-of-store copy's does), whose pass acts only on a
-  // stored copy the database lists outside `documents/`, which this one is not: the unlock counts it and drops it, so
-  // the count moved from the start to the unlock.
-  it.each<[string, (vp: FreshVaultPaths, target: string, text: string) => Promise<string>, 'removed' | 'rolledForward']>([
-    ['a stage under another key', async (vp, target, text) => retiredCopy(vp, 'documents', `${basename(target)}${REKEY_SUFFIX}`, text), 'removed'],
+  // over it. Round 4 made the stage a #1001 doubt the unlock judged under the data key. R2-3 (owner 2026-11-24, T2.9 fix
+  // round): the scan no longer reads through a linked `documents/` or `images/` at all, so neither the start nor the
+  // unlock touches a file behind the link, a stage that opens under the data key included (one a user's own linked store
+  // could hold: it stays staged, its stored copy as it was; only a v1 → v2 change writes such a stage, and no published
+  // release wrote a v1 descriptor). Round 5: the entry through the link waits for the unlock (as an out-of-store copy's
+  // does), whose pass acts only on a stored copy the database lists outside `documents/`, which this one is not: the
+  // unlock counts it and drops it, so the count moved from the start to the unlock.
+  it.each<[string, (vp: FreshVaultPaths, target: string, text: string) => Promise<string>]>([
+    ['a stage under another key', async (vp, target, text) => retiredCopy(vp, 'documents', `${basename(target)}${REKEY_SUFFIX}`, text)],
     [
       'a stage that opens under the data key',
-      async (vp, target, text) => whileUnlocked(vp, (ctl) => storeCopy(ctl, vp.root, `${target}${REKEY_SUFFIX}`, text)),
-      'rolledForward'
+      async (vp, target, text) => whileUnlocked(vp, (ctl) => storeCopy(ctl, vp.root, `${target}${REKEY_SUFFIX}`, text))
     ]
-  ])('`documents/` a junction to a folder elsewhere, the journal listing %s through it: the start leaves both files, the unlock judges the stage', async (_case, plantStage, verdict) => {
+  ])('`documents/` a junction to a folder elsewhere, the journal listing %s through it: the start and the unlock leave both files byte for byte', async (_case, plantStage) => {
     const vp = lockedVault('fmtguard-1001', PW)
     const elsewhere = join(vp.root, 'store-elsewhere')
     mkdirSync(elsewhere)
@@ -1631,12 +1873,11 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
       expect(sha(staged), 'its stage, after the start').toBe(before.stage)
       expect(ctl.takeJournalRefusals(), 'the start: the entry waits for the database').toBe(0)
       ctl.unlock(PW)
-      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 0, setAside: 0, [verdict]: 1 })
+      expect(ctl.takeSidecarStageOutcome()).toBeNull() // R2-3: no stage behind the link is judged
       expect(ctl.takeJournalRefusals()).toBe(1) // the entry through the link, dropped once counted
       expect(existsSync(journal)).toBe(false)
-      expect(existsSync(staged)).toBe(false)
-      if (verdict === 'removed') expect(sha(behind)).toBe(before.stored)
-      else expect(await readStoredCopy(ctl, vp.root, behind)).toBe(text)
+      expect(sha(staged), 'its stage, after the unlock').toBe(before.stage)
+      expect(sha(behind), 'the stored copy behind the link, after the unlock').toBe(before.stored)
     } finally {
       ctl.shutdown()
     }
@@ -1767,5 +2008,107 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
     } finally {
       ctl.shutdown()
     }
+  })
+})
+
+// R2-3 (owner 2026-11-24, T2.9 fix round): `documents/` or `images/` a link to a folder elsewhere (a junction on Windows,
+// a symbolic link; made on a drive whose file system has links, or a store a user keeps behind a link of their own).
+// Every start of an encrypted workspace, before any password, read through it as through a folder of its own: the sweep
+// overwrote and removed every `*.tmp` and `*.parse*` file there, the rekey recovery renamed a `*.enc.new` over a stored
+// copy that was gone (under a v1 descriptor it deleted every one), and the unlock removed or swapped in the rest. Now the
+// sweep and the stage scan skip a store folder that is not a real folder inside the workspace, by the test the rekey
+// journal's entries pass (#1014) and the knowledge-pack transient sweep's: nothing behind the link is shredded, renamed or
+// deleted. (A real store folder is still swept: "what is not newer" above.)
+describe('a documents/ or images/ folder that is a link is never read through (R2-3)', () => {
+  type Store = 'documents' | 'images'
+  type LinkKind = 'junction' | 'dir'
+  /** A junction on Windows (no privilege needed; elsewhere `symlinkSync` ignores the kind, so it is not run twice), and a
+   *  symbolic link to a folder everywhere. */
+  const LINKS: Array<[string, LinkKind]> = [
+    ...(process.platform === 'win32' ? [['a junction', 'junction'] as [string, LinkKind]] : []),
+    ['a symbolic link', 'dir']
+  ]
+
+  /** Can this account make a `kind` link to a folder? (A Windows symbolic link needs Developer Mode or the privilege.) */
+  function canLink(kind: LinkKind): boolean {
+    const root = tempRoot('fmtguard-r23-link')
+    try {
+      mkdirSync(join(root, 'target'))
+      symlinkSync(join(root, 'target'), join(root, 'link'), kind)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** sha256 of every file directly in `dir`, by name. */
+  const filesIn = (dir: string): Record<string, string> =>
+    Object.fromEntries(readdirSync(dir).sort().map((name) => [name, sha(join(dir, name))]))
+
+  /** Both store folders of `vp` made `kind` links to folders elsewhere under `vp.root`; returns the folders behind them. */
+  function linkedStores(vp: FreshVaultPaths, kind: LinkKind): Record<Store, string> {
+    const behind = {} as Record<Store, string>
+    for (const store of ['documents', 'images'] as const) {
+      behind[store] = join(vp.root, `elsewhere-${store}`)
+      mkdirSync(behind[store])
+      symlinkSync(behind[store], join(dirname(vp.dbPath), store), kind)
+    }
+    return behind
+  }
+
+  const stateOf = (behind: Record<Store, string>): Record<Store, Record<string, string>> => ({
+    documents: filesIn(behind.documents),
+    images: filesIn(behind.images)
+  })
+
+  describe.each(LINKS)('both store folders %s', (_label, kind) => {
+    it.skipIf(!canLink(kind))('the start and the unlock shred, rename and delete nothing behind them', () => {
+      const vp = lockedVault('fmtguard-r23', PW)
+      const behind = linkedStores(vp, kind)
+      // Names the start's sweep matches (`*.parse*`, `*.tmp`), and stages the scan finds: two beside no stored copy (the
+      // start renamed each into place), one beside its stored copy (the unlock removed it: it opens under no key here).
+      plant(join(behind.documents, 'x.parse.pdf'), '%PDF-1.7 behind the link')
+      plant(join(behind.documents, 'x.pdf.enc.tmp'), 'a write temp behind the link')
+      plant(join(behind.documents, 'a.pdf.enc.new'), 'a stage behind the link, no stored copy')
+      plant(join(behind.documents, 'b.pdf.enc'), 'a stored copy behind the link')
+      plant(join(behind.documents, 'b.pdf.enc.new'), 'a stage beside it')
+      plant(join(behind.images, 'i.read-42.tmp'), 'an image temp behind the link')
+      plant(join(behind.images, 'c.png.enc.new'), 'an image stage behind the link, no stored copy')
+      const before = stateOf(behind)
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(stateOf(behind), 'after the start').toEqual(before)
+        expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+        expect(ctl.unlock(PW).state).toBe('unlocked')
+        expect(ctl.takeSidecarStageOutcome()).toBeNull() // no stage judged
+        expect(stateOf(behind), 'after the unlock').toEqual(before)
+        ctl.lock()
+        expect(stateOf(behind), 'after the lock').toEqual(before)
+        for (const store of ['documents', 'images']) {
+          expect(lstatSync(join(dirname(vp.dbPath), store)).isSymbolicLink(), `${store}/ is still the link`).toBe(true)
+        }
+      } finally {
+        ctl.shutdown()
+      }
+    })
+
+    it.skipIf(!canLink(kind))('under a v1 descriptor the start and the unlock delete no stage behind them', () => {
+      const vp = lockedVault('fmtguard-r23', PW, { legacyV1: true })
+      const behind = linkedStores(vp, kind)
+      plant(join(behind.documents, 'b.pdf.enc'), 'a stored copy behind the link')
+      plant(join(behind.documents, 'b.pdf.enc.new'), 'a stage beside it')
+      plant(join(behind.images, 'c.png.enc.new'), 'an image stage behind the link, no stored copy')
+      const before = stateOf(behind)
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(stateOf(behind), 'after the start').toEqual(before)
+        expect(ctl.unlock(PW).state).toBe('unlocked')
+        expect(stateOf(behind), 'after the unlock').toEqual(before)
+      } finally {
+        ctl.shutdown()
+      }
+    })
   })
 })

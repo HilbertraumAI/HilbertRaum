@@ -232,8 +232,9 @@ password recovery — are documented in
   moved too, even when the old pair is put back later.
 - **Builds released before #845 (0.1.65 and earlier) cannot detect a newer vault format.** From
   #845 on, a build refuses a workspace whose descriptor, KDF, `.enc` frame or password-change
-  journal a newer build wrote, before anything is written, with "This workspace was written by a
-  newer HilbertRaum — update the app to open it." (`security-model.md` "Vault format versions").
+  journal a newer build wrote, before anything is written, with "This workspace was last used with a
+  newer version of HilbertRaum, so this version can’t open it. Your workspace is unchanged. …"
+  (`security-model.md` "Vault format versions").
   An older build reads such a workspace the old way: a descriptor that keeps its wrapped data
   key passes for the current format and a password change rewrites it as such, and its startup
   sweep and rekey recovery run over the newer files. The same shape as the schema stamp above:
@@ -257,7 +258,10 @@ password recovery — are documented in
   counted in the log without their paths (a folder left in place is counted at each start again,
   and so is an entry the app could not check because a stat failed, a hold or a permission: that
   file waits until a start or an unlock can check it). With `documents/` or `images/` kept behind
-  a link (a junction), the stages there wait for the unlock with the right password, not the start.
+  a link (a junction) to a folder elsewhere, the start's sweep and the stage scan skip that folder
+  (app-update T2.9 R2-3), so a password change's stages there are not recovered: only the one-time
+  v1 → v2 change of a workspace from the unpublished builds 0.1.0 to 0.1.3 writes stages there, and
+  that change no longer finds them for its own swap (T2.9 re-check R2 N-1).
 - **A password change that another program gets in the way of can still lose work in three rare
   cases (#1027; owner decision 2026-11-22: documented, no notice in the app).** Only a workspace made
   by one of the unpublished builds 0.1.0 to 0.1.3 has this one-time change. It happens mostly on
@@ -333,8 +337,11 @@ password recovery — are documented in
   - The probe reads only part of a large file, so a partly damaged copy can be kept and adopted,
     and the damage shows when the app reads those pages. With no snapshot left, that still beats
     losing everything.
-  - A `-wal` that SQLite cannot replay (it reports the database as corrupt) is dropped, so a copy
-    kept then lacks the session's last commits.
+  - A `-wal` whose replay SQLite answers as corrupt (as it does for a newer build's copy whose
+    schema it cannot parse) blocks the start while it still holds frames, every file kept, as for a
+    `-wal` the replay cannot empty (below; app-update T2.9 R1-3). Once SQLite has copied the `-wal`
+    into the working file anyway (its close usually does), the copy is probed and kept as usual,
+    with the session's last commits in it.
   - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
     missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
     right password shreds it (a wrong one touches nothing), and the notice goes.
@@ -348,6 +355,16 @@ password recovery — are documented in
     the start: nothing is moved or shredded, and the unlock shows the "another program is holding a
     recovery file" message, whose words name only the holding program (owner decision D4: no copy
     change; `troubleshooting.md` says what else it can mean).
+  - Behind a workspace folder that is a link (a junction or a symbolic link) to a folder elsewhere,
+    the start never replays a `-wal`: SQLite would write wherever the link leads, before any
+    password (app-update T2.16 R1 B-2; the same holds when the working file, its `-wal` or its
+    `-shm` is itself a link or has a second hard link, which the app never makes). So when `.enc` is
+    missing and an unclean end left a `-wal` that holds commits, the start blocks with all three
+    files kept, and it does so at every start and every unlock: each correct password gets the
+    "another program is holding a recovery file … try again" message, and waiting or retrying never
+    helps (P2 exit code review CR-2). The way out keeps every file as it is: quit, copy the folder
+    the link leads to whole, remove only the link, put the copy at the `workspace` name, then start
+    and unlock (`troubleshooting.md`, under that message).
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not
@@ -776,14 +793,19 @@ password recovery — are documented in
   seams that held none), closing the microtask-narrow TOCTOU where a competing `replaceExisting` extract
   interleaved between the staleness re-extract's release and the row load (empty CSV, "saved 0 rows");
   the export's hold RELEASES before the save dialog, so a parked dialog never blocks the document's other
-  lanes. **(SKA-26, decision: flip)** extractor-version staleness is now `v !== CURRENT`, not `v <`: rows
-  written by a NEWER extractor re-extract too — on a portable drive the app roams with the workspace, so
-  a mismatch means a deliberate rollback (where the newer extractor IS the suspected bug) or a second
-  install; serving its rows as fresh was exactly backwards. Deterministic extractors make the flip safe
-  (same version ⇒ same rows ⇒ no loop). **Accepted cost:** a workspace alternated between two app
-  versions re-extracts on EVERY switch, and each `replaceExisting` re-extract drops the persisted per-row
-  categories (the rows changed with the parser; the honest move is recomputing — the next categorize run
-  restores them). **(SKA-44, decision: demote)** the EN `transfer` categorizer rule is `confident: false`
+  lanes. **(SKA-26, decision: flip — reversed by app-update G-34 (a), owner 2026-11-23, built in
+  T2.13)** SKA-26 made extractor-version staleness `v !== CURRENT`, so rows a NEWER extractor wrote
+  re-extracted too. That is reversed: a statement or invoice re-extracts only when its stored version is
+  `NULL` or lower than this build's; an equal one is current; any other value (higher, a real, text) is a
+  newer version's reading, served as stored with a one-line note (C08) as the last line of every answer
+  that shows it, and never re-extracted, replaced or deleted by an extract or categorize path
+  (`extractorVerdict`, `skills/run.ts`; Categorize and a category question can still overwrite its
+  category labels, and a check its reconciled flags: see "App updates: …", Extractions). A deliberate
+  rollback of a bad extractor ships a higher number.
+  **Accepted cost:** a workspace a newer version read keeps that version's figures in this one, and a
+  correction kept only in the newer version's `bank_corrections` shows uncorrected under C08; a
+  re-extract from an older or `NULL` stamp still drops the persisted per-row categories (the next
+  categorize run restores them). **(SKA-44, decision: demote)** the EN `transfer` categorizer rule is `confident: false`
   like R3's `sepa`/`überweisung` — "TRANSFER TO NETFLIX…" now reaches the 15-category LLM instead of
   being pre-filtered into 'Transfer' (same rails-not-merchant semantics; the offline deterministic
   fallback still labels it Transfer). No extractor bump; the T1 snapshot is untouched (categories are not
@@ -4497,3 +4519,163 @@ reports and phase plans were working papers; their full text lives in git histor
   - `&nbsp;`, `&ensp;`, `&emsp;` and `&thinsp;` read as ordinary spaces and
     `&shy;` as nothing, as before #663; their numeric forms and the literal
     characters decode to the characters themselves.
+
+## App updates: what release 1 does with a newer version's files ([`app-updates.md`](app-updates.md) §6, §7)
+
+The first version sold on a Kit ("release 1") keeps reading a drive after a later version used it: on a
+computer that has not taken the update, and after "Go back". The in-field update wave's second phase
+(P2) built release 1's guards for that and had each one reviewed. What the reviews accepted as built is
+below, grouped by the review that found it; the design record's §6.7 and §7.9 hold the same list in
+short form, and the duties later versions keep are its §6.11 and §7.7.
+
+**Two documented residuals (owner decisions G-43 (c), G-44 (b))**
+- **A spent copy of a newer version's workspace can stay on the drive unencrypted.** When a newer
+  version crashed while locking, then "Go back" ran, release 1's unlock finds a readable copy
+  `workspace/hilbertraum.sqlite.recovery` that the newer version stamped and that is older than the
+  encrypted workspace file. It opens the workspace, leaves that copy as it is (a line in the diagnostics
+  log says so), and the newer version's next unlock removes it. Until then it is your workspace's data,
+  not encrypted. "Older" goes by file time alone, so a copy or restore tool that gave the encrypted file
+  a later time makes a fresh copy look spent (T2.9 R2-8).
+- **An interrupted AI engine update on a drive that cannot be written starts no engine.** After a swap
+  of the engine's folders was cut short, the next start finishes it by renaming folders. On a
+  write-protected drive, or while another program holds the folder at that moment, the rename is refused
+  and that session has no AI engine (an encrypted workspace cannot be opened on a write-protected drive
+  either). Make the drive writable, or close the program, then start again (`troubleshooting.md`; T8.5c
+  R1 F-6).
+
+**Files set aside when a workspace is created (T2.7's security round, owner: keep and document)**
+- On a build that allows no plaintext workspace (a Kit's commercial policy among them), creating a
+  workspace never adopts a database it finds on the drive. When there is no
+  workspace yet but `workspace/` holds a leftover `hilbertraum.sqlite` (with `-wal`, `-shm` or
+  `-journal`) or `hilbertraum.sqlite.recovery`, the create moves them aside first: the working file and
+  its companions together to `hilbertraum.sqlite.quarantine` (`-wal`, `-shm`, `-journal`), or, when one of those names
+  is taken, to the first free `hilbertraum.sqlite.quarantine-<n>` (n from 1 to 64); the `.recovery` to
+  `hilbertraum.sqlite.recovery.quarantine`, then `…recovery.quarantine-<n>`. Nothing set aside is ever
+  overwritten; with no free name the create fails and writes nothing. They may be the only copy of an
+  earlier workspace on the drive, so keep them unless you are sure you don't need them: they do no harm,
+  and nothing in the app reads, removes or vouches for them. They are **not encrypted**: copy them
+  somewhere you trust, all together (an SQLite tool opens the `.quarantine` file with its `-wal`, `-shm`
+  and `-journal` beside it); deleting them, after quitting HilbertRaum, is permanent (`troubleshooting.md`,
+  "Files named `….quarantine` in the workspace folder").
+
+**The vault guard (T2.9)**
+- A file of a newer version that cannot be read at the moment of the check (another program holds it)
+  counts as "not newer", so the start goes on; the measured cost is that an uncommitted stage of that
+  version is deleted (R1-5, R2-7).
+- The lock, the exit lock and the quit never look at the format again: the guard assumes one running app
+  per drive (R2-5).
+- The cases a start still sweeps (a newer copy beside a live `-wal`/`-shm`; one not newer than the
+  encrypted file) have no test with a newer-stamped file (R2-6); no encrypted file, journal or
+  `.recovery` a release itself wrote is a test fixture yet (R1-9; P10's history fixtures bring them).
+- A damaged only copy whose `-wal` cannot be written back blocks the start with "try again" and loses
+  nothing that could be opened (it takes three faults at once; re-check S-c).
+- A damaged plaintext copy whose bytes happen to read as a stamp above this version's is kept and refused
+  as "newer" instead of "restore from a backup"; the encrypted file is not touched (re-check N-2).
+
+**The start path (T2.15, T2.16)**
+- Every file error of an interrupted password change's recovery shows "another program is holding a
+  recovery file … try again", also where waiting cannot help (a write-protected drive, a lasting I/O
+  error) (R1 A-2).
+- A read-only drive that first refuses an `open` for writing (not a folder or rename) reads as
+  "Something stopped HilbertRaum while it was starting. …" instead of the write-protected text (R1 A-3).
+- A start that hangs instead of failing (a very long sweep, a FIFO at a fixed name on macOS or Linux) shows
+  no window and no answer (R2 A3); a failure before or after the guarded start, at the very beginning or
+  after the back end is half built, is outside the failure screen's promise (R1 A-4, A-6).
+- A password-change journal that cannot be read just now is set aside as unreadable (R2 B3); an entry
+  inside the workspace whose files are both gone is kept for good, harmless (R2 B5); an entry whose
+  `<stage>.tmp` name cannot be removed still blocks with "try again" (R1 B-6).
+- A store folder whose junction leads to a volume without a drive letter is handled as a real folder
+  (S-4 = R1 N-1).
+- Behind a workspace folder that is a link to a folder elsewhere the start runs no sweep, no stage scan and
+  no recovery, but its salvage still renames a working file there to `.recovery` (shredding an older one),
+  and its knowledge-pack transient sweep removes only the app's own `library.<n>.xml` and `meta-<n>/`
+  names there (S-2 = R2 N-1; T2.7 security note). After the right password the unlock's passes go on
+  behind it, and they replay the journal's admitted entries with no key check after a database stage in
+  doubt is settled (re-check R1 N-3 = R2 N-2).
+- Reads at the start can follow a link to a network share before any password: a linked workspace folder,
+  a directory link behind a journal entry, or a file link at a fixed name (`hilbertraum.sqlite.enc`,
+  `config/workspace.json`). It needs a drive formatted NTFS, APFS or ext4 that carries such a link (a
+  Kit's exFAT cannot) (S-3, R1 N-2, T2.7 security L-3; follow-up candidate FU-P2-2).
+
+**The last-writer stamp (T2.2)**
+- The stamp names the app version, not the build (R1-8), and a crashed session keeps the value it found
+  (R1 N1-2): it is a hint, never proof of who wrote last.
+- A failed stamp's code from an unlock that then fails, or from a retry at the exit lock or the plaintext
+  close, is logged late or never (R2 minors, re-check R2).
+
+**The AI engine install (T8.5c)**
+- A newer knowledge-pack tools copy that lacks a file this version's pin needs is a dead end: the panel
+  keeps offering the install, which answers "nothing to update", and the tools have no reinstall. The way
+  out by hand: quit HilbertRaum, delete `runtime/kiwix-tools/<os>/`, start again and install the tools
+  (R1 N-2 = S-d).
+- An engine marker that cannot be read at any start leaves that engine as it is at every start; with the
+  install folder gone there is no engine until the read works (S-b).
+- In one rare layout a marker held through a job's retries makes the job delete the only whole copy before
+  its download; a failed download then leaves no engine until a later install (R1 N-5; costs a download,
+  never data). The other limits of the install are in the record's §6.7.
+
+**Stored messages (T2.12)**
+- A stored text that is exactly a well-formed code (`hr:…`), such as a model answer, a review snapshot or a
+  chat title, shows as that catalog text or as "This text comes from a newer version of HilbertRaum…";
+  a typed title `hr:main.chat.defaultTitle` is renamed by the next message (R1 m-2 = R2 m-9, R1 m-8).
+- The search snippet, the chat export, Copy, the model's history, the evidence-pack export, the review
+  rename box and export file names carry a code as it is (X-1 to X-5, R2 m-1).
+
+**Extractions (T2.13)**
+- The run bar shows an Extract that the newer-version guard stopped as an ordinary "done" (D-10); in a
+  damaged state it says "Extracted 0 transactions." while the tools say "Read the statement first"
+  (re-check N-1).
+- A plain category question still overwrites the labels on a newer version's statement (the owner's
+  Categorize answer; R2 minors).
+
+**Knowledge packs and skills (T2.14)**
+- A known archive that was renamed while in a newer ZIM format reads "File missing" (S-3 = R1-3).
+- The add's "newer ZIM format" message shows only when the whole add failed and its first failed file was
+  such an archive (R2-4).
+- A skill row whose folder was removed long ago reads "Needs newer app" when a different newer skill later
+  lands in a folder of that name (R2-3a); an import that fails between its two refreshes shows a newly
+  marked row as "Files missing" until the next refresh (R2-3b).
+
+**F-27's list (T2.11)**
+- A file the app refuses whose name holds `.parse` is stored as `<id>.parse.enc`, which the next start's
+  sweep removes; the failed row then has no copy. Your original file is untouched (S-1; follow-up
+  candidate FU-P2-4).
+
+**Manifests and skills of a later version (T2.7's F-23/F-25 reviews)**
+- An app skill only a later version bundles stays a "Files missing" row that cannot be deleted, after a
+  "Go back" (R2 m-2).
+- The detail view describes a later version's skill by this version's rules: an unknown permission reads
+  as "cannot access the network", and any kind but `tool` as an instruction skill; only on rows this
+  version cannot run (R2 m-4, re-check R1-n1).
+- Deleting a skill row whose folder the app may not remove (a row another version wrote) says "Skill
+  deleted" with no log line, and after a check that proves nothing a readable folder comes back as a new
+  row, switched off (re-check R1-n2).
+- The skill export and the loader follow a stored row's folder name unchecked, for reads only: exporting a
+  row another program wrote reads the folder it names (re-check R1-n3; follow-up candidate FU-P2-7).
+- Until P3 builds W-70, the Home screen shows "Getting ready…" and the badge "Starting" for an active
+  model this version cannot use; pick another on the AI Model screen (R2 m-1).
+
+**The security round (T2.7)**
+- The worst case inside the lowered password-hardening limits (argon2id at 1 GiB of memory and 8 passes)
+  keeps an unlock attempt busy for about 55 s on the reviewer's computer, longer on a slower one; every
+  workspace any release made needs well under a second (re-check 1).
+- A copy of a workspace placed beside an existing one can replace it at the next unlock, its contents
+  and settings included: the app keeps a failed lock's unencrypted copy for that unlock and cannot
+  authenticate one. The replacement is visible (the whole workspace at once), and the store guard
+  limits what its rows can delete (F-3's remainder).
+- A store a user keeps behind a link of their own (`documents/` or `images/` a junction to a folder
+  elsewhere) keeps a deleted document's or image's encrypted copy: nothing behind such a link is shredded
+  (re-check 1, N-2).
+- The preview, the export and text recognition name their short-lived decrypted temp files after the
+  document's id, with a random suffix, and shred them afterwards (follow-up candidate FU-P2-8).
+- With a hand-set relative `HILBERTRAUM_DRIVE_ROOT` (the launchers always set a full path), an interrupted
+  password change waits for the unlock (S-d).
+
+**The model and engine scripts (T2.10)**
+- `fetch-runtime.sh` has two blind spots in its check that every recorded engine file is there: a gone file
+  whose name holds a comma, and one the marker records only in its top-level map when a nested map follows
+  it. It skips such a copy as installed; `fetch-runtime.ps1` fetches it again, and the app refuses the copy
+  at its start as missing. No writer writes either shape: a recorded name holds no comma, and no
+  `binaries` map is nested in a marker (round 3).
+- A pretty-printed engine marker is fetched again by the `.sh` twin with `--commercial` and kept by the
+  `.ps1` twin; no writer writes one (round 2).

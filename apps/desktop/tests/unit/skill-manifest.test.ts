@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  failedSkillNeedsNewerApp,
   formatSkillNote,
   parseSkillMarkdown,
   skillNeedsNewerApp,
@@ -609,5 +610,32 @@ describe('manifest cache round-trip (audit C2)', () => {
     expect(restored).toEqual(res.manifest)
     expect(restored.triggers.keywords).toEqual(['iban'])
     expect(restored.compatibility.minAppVersion).toBe('0.1.29')
+  })
+})
+
+// W-65 (app-update wave, T2.14; F-25's new verdict): release 1 meets user skills a newer version wrote. A SKILL.md that
+// fails this version's checks (a `kind` it does not know, a body over its cap, …) while it declares a well-formed
+// `compatibility.minAppVersion` above the running app is "made for a newer version", not a typo; the version gate's own
+// comparison decides, fail-open: an app version it cannot read, '' included, never makes that verdict.
+describe('failedSkillNeedsNewerApp (W-65)', () => {
+  const newerKind = (compatibility: Record<string, unknown> | undefined): Record<string, unknown> =>
+    rawFront({ kind: 'agent', ...(compatibility ? { compatibility } : {}) })
+  it.each<[string, string, string, boolean]>([
+    ['a new kind, minimum above the app', skillMd(newerKind({ minAppVersion: '0.2.0' })), '0.1.66', true],
+    ['a new kind, minimum equal to the app', skillMd(newerKind({ minAppVersion: '0.1.66' })), '0.1.66', false],
+    ['a new kind, minimum below the app', skillMd(newerKind({ minAppVersion: '0.1.9' })), '0.1.66', false],
+    ['a new kind, the snake_case spelling above the app', skillMd(newerKind({ min_app_version: '0.2.0' })), '0.1.66', true],
+    ['a new kind, a pre-release of the minimum (older than its own release)', skillMd(newerKind({ minAppVersion: '0.2.0' })), '0.2.0-beta.1', true],
+    ['a new kind, an app version the gate cannot read (fail-open)', skillMd(newerKind({ minAppVersion: '0.2.0' })), '', false],
+    ['a new kind, a malformed minimum', skillMd(newerKind({ minAppVersion: 'soon' })), '0.1.66', false],
+    ['a new kind, no minimum', skillMd(newerKind(undefined)), '0.1.66', false],
+    ['a known kind, an empty body, minimum above the app', skillMd(rawFront({ compatibility: { minAppVersion: '0.2.0' } }), ''), '0.1.66', true],
+    ['a frontmatter that is not YAML', '---\nid: x\ntitle: "unterminated\n---\nBody.', '0.1.66', false],
+    // A VALID skill made for a newer app is listed and kept off by the gate (`skillNeedsNewerApp`), never this verdict.
+    ['a valid skill, minimum above the app', skillMd(rawFront({ compatibility: { minAppVersion: '0.2.0' } })), '0.1.66', false]
+  ])('%s', (_name, doc, app, expected) => {
+    const res = parseSkillMarkdown(doc)
+    expect(failedSkillNeedsNewerApp(res, app)).toBe(expected)
+    if (expected) expect(res.ok).toBe(false)
   })
 })

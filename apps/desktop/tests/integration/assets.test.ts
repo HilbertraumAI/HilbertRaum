@@ -20,6 +20,7 @@ import {
   formatAssetPlan,
   runtimeBinaryName,
   readRuntimeMarker,
+  readRuntimeMarkerState,
   writeRuntimeMarker,
   runtimeInstallCurrent,
   runtimeInstallRelation,
@@ -35,7 +36,9 @@ import {
 } from '../../src/main/services/assets'
 import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import { validateRuntimeSources, type RuntimeSources } from '../../src/shared/runtime-sources'
+import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
 import { committedRuntimeSources } from '../helpers/catalog'
+import { MARKER_GOLDENS, markerBytes } from '../helpers/fetch-runtime-markers'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
 
 function tempDir(prefix: string): string {
@@ -538,6 +541,69 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     const root = tempDir('hilbertraum-marker-')
     writeFileSync(runtimeMarkerPath(root), body)
     expect(readRuntimeMarker(root)).toEqual(expected)
+  })
+
+  // App-update wave T2.10 (W-62, F-24): the golden markers, each with the verdict of every app-side reader, from the data
+  // (`MARKER_GOLDENS`); the twins' verdicts on the same bytes are script-execution.test.ts's. A vector is the marker of
+  // a real copy (its files and their bytes are in the set), so the pre-spawn check hashes what a drive would hold.
+  describe('F-24 golden install markers: what release 1 reads (T2.10, W-62)', () => {
+    const { copy, record, vectors, relations } = MARKER_GOLDENS
+    /** A copy of the set's engine (plus a vector's own `files`) with `marker` as its install marker (none, or a folder at its name): the copy's folder. */
+    const goldenCopy = (marker: Buffer | null | 'folder', files: Record<string, string> = {}): string => {
+      const dir = tempDir('hilbertraum-golden-marker-')
+      for (const [name, bytes] of Object.entries({ ...copy.files, ...files })) writeFileSync(join(dir, name), bytes)
+      if (marker === 'folder') mkdirSync(runtimeMarkerPath(dir))
+      else if (marker) writeFileSync(runtimeMarkerPath(dir), marker)
+      return dir
+    }
+    const markerOf = (v: (typeof vectors)[number]): Buffer | null | 'folder' => (v.absent ? null : v.folder ? 'folder' : markerBytes(v))
+    /** The pre-spawn verdict for the copy's program, with verification enforced as in a packaged build. */
+    const preSpawn = async (dir: string): Promise<string> => {
+      initBinaryVerification(false)
+      try {
+        return await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))
+      } finally {
+        initBinaryVerification(true)
+      }
+    }
+
+    it('the set holds every class of W-62 and its copy is the record every writer writes', () => {
+      expect(new Set(vectors.map((v) => v.class))).toEqual(new Set(['accepted', 'damaged', 'script-only refusal', 'absent']))
+      expect(record.binaries).toEqual(Object.fromEntries(Object.entries(copy.files).map(([name, bytes]) => [name, sha256(bytes)])))
+    })
+
+    it.each(vectors.map((v) => [v.name, v] as const))('%s: the shared reading and the pre-spawn check', async (_name, v) => {
+      const dir = goldenCopy(markerOf(v), v.files)
+      const state = readRuntimeMarkerState(dir)
+      expect(state.kind).toBe(v.app)
+      if (state.kind === 'marker') expect({ version: state.marker.version, backend: state.marker.backend }).toEqual({ version: v.version, backend: v.backend })
+      expect(await preSpawn(dir)).toBe(v.preSpawn)
+    })
+
+    // 10.18: the in-app stage writes its marker with writeRuntimeMarker (runtime-download.ts), so one row covers both.
+    it("writeRuntimeMarker's marker of the copy is read back as the record and passes the pre-spawn check", async () => {
+      const dir = goldenCopy(null)
+      writeRuntimeMarker(dir, { ...record, os: 'win' })
+      const state = readRuntimeMarkerState(dir)
+      expect(state).toEqual({ kind: 'marker', marker: record })
+      expect(await preSpawn(dir)).toBe('ok')
+    })
+
+    // Round 2 (the Fable QA's M-12): the version relation release 1 computes from a marker that reads, against the pin.
+    it.each(relations.map((r) => [r.name, r] as const))('the version relation: %s', (_name, r) => {
+      const root = tempDir('hilbertraum-golden-relation-')
+      const build = { os: 'win' as const, arch: copy.arch, backend: copy.backend, url: 'https://example.test/x.zip', sha256: 'a'.repeat(64), extractTo: copy.extractTo }
+      const plan = planRuntimeDownload(root, build, r.pin)
+      mkdirSync(plan.extractTo, { recursive: true })
+      for (const [name, bytes] of Object.entries(copy.files)) writeFileSync(join(plan.extractTo, name), bytes)
+      // Round 3: a row with no `marker` is the copy with no marker file, which has no version to order.
+      if (r.marker) {
+        writeRuntimeMarker(plan.extractTo, { version: r.marker.version, backend: r.marker.backend, os: 'win', arch: copy.arch })
+        expect(compareRuntimeVersions(r.marker.version, r.pin)).toBe(r.order)
+      } else expect(r.order).toBeUndefined()
+      expect(runtimeInstallRelation(plan)).toBe(r.relation)
+      expect(runtimeInstallCurrent(plan)).toBe(r.installCurrent)
+    })
   })
 
   it('runtimeInstallCurrent is false with no binary', () => {

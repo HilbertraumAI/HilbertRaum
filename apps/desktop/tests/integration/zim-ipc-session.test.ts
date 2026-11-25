@@ -1698,6 +1698,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // retry restarts over the SAME build and `library.names` STILL carries the pack: only
       // re-running `retrievablePacks` inside the callback — which resolves each pack by its
       // header UUID — can notice that it is no longer retrievable.
+      // W-71 (T2.14 fix round 1): a restart resolves the packs again and reuses the build only
+      // while they are the same files, so the file goes AFTER that resolve: while the restarted
+      // child is being started (its port lookup), with the build already reused.
       {
         const delta = await h.registerPack('delta.zim')
         expect((await h.svc.ensureServer(h.db()))!.names.has(delta)).toBe(true)
@@ -1711,7 +1714,11 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           new AbortController().signal
         )
         await rawGate.entered
-        rmSync(join(h.zimDir, 'delta.zim')) // no revision bump: the published build stands
+        h.hooks.findPort = async () => {
+          h.hooks.findPort = async () => h.httpPort
+          rmSync(join(h.zimDir, 'delta.zim')) // no revision bump: the published build stands
+          return h.httpPort
+        }
         liveChild().emit('exit', 0, null) // …but the child dies, so the attempt is discarded
         h.hooks.beforeRespond = async () => undefined
         rawGate.release()
@@ -2066,6 +2073,32 @@ describe('packs:add failure reason codes (#715)', () => {
       ctx.zim = h.newService(undefined, { resolveTools: () => null })
       expect(await add([h.addPackFile('no-tools.zim')])).toMatchObject({ outcome: 'failure', failureReason: 'tools-missing' })
       ctx.zim = h.svc
+    } finally {
+      await h.close()
+    }
+  })
+
+  // W-71 (T2.14): an archive in a ZIM format newer than the tools read is refused at the header, before any manager
+  // runs, with its own reason (the panel shows C05), never `not-a-zim` or `manager`; a readable file beside it is added.
+  it('names newer-format for an archive in a newer ZIM format, and never runs kiwix-manage on it (W-71)', async () => {
+    const h = await sessionHarness()
+    const add = async (paths: string[]): Promise<KnowledgePackAddResult> => {
+      dialogState.paths = paths
+      dialogState.canceled = false
+      return (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    }
+    try {
+      h.hooks.manage = async () => undefined
+      const newer = writeZimFixture(join(h.zimDir, 'from-the-future.zim'), packUuid('0000cc03', 'future'), {
+        major: 7,
+        trailing: 'body of from-the-future.zim'
+      })
+      expect(await add([newer])).toEqual({ outcome: 'failure', added: [], failed: 1, failureReason: 'newer-format' })
+      expect(h.metaAdds).toEqual([])
+      const mixed = await add([newer, h.addPackFile('today.zim')])
+      expect(mixed).toMatchObject({ outcome: 'partial', failed: 1, failureReason: 'newer-format' })
+      expect(mixed.added.map((p) => p.leaf)).toEqual(['today.zim'])
+      expect(h.metaAdds.some((p) => p.includes('from-the-future'))).toBe(false)
     } finally {
       await h.close()
     }

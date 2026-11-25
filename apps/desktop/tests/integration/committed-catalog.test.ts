@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import {
   buildModelList,
   estimateGraphicsNeedMib,
@@ -23,7 +24,7 @@ import { committedManifests, committedRuntimeSources } from '../helpers/catalog'
 import { docTableRows } from '../helpers/doc-tables'
 import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { validManifest } from '../helpers/manifest-fixtures'
-import { modelManifestDocs } from '../helpers/repo-files'
+import { DESKTOP_ROOT, modelManifestDocs } from '../helpers/repo-files'
 
 // The COMMITTED model-manifests/ tree is what a real drive is provisioned from. These tests
 // assert invariants directly against the on-disk catalog (mirrors the committed
@@ -126,6 +127,49 @@ function flatField(text: string, key: string): string {
   return ''
 }
 
+/**
+ * The scripts' read of the two keys their skip rule needs (W-62 (b), app-update wave T2.10): the first line that starts
+ * with the key at column 0, so a key nested in a block never answers; a quoted value unwrapped, an unquoted one cut at
+ * ` #`; a YAML null (`~`, `null`) reads as no value.
+ */
+function topField(text: string, key: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const hit = new RegExp(`^${key}[ \\t]*:(.*)$`).exec(line)
+    if (!hit) continue
+    const raw = hit[1].trim()
+    const quoted = /^(["'])(.*?)\1/.exec(raw)
+    if (quoted) return quoted[2].trim()
+    const value = raw.replace(/\s+#.*$/, '').trim()
+    return ['~', 'null', 'Null', 'NULL'].includes(value) ? '' : value
+  }
+  return ''
+}
+
+/** The keys whose flat read (`flatField`, `topField`) differs from the YAML parser's value: what would poison the scripts. */
+function flatReadDisagreements(text: string, doc: Record<string, unknown>): string[] {
+  const download = (doc.download ?? {}) as Record<string, unknown>
+  const review = (doc.license_review ?? {}) as Record<string, unknown>
+  const parsed: Record<string, unknown> = {
+    id: doc.id,
+    local_path: doc.local_path,
+    sha256: doc.sha256,
+    runtime: doc.runtime,
+    format: doc.format,
+    url: download.url,
+    size_bytes: download.size_bytes,
+    license: doc.license,
+    license_url: download.license_url,
+    status: review.status,
+    withdrawn: download.withdrawn,
+    bundled_on_preconfigured_drive: doc.bundled_on_preconfigured_drive
+  }
+  const top: Record<string, unknown> = { role: doc.role, min_app_version: doc.min_app_version }
+  return [
+    ...Object.entries(parsed).filter(([key, value]) => flatField(text, key) !== String(value ?? '')),
+    ...Object.entries(top).filter(([key, value]) => topField(text, key) !== String(value ?? ''))
+  ].map(([key]) => key)
+}
+
 describe('committed catalog — rules over every manifest', () => {
   it('a placeholder hash marks a local-test stub: no download block, rank 0, no legacy profile', () => {
     const stubs = committedManifests().filter((m) => !isRealSha256(m.sha256))
@@ -191,26 +235,20 @@ describe('committed catalog — rules over every manifest', () => {
   // because they must run with no Node. A nested local_path / sha256 placed above the top-level one would poison them, and a
   // " #" in a value would truncate it. Since #767 fetch-models reads url, size_bytes and license_url from the top-level
   // `download:` block instead (a projector's size reached the primary); the flat read of those three still agrees here.
+  // App-update wave T2.10 (W-62 (b)): every top-level key the four scripts read, runtime and format (verify-models) and the
+  // skip rule's role and min_app_version (read at column 0) included. Release 1's scripts read every later manifest so.
   it('the flat first-match parser of the scripts reads what the YAML parser reads, on every committed manifest (#310 key order)', () => {
     for (const { path, text, doc } of modelManifestDocs()) {
-      const download = (doc.download ?? {}) as Record<string, unknown>
-      const review = doc.license_review as Record<string, unknown>
-      const parsed: Record<string, unknown> = {
-        id: doc.id,
-        local_path: doc.local_path,
-        sha256: doc.sha256,
-        url: download.url,
-        size_bytes: download.size_bytes,
-        license: doc.license,
-        license_url: download.license_url,
-        status: review.status,
-        withdrawn: download.withdrawn,
-        bundled_on_preconfigured_drive: doc.bundled_on_preconfigured_drive
-      }
-      for (const [key, value] of Object.entries(parsed)) {
-        expect(flatField(text, key), `${path}: ${key}`).toBe(String(value ?? ''))
-      }
+      expect(flatReadDisagreements(text, doc), path).toEqual([])
     }
+  })
+
+  // T2.10 (round 2 added the second probe, every flat key nested first): the keys each golden makes the scripts misread.
+  const F23_SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f23-manifests')
+  const { flatRead } = JSON.parse(readFileSync(join(F23_SET, 'verdicts.json'), 'utf8')) as { flatRead: Array<{ file: string; disagree: string[] }> }
+  it.each(flatRead.map((p) => [p.file, p] as const))('the same comparison fails on the golden manifest %s, on exactly its nested keys (T2.10)', (_file, probe) => {
+    const text = readFileSync(join(F23_SET, ...probe.file.split('/')), 'utf8')
+    expect(flatReadDisagreements(text, parseYaml(text) as Record<string, unknown>)).toEqual(probe.disagree)
   })
 })
 

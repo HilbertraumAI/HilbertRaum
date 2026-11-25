@@ -5,7 +5,6 @@ import {
   renameSync,
   existsSync,
   readFileSync,
-  openSync,
   writeSync,
   fsyncSync,
   closeSync,
@@ -13,7 +12,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { encrypt, decrypt, serializeBlob, deserializeBlob, isVaultNewerError } from './security/crypto'
-import { ROTATED_ENCRYPTED_LOG_NAME, newerFrameAt, shredFile } from './workspace-vault'
+import { ROTATED_ENCRYPTED_LOG_NAME, newerFrameAt, openWriteTemp, shredFile } from './workspace-vault'
 import { logRedactionRoots, redactLogText } from './log-redact'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
@@ -126,10 +125,12 @@ function pushToBuffer(line: string): void {
   buffer = trimToByteCap(buffer, BUFFER_MAX_BYTES)
 }
 
-/** Write `blob` to `path` atomically: temp file + fsync + rename. */
+/** Write `blob` to `path` atomically: temp file + fsync + rename. T2.7 security fix round (F-2): the temp
+ *  (`app.log.enc.tmp`, `app.1.log.enc.tmp`) is opened by the vault's `openWriteTemp`, never through a link at its name:
+ *  'w' truncated and overwrote the file a hard or symbolic link there reaches. */
 function writeFileAtomicSync(path: string, blob: Buffer): void {
   const tmp = `${path}.tmp`
-  const fd = openSync(tmp, 'w')
+  const fd = openWriteTemp(tmp)
   try {
     writeSync(fd, blob)
     fsyncSync(fd)

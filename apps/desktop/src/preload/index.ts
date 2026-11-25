@@ -834,7 +834,8 @@ const api = {
   /** Acknowledge a user skill's import warning (DS7). */
   acknowledgeSkillWarning: (installId: string): Promise<SkillInfo> =>
     ipcRenderer.invoke(IPC.acknowledgeSkillWarning, installId),
-  /** Counts + fixed reason codes of skill folders the last reconcile could not read (SKA-32). */
+  /** Counts + fixed reason codes of skill folders the last reconcile could not read (SKA-32), and (W-65) the count of
+   *  folders made for a newer version. */
   getSkillReconcileStatus: (): Promise<SkillReconcileStatus> =>
     ipcRenderer.invoke(IPC.skillReconcileStatus),
 

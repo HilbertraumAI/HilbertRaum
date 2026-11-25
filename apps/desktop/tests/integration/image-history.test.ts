@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 
 // Image-analysis history storage (image-understanding history). Mirrors the documents
 // encrypted-copy contract: the image rests ENCRYPTED on disk when a cipher is supplied (no
@@ -19,6 +19,7 @@ import {
   listImageSessions
 } from '../../src/main/services/vision/history'
 import { testCipher } from '../helpers/test-cipher'
+import { FOLDER_LINKS, unlinkFolder } from '../helpers/folder-links'
 
 // A recognizable image-byte pattern no real PNG header would contain — lets us assert the
 // ENCRYPTED copy never leaks the plaintext bytes to disk.
@@ -137,6 +138,52 @@ describe('image history — delete', () => {
     expect(await getImageSession(db, dir, id, cipher)).toBeNull()
   })
 
+  // T2.7 security fix round (F-3, FU-P2-6): the delete shredded `images/<stored_name>` with no check, so a row whose
+  // `stored_name` holds `..` (a later version's, or one in a database the app did not make) had a file outside the store
+  // shredded. Now only a bare name inside the store folder is shredded; the row goes, and a file elsewhere stays.
+  it('a row whose stored_name leads out of the store: the row goes, the file it names stays (F-3)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    const id = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, testCipher())
+    const victim = join(workspacePath, 'victim.png')
+    writeFileSync(victim, 'USER FILE: a photo')
+    db.prepare('UPDATE image_sessions SET stored_name = ? WHERE id = ?').run(`..${sep}victim.png`, id)
+
+    await deleteImageSession(db, dir, id)
+
+    expect(listImageSessions(db)).toHaveLength(0)
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: a photo')
+  })
+
+  // T2.7 security re-check 1 (N-2): with `images/` itself a link to a folder elsewhere, every bare name there passed the
+  // guard above (the store was compared with itself). Containment is judged from the workspace folder now, as the start's
+  // sweep judges a store (T2.9 R2-3): behind a linked images folder neither a delete nor a clear shreds anything. The
+  // cost, recorded: an images folder a user keeps behind a link of their own keeps a deleted image's encrypted copy.
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the images folder ${label} to a folder elsewhere: a delete and a clear shred nothing behind it, the rows go (N-2)`, async () => {
+      const { db, workspacePath } = freshWorkspace()
+      const elsewhere = mkdtempSync(join(tmpdir(), 'hilbertraum-imghist-elsewhere-'))
+      const dir = join(workspacePath, 'images')
+      make(elsewhere, dir)
+      try {
+        const cipher = testCipher()
+        const a = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, cipher)
+        await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, cipher)
+        const before = Object.fromEntries(readdirSync(elsewhere).map((n) => [n, readFileSync(join(elsewhere, n)).toString('base64')]))
+        expect(Object.keys(before)).toHaveLength(2)
+
+        await deleteImageSession(db, dir, a)
+        expect(await clearImageSessions(db, dir)).toBe(1)
+
+        expect(listImageSessions(db)).toHaveLength(0)
+        const after = Object.fromEntries(readdirSync(elsewhere).map((n) => [n, readFileSync(join(elsewhere, n)).toString('base64')]))
+        expect(after).toEqual(before)
+      } finally {
+        unlinkFolder(dir)
+      }
+    })
+  }
+
   it('REL-5: a failed row delete leaves the image intact — no undeletable ghost session', async () => {
     // The fix deletes the ROW first, then shreds. Inject a failure on the row delete and assert the
     // file was NOT already shredded (the pre-fix shred-then-delete order would leave a row whose
@@ -199,6 +246,25 @@ describe('image history — clear all (#122)', () => {
     const turns = db.prepare('SELECT COUNT(*) AS n FROM image_turns').get() as { n: number }
     expect(turns.n).toBe(0) // cascade, both sessions
     expect(readdirSync(dir)).toHaveLength(0) // every stored image shredded + unlinked
+  })
+
+  // T2.7 security fix round (F-3): as the single delete above, for every row of the sweep.
+  it('a row whose stored_name leads out of the store: the sweep removes every row and its own images, and leaves that file (F-3)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const dir = imagesDir(workspacePath)
+    const cipher = testCipher()
+    const a = await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'a.png' }, cipher)
+    await createImageSession(db, dir, { imageBytes: SENTINEL, mimeType: 'image/png', name: 'b.png' }, cipher)
+    const victim = join(workspacePath, 'victim.png')
+    writeFileSync(victim, 'USER FILE: a photo')
+    const aStored = (db.prepare('SELECT stored_name FROM image_sessions WHERE id = ?').get(a) as { stored_name: string }).stored_name
+    db.prepare('UPDATE image_sessions SET stored_name = ? WHERE id = ?').run(`..${sep}victim.png`, a)
+
+    expect(await clearImageSessions(db, dir)).toBe(2)
+
+    expect(listImageSessions(db)).toHaveLength(0)
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: a photo')
+    expect(readdirSync(dir)).toEqual([aStored]) // b's image shredded; a's own file is no longer named by any row
   })
 
   it('an empty history is a clean no-op returning 0', async () => {

@@ -1,0 +1,27 @@
+llama_cpp:
+  version: b9585
+  builds:
+    - os: win
+      arch: x64
+      backend: vulkan
+      url: https://example.invalid/llama-b9585-win-x64-vulkan.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://example.invalid/llama-b9585-win-x64-cpu.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win/cpu
+kiwix_tools:
+  version: '3.8.1'
+  optional: true
+  executables: [kiwix-serve.exe]
+  builds:
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://example.invalid/kiwix-tools_win-x86_64-3.8.1.zip
+      sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      extract_to: runtime/kiwix-tools/win
+      runtime_files: [icudt74.dll, icuuc74.dll]

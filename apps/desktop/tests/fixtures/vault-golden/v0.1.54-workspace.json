@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "mode": "encrypted",
+  "kdf": {
+    "algo": "argon2id",
+    "m": 19456,
+    "t": 2,
+    "p": 1,
+    "keyLen": 32
+  },
+  "saltB64": "WwJz4pXIKIkEMsZc3HqV2w==",
+  "verifier": {
+    "ivB64": "nL1Gnbyep3cQTLA4",
+    "tagB64": "Q/b/sVlk6rM/fqgTovuBgw==",
+    "ciphertextB64": "ieku0afJURVedviAEMP9j34WY7E0dYm7+k+lvSU="
+  },
+  "dataKey": {
+    "ivB64": "gEktdie3MfNWrpN/",
+    "tagB64": "fFsZN/EPuZSdmmAEateN9A==",
+    "ciphertextB64": "2usp2JOVLu3hGFH3/AddmkdK3bqX8+U0i0TknZ4W+HI="
+  }
+}

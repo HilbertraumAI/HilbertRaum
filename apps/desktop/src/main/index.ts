@@ -25,6 +25,7 @@ import {
   devToolsAllowed,
   disableSpellCheckerDownloads
 } from './window-security'
+import { setStampAppVersion } from './services/db'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
 import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
@@ -35,7 +36,7 @@ import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from 
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
-import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
+import { logStampFailures, registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { endWorkOnModelStop } from './ipc/model-stop'
@@ -129,6 +130,10 @@ import type { AppContext } from './services/context'
 // The first statement, at module scope: every child started later (the sidecars) inherits the filter, and nothing
 // secret exists yet. Every other platform: a no-op. Logging does not exist yet, so `initBackend` reports a refusal.
 const coreDumpLimit = limitCoreDumps({ platform: process.platform, writeFile: writeFileSync })
+
+// App-update T2.2 (F-10): every database open stamps `last_writer` with this app's version, so it is set here, before
+// anything can open one (the plaintext workspace opens inside `workspace.init()`). Until it is set an open writes none.
+setStampAppVersion(app.getVersion())
 
 // The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
 // from import.meta.url (the fileURLToPath idiom already used across the test suite).
@@ -323,6 +328,20 @@ function initBackend(): void {
       { refused: journalRefusals }
     )
   }
+  // T2.16 (R2 B2): the workspace folder, the logs folder or (T2.7 security L-2) the config folder is a link to a folder
+  // elsewhere, so the start skipped its clean-up there: no sweep or rekey recovery behind the first, no removal of the
+  // rotated log behind the second, no write or removal of the #875 marker behind the third. Two steps still run behind a
+  // linked workspace folder (T2.15 R2 N-1, T2.7 security note): the salvage (it can rename a working file to
+  // `.recovery`, shredding an older one) and the ZIM transient sweep above (it removes only the app's own
+  // `library.<n>.xml` and `meta-<n>/` names).
+  // The folder kinds only (`workspace`, `logs`, `config`), never a path.
+  const linkedFolders = workspace.linkedStartFolders()
+  if (linkedFolders.length > 0) {
+    log.warn('Workspace start: a folder is a link to a folder elsewhere; the start skipped its clean-up steps there', {
+      folders: [...linkedFolders]
+    })
+  }
+  logStampFailures(workspace) // T2.2: the plaintext open's `last_writer` stamp, when it could not be written (codes only)
   if (workspace.discardedOnlyCopy()) {
     // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept
     // it. Content-free, no path; no marker and no audit type. The unlock then answers `vault_missing`.
@@ -330,15 +349,15 @@ function initBackend(): void {
   }
   if (workspace.isNewerWorkspace()) {
     // #247: the plaintext database on disk was written by a newer build — left closed and
-    // untouched; the gate reports `workspace_newer` (update the app).
-    log.warn('Workspace not opened: its database was written by a newer build (update the app)')
+    // untouched; the gate reports `workspace_newer` (the newer version opens it).
+    log.warn('Workspace not opened: its database was last written by a newer version')
   }
   const newerVaultFormat = workspace.newerVaultFormat()
   if (newerVaultFormat) {
     // #845: a vault artifact (descriptor, KDF, `.enc` frame, rekey journal) is in a newer build's
     // format — startup wrote nothing (no salvage, sweep or rekey recovery); every unlock reports
     // `workspace_newer`. Buffered like every pre-unlock line: this build never unlocks this vault.
-    log.warn('Workspace not opened: its vault format was written by a newer build (update the app)', newerVaultFormat)
+    log.warn('Workspace not opened: its vault format was written by a newer version', newerVaultFormat)
   }
 
   // Settings are readable right away on a plaintext workspace — resolve the UI language
@@ -917,21 +936,28 @@ function initBackend(): void {
   // after unlock reconciles instead.
   try {
     const result = skills.reconcile()
+    // App-update W-65 (T2.14 S-2): the folders made for a newer version are counted apart from the unreadable ones, as
+    // the Skills tab counts them (the status this reconcile just refreshed): they are no fault of the user's files.
+    const status = skills.reconcileStatus()
     log.info('Skill registry reconciled', {
       present: result.present,
       inserted: result.inserted,
       updated: result.updated,
       markedUnavailable: result.markedUnavailable,
-      errorCount: result.errors.length
+      errorCount: status.errorCount,
+      needsNewerAppCount: status.needsNewerAppCount ?? 0
     })
     // SKA-32 (skills audit 2026-07-03, U7): discovery errors used to be silently dropped here.
     // COUNT + structural reason codes ONLY — never the human-readable lines, which can carry a
     // (validated) folder path, and never arbitrary folder names/content (§22-M1).
-    if (result.errors.length > 0) {
+    if (status.errorCount > 0) {
       log.warn('Some skill folders could not be read', {
-        count: result.errors.length,
-        codes: [...new Set(result.errorCodes)]
+        count: status.errorCount,
+        codes: [...status.errorCodes]
       })
+    }
+    if (status.needsNewerAppCount !== undefined) {
+      log.warn('Some skill folders were made for a newer version of HilbertRaum', { count: status.needsNewerAppCount })
     }
   } catch {
     /* workspace locked — reconcile deferred to a post-unlock pass in a later phase */
@@ -943,7 +969,8 @@ function initBackend(): void {
   registerCoreIpc(ctx)
   // #1002: a successful unlock tells the quit closure, which leaves the state a session-end lock left behind when the
   // app ran on (`shutdown.ts`).
-  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked })
+  // App-update T2.6: the version fills the newer-workspace copy and rides on the states the gate is shown.
+  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked, appVersion: app.getVersion() })
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)

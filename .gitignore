@@ -13,7 +13,10 @@ System Volume Information/
 # Build output
 dist/
 out/
-release/
+# electron-builder's output (electron-builder.yml `output: release`), and a repo-root one. Anchored (W-81): a bare
+# `release/` also ignored scripts/release/ and any fixture folder named release/ (repo-hygiene.test.ts, W-81 row).
+/apps/desktop/release/
+/release/
 *.tsbuildinfo
 
 # Test coverage output (npm run test:coverage) — generated, never committed

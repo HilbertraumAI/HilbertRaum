@@ -7,28 +7,35 @@ import type { ReactNode } from 'react'
 import type { BadgeTone } from '../../components'
 import type { DocTaskKind, DocumentInfo, IngestionStatus } from '@shared/types'
 import { provenanceView } from '@shared/types'
-import { en, t as tCatalog, type MessageKey, type UiLanguage } from '@shared/i18n'
+import { t as tCatalog, type MessageKey, type UiLanguage } from '@shared/i18n'
 import { fmtDiskSize } from '@shared/format'
 import type { I18n } from '../../i18n'
-import { unsupportedTypeExt } from '../../lib/displayMap'
+import { displayMapKey, unsupportedTypeExt } from '../../lib/displayMap'
+
+/** The stored failures a re-index would repeat (besides an unsupported type, matched with its legacy wording). #572:
+ *  a detected scan re-fails identically until OCR runs (never automatic for a PDF); its remedy is Make searchable
+ *  (OCR), and main reads the same key to set `scanDetected`. */
+const INTRINSIC_FAILURES: ReadonlySet<MessageKey> = new Set<MessageKey>([
+  'main.ingest.fileTooLarge',
+  'main.ingest.tooManyChunks',
+  'main.ingest.pdfScanDetected'
+])
 
 /**
  * A failed import is RETRYABLE when re-indexing could plausibly succeed (a transient read /
  * parse error, an interrupted run). It is NOT retryable when the cause is intrinsic to the
  * file — an unsupported type, or a file too large / too many sections to index — where a
- * re-index would just fail the same way. Matched against the persist-canonical English in
- * `documents.error_message` (the value the D-L4 display map localizes), so the offered action
- * stays honest.
+ * re-index would just fail the same way. Read by the key of the persist-canonical message in
+ * `documents.error_message` (its English, an alias, or a newer version's code: F-26), so the
+ * offered action stays honest. A code this version cannot read is offered: a re-index here
+ * stores a message this version can show.
  */
 export function isRetryableFailure(errorMessage: string | null | undefined): boolean {
   const msg = errorMessage ?? ''
   if (!msg) return true // unknown cause → let the user try again
   if (unsupportedTypeExt(msg) != null) return false
-  if (msg === en['main.ingest.fileTooLarge'] || msg === en['main.ingest.tooManyChunks']) return false
-  // #572: a detected scan re-fails identically until OCR runs (never automatic for a PDF); its
-  // remedy is Make searchable (OCR). The same equality main uses to set `scanDetected`.
-  if (msg === en['main.ingest.pdfScanDetected']) return false
-  return true
+  const key = displayMapKey(msg)
+  return key === null || !INTRINSIC_FAILURES.has(key)
 }
 
 // Status pills: icon + word, never color-only (guidelines §6). Labels speak

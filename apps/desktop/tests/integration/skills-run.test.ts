@@ -12,12 +12,15 @@ import {
   runCashflowSummary,
   runCsvExport,
   isBankStatementStale,
+  isBankExtractionNewer,
   latestBankStatementId,
   reconcileStuckSkillRuns,
   domainPersistFailure,
   type LoadedTransaction
 } from '../../src/main/services/skills/run'
 import { activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
+import { isInvoiceExtractionNewer, isInvoiceStale, runInvoiceExtraction } from '../../src/main/services/skills/invoice-run'
+import { INVOICE_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/invoice'
 import {
   BANK_EXTRACTOR_VERSION,
   reconcileBalances,
@@ -116,9 +119,9 @@ describe('runBankExtraction (S11a)', () => {
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
   })
 
-  it('isBankStatementStale: an older or newer extractor version is stale; the current one is fresh', async () => {
-    // A fresh extraction is stamped at the current version → never stale; every other version (older,
-    // pre-versioning NULL, or newer) must re-extract via the A9 path.
+  it('isBankStatementStale: a lower or NULL extractor version is stale; the current and a newer one are not (G-34 (a))', async () => {
+    // A fresh extraction is stamped at the current version → never stale; an older version or the
+    // pre-versioning NULL must re-extract via the A9 path. A NEWER version's rows are served as stored.
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
@@ -129,12 +132,12 @@ describe('runBankExtraction (S11a)', () => {
     expect(isBankStatementStale(db, id)).toBe(true) // produced by the pre-R2 parser → re-extract
     db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(id)
     expect(isBankStatementStale(db, id)).toBe(true) // legacy / pre-versioning → re-extract
-    // SKA-26 (R9): the DOWNGRADE half — rows a NEWER extractor wrote are stale to this (older) code
-    // too. On a rollback the newer extractor IS the suspected bug, so serving its rows as fresh would
-    // be exactly backwards; `!==` (not `<`) makes the mismatch symmetric. Deterministic extractors
-    // make this safe (same version ⇒ same rows ⇒ no re-extract loop).
+    // G-34 (a) (frozen, owner 2026-11-23; reverses SKA-26's downgrade half): rows a NEWER extractor wrote
+    // are NOT stale to this (older) code. After "Go back" this build must never replace or delete what
+    // the newer version read (nor the corrections hanging off it); it serves those rows as stored.
     db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?').run(BANK_EXTRACTOR_VERSION + 1, id)
-    expect(isBankStatementStale(db, id)).toBe(true) // written by a newer app → re-extract after rollback
+    expect(isBankStatementStale(db, id)).toBe(false) // written by a newer app → served, never re-extracted
+    expect(isBankExtractionNewer(db, docId)).toBe(true)
   })
 
   it('runs end-to-end: persists statement + transactions and marks the run done', async () => {
@@ -818,6 +821,230 @@ describe('R3 — downstream runs re-extract a STALE statement before serving row
     expect(isBankStatementStale(db, staleId)).toBe(true)
     const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
     expect(count).toBe(1) // no duplicate spawned
+  })
+})
+
+// G-34 (a) (frozen, owner 2026-11-23): this build is the oldest one that will ever read a workspace. After a
+// user goes back from a newer version it must never replace or delete the statements and invoices that
+// version read, nor anything hanging off them (the corrections). It re-extracts only NULL or a lower
+// version; a newer version's rows are served as stored.
+describe('G-34 (a) — the extractor-version verdict, both tables: NULL or lower re-extracts, equal is current, anything else is newer', () => {
+  // The stamp shapes a stored row can carry. The INTEGER-affinity column turns the texts 'N' and
+  // 'N.0' into the integer N; N.5 stays a real, 'abc' and 'Na' stay text, a blob stays a blob, and an
+  // integer past 2^53 makes `node:sqlite` throw when it is read into JS. This build and every earlier one
+  // write a small positive integer or NULL, so an odd shape is a later writer's (or damage): it deletes nothing.
+  type Verdict = 'reextract' | 'current' | 'newer'
+  const stamps = (own: number): Array<{ stamp: string; value: null | number | bigint | string | Uint8Array; verdict: Verdict }> => [
+    { stamp: 'NULL', value: null, verdict: 'reextract' },
+    { stamp: 'own', value: own, verdict: 'current' },
+    { stamp: 'own + 1', value: own + 1, verdict: 'newer' },
+    { stamp: "text 'own + 1'", value: String(own + 1), verdict: 'newer' },
+    { stamp: "text 'own + 1.0'", value: `${own + 1}.0`, verdict: 'newer' },
+    { stamp: 'real own + 1.5', value: own + 1.5, verdict: 'newer' },
+    { stamp: 'real own - 0.5', value: own - 0.5, verdict: 'newer' }, // a real is never compared as a number
+    { stamp: "text 'abc'", value: 'abc', verdict: 'newer' },
+    { stamp: "text 'own + 1' followed by 'a'", value: `${own + 1}a`, verdict: 'newer' },
+    { stamp: '-1', value: -1, verdict: 'reextract' },
+    { stamp: '0', value: 0, verdict: 'reextract' },
+    { stamp: 'a blob', value: new Uint8Array([1, 2]), verdict: 'newer' },
+    { stamp: '2^63 - 1', value: 9223372036854775807n, verdict: 'newer' }
+  ]
+  const DOMAINS = [
+    {
+      table: 'bank_statements',
+      own: BANK_EXTRACTOR_VERSION,
+      text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00',
+      extract: async (db: Db, documentId: string): Promise<string> =>
+        (await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId }, { audit: () => {} })).statementId!,
+      isStale: isBankStatementStale,
+      isNewer: isBankExtractionNewer
+    },
+    {
+      table: 'invoices',
+      own: INVOICE_EXTRACTOR_VERSION,
+      text: 'Invoice\nVendor: ACME Supplies GmbH\nCurrency EUR\nWidget A 2 12,50 25,00\nGross Total 25,00',
+      extract: async (db: Db, documentId: string): Promise<string> =>
+        (await runInvoiceExtraction(db, { skillInstallId: 'app:invoice', documentId }, { audit: () => {} })).invoiceId!,
+      isStale: isInvoiceStale,
+      isNewer: isInvoiceExtractionNewer
+    }
+  ]
+
+  it.each(DOMAINS.flatMap((d) => stamps(d.own).map((s) => ({ ...d, ...s }))))(
+    '$table, stamp $stamp → $verdict',
+    async ({ table, text, extract, isStale, isNewer, value, verdict }) => {
+      const db = freshDb()
+      const docId = seedDocWithChunks(db, [{ text, page: 1 }])
+      const id = await extract(db, docId)
+      db.prepare(`UPDATE ${table} SET extractor_version = ? WHERE id = ?`).run(value, id)
+      // The two public answers carry the three-way verdict: re-extract? / is the stored extraction newer?
+      expect(isStale(db, id)).toBe(verdict === 'reextract')
+      expect(isNewer(db, docId)).toBe(verdict === 'newer')
+    }
+  )
+})
+
+describe('G-34 (a) — no bank extraction ever runs over a newer version’s statement', () => {
+  const TEXT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+  const SEGMENTS: DocumentChunkRead[] = [{ text: TEXT, page: 1, index: 0 }]
+  const ARGS = (documentId: string): { skillInstallId: string; documentId: string } => ({
+    skillInstallId: 'app:bank-statement',
+    documentId
+  })
+
+  /** Every stored bank row of one document, all columns, for a byte-identical before/after. */
+  function bankRowsOf(db: Db, docId: string): Record<string, unknown[]> {
+    return {
+      statements: db.prepare('SELECT * FROM bank_statements WHERE document_id = ? ORDER BY id').all(docId),
+      transactions: db
+        .prepare(
+          `SELECT t.* FROM bank_transactions t JOIN bank_statements s ON s.id = t.statement_id
+           WHERE s.document_id = ? ORDER BY t.id`
+        )
+        .all(docId),
+      corrections: db
+        .prepare(
+          `SELECT c.* FROM bank_corrections c JOIN bank_transactions t ON t.id = c.transaction_id
+           JOIN bank_statements s ON s.id = t.statement_id WHERE s.document_id = ? ORDER BY c.id`
+        )
+        .all(docId)
+    }
+  }
+
+  async function extractAt(db: Db, docId: string, at: string): Promise<string> {
+    const res = await runBankExtraction(db, ARGS(docId), { audit: () => {}, now: () => at })
+    expect(res.transactionCount).toBe(2)
+    return res.statementId!
+  }
+
+  /** What a newer version leaves: its own stamp, a figure it read differently (so a re-extract would show)
+   *  and a user's correction on that row. */
+  function markReadByNewerVersion(db: Db, statementId: string): void {
+    db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?').run(BANK_EXTRACTOR_VERSION + 1, statementId)
+    db.prepare('UPDATE bank_transactions SET amount = -49.9 WHERE statement_id = ? AND row_index = 0').run(statementId)
+    const tx = db.prepare('SELECT id FROM bank_transactions WHERE statement_id = ? AND row_index = 0').get(statementId) as { id: string }
+    db.prepare(
+      `INSERT INTO bank_corrections (id, transaction_id, field, old_value, new_value, created_at)
+       VALUES (?, ?, 'amount', '-45.9', '-49.9', '2026-02-01T00:00:00.000Z')`
+    ).run(randomUUID(), tx.id)
+  }
+
+  const countTx = (db: Db, statementId: string): number =>
+    (db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(statementId) as { n: number }).n
+
+  // The engine's guard (D-5) is asked per DOCUMENT, the key the replace delete uses: a newer statement that
+  // is not the latest is protected too, and the additive path cannot put an own-version row in front of it.
+  it.each([
+    { name: 'the newer statement is the latest, replace', notLatest: false, replaceExisting: true },
+    { name: 'the newer statement is the latest, additive', notLatest: false, replaceExisting: false },
+    { name: 'a lower-version statement is the latest, replace', notLatest: true, replaceExisting: true },
+    { name: 'a lower-version statement is the latest, additive', notLatest: true, replaceExisting: false }
+  ])('$name: nothing is read, deleted or inserted, and the run ends done on the stored rows', async ({ notLatest, replaceExisting }) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: TEXT, page: 1 }])
+    const newer = await extractAt(db, docId, '2026-01-01T00:00:00.000Z')
+    const lower = notLatest ? await extractAt(db, docId, '2026-01-02T00:00:00.000Z') : null
+    markReadByNewerVersion(db, newer)
+    if (lower) db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(lower)
+    const latest = lower ?? newer
+    expect(latestBankStatementId(db, docId)).toBe(latest)
+    const before = bankRowsOf(db, docId)
+
+    let reads = 0
+    const res = await runBankExtraction(db, ARGS(docId), {
+      audit: () => {},
+      readDocumentSegments: async () => {
+        reads++
+        return SEGMENTS
+      },
+      replaceExisting
+    })
+
+    expect(res).toMatchObject({ ok: true, statementId: latest, transactionCount: countTx(db, latest) })
+    expect(reads).toBe(0) // the extractor never ran
+    expect(bankRowsOf(db, docId)).toEqual(before) // every statement, transaction and correction as stored
+    const run = db.prepare('SELECT status, result_ref AS ref, error FROM skill_runs WHERE id = ?').get(res.runId)
+    expect(run).toEqual({ status: 'done', ref: latest, error: null })
+  })
+
+  // The guard needs no usable latest id (T2.13 review R2 m-1): a newer statement whose id is '' or NULL (an
+  // `id TEXT PRIMARY KEY` takes both; damage only) still stops the run, which ends done with no result ref
+  // and a count of 0, and deletes nothing.
+  it.each([
+    { name: "''", id: '' },
+    { name: 'NULL', id: null }
+  ])('a newer statement whose id is $name: nothing is read, deleted or inserted; done, no ref, count 0', async ({ id }) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: TEXT, page: 1 }])
+    db.prepare(
+      `INSERT INTO bank_statements (id, document_id, run_id, currency, extractor_version, created_at)
+       VALUES (?, ?, NULL, 'EUR', ?, '2026-01-01T00:00:00.000Z')`
+    ).run(id, docId, BANK_EXTRACTOR_VERSION + 1)
+    if (id === '') {
+      db.prepare(
+        `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, description, amount, currency, created_at)
+         VALUES ('tx-1', '', NULL, 0, '2026-01-02', 'Grocery', -49.9, 'EUR', '2026-01-01T00:00:00.000Z')`
+      ).run()
+    }
+    const before = bankRowsOf(db, docId)
+
+    let reads = 0
+    const res = await runBankExtraction(db, ARGS(docId), {
+      audit: () => {},
+      readDocumentSegments: async () => {
+        reads++
+        return SEGMENTS
+      },
+      replaceExisting: true
+    })
+
+    expect(res).toMatchObject({ ok: true, transactionCount: 0 })
+    expect(res.statementId).toBeUndefined()
+    expect(reads).toBe(0)
+    expect(bankRowsOf(db, docId)).toEqual(before)
+    const run = db.prepare('SELECT status, result_ref AS ref, error FROM skill_runs WHERE id = ?').get(res.runId)
+    expect(run).toEqual({ status: 'done', ref: null, error: null })
+  })
+
+  // The run-bar tools go through `prepareDomainRun`: a newer statement is not stale, so they run on the
+  // stored rows (the balance check may write its flags on them: D-4).
+  const DOWNSTREAM: Array<{ name: string; run: (db: Db, docId: string, sink: { written: string }) => Promise<{ ok: boolean }> }> = [
+    {
+      name: 'Validate',
+      run: (db, docId) => runBalanceValidation(db, ARGS(docId), { audit: () => {}, readDocumentSegments: async () => SEGMENTS })
+    },
+    {
+      name: 'CSV export',
+      run: (db, docId, sink) =>
+        runCsvExport(db, ARGS(docId), {
+          audit: () => {},
+          confirmed: true,
+          readDocumentSegments: async () => SEGMENTS,
+          saveTextFile: async (_name, content) => {
+            sink.written = content
+            return true
+          }
+        })
+    }
+  ]
+  it.each(DOWNSTREAM)('$name runs on a newer version’s statement as stored (no re-extract)', async ({ name, run }) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: TEXT, page: 1 }])
+    const id = await extractAt(db, docId, '2026-01-01T00:00:00.000Z')
+    markReadByNewerVersion(db, id)
+    const before = bankRowsOf(db, docId)
+    const figures = (): unknown[] =>
+      db.prepare('SELECT id, row_index, description, amount FROM bank_transactions WHERE statement_id = ? ORDER BY row_index').all(id)
+    const figuresBefore = figures()
+
+    const sink = { written: '' }
+    expect((await run(db, docId, sink)).ok).toBe(true)
+
+    const after = bankRowsOf(db, docId)
+    expect(after.statements).toEqual(before.statements) // same id, still the newer version's stamp
+    expect(after.corrections).toEqual(before.corrections)
+    expect(figures()).toEqual(figuresBefore) // the same rows, with the newer version's figure
+    if (name === 'CSV export') expect(sink.written).toContain('-49.90')
   })
 })
 

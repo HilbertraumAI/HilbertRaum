@@ -839,6 +839,9 @@ export const nl: UiCatalog<'nl'> = {
     '**Let op:** dit document was te lang om helemaal te lezen, dus dit antwoord gaat alleen over ' +
     'het begin ervan. Wil je iets controleren dat verderop in het document staat, vraag dan direct ' +
     'naar dat detail.',
+  'analysis.newerExtractorNote':
+    '_Deze cijfers zijn gelezen door een nieuwere versie van HilbertRaum en worden getoond zoals die ' +
+    'versie ze heeft gelezen._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Gelezen transacties in het hele afschrift: **{count}**.',
   'skills.bankAnalysis.countPartial':
@@ -1106,8 +1109,8 @@ export const nl: UiCatalog<'nl'> = {
   'models.newerApp.heading': 'Nieuwere versie van HilbertRaum nodig',
   'models.newerApp.badge': 'Nieuwere app nodig',
   'models.newerApp.hint':
-    'Dit model is voor een nieuwere versie van HilbertRaum. Werk de app op deze computer bij om het ' +
-    'te gebruiken.',
+    'Dit model heeft een nieuwere versie van HilbertRaum nodig. Installeer de update in Instellingen ' +
+    '→ Updates om het model te gebruiken.',
   'models.library.memory': 'Minimaal geheugen: {size}',
   'models.library.clear': 'Filters wissen',
   'models.library.showVariants': 'Alle varianten tonen ({count})',
@@ -1608,6 +1611,12 @@ export const nl: UiCatalog<'nl'> = {
   'skills.reconcile.folderErrors.other':
     '{count} skillmappen konden niet worden gelezen en worden overgeslagen. Elke map heeft een ' +
     'geldige SKILL.md nodig.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill op deze schijf is gemaakt voor een nieuwere versie van HilbertRaum en wordt ' +
+    'overgeslagen. Installeer de update in Instellingen → Updates om de skill te gebruiken.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills op deze schijf zijn gemaakt voor een nieuwere versie van HilbertRaum en worden ' +
+    'overgeslagen. Installeer de update in Instellingen → Updates om ze te gebruiken.',
   'skills.empty.title': 'Nog geen skills',
   'skills.empty.line':
     'Skills leren de assistent een bepaalde taak uit te voeren. Voeg een skill toe om te ' +
@@ -1626,8 +1635,8 @@ export const nl: UiCatalog<'nl'> = {
   'skills.unavailable.title': 'De bestanden van deze skill staan niet meer op de schijf.',
   'skills.incompatible.chip': 'Nieuwere app nodig',
   'skills.incompatible.title':
-    'Deze skill heeft een nieuwere versie van de app nodig; werk de app bij om de skill in te ' +
-    'schakelen.',
+    'Deze skill heeft een nieuwere versie van HilbertRaum nodig. Installeer de update in ' +
+    'Instellingen → Updates om de skill te gebruiken.',
   'skills.review.chip': 'Nakijken',
   'skills.warn.title': 'Kijk na wat deze skill kan',
   'skills.warn.body':
@@ -1653,8 +1662,8 @@ export const nl: UiCatalog<'nl'> = {
   'skills.kind.instruction': 'Aanwijzingen',
   'skills.kind.tool': 'Voert acties uit',
   'skills.tool.note':
-    'Voorlopig voegt deze skill alleen aanwijzingen toe. De acties die de skill beschrijft, ' +
-    'komen in een latere versie.',
+    'Deze skill voegt alleen aanwijzingen toe. Deze versie van HilbertRaum voert de acties die de ' +
+    'skill beschrijft niet uit.',
   'skills.tool.note.active':
     'Als je erom vraagt, kan deze skill goedgekeurde lokale acties uitvoeren op een document dat ' +
     'je kiest. Acties die alleen lezen, kunnen ook automatisch worden uitgevoerd om je vraag te ' +
@@ -1745,8 +1754,8 @@ export const nl: UiCatalog<'nl'> = {
   'skills.import.note.languageInvalid':
     'Het veld “language” bevat geen geldige taalcode; “en” wordt gebruikt.',
   'skills.import.note.allowedToolsIgnored':
-    'De opgegeven acties worden genegeerd voor een skill met aanwijzingen (acties komen in een ' +
-    'latere versie).',
+    'De opgegeven acties worden genegeerd voor een skill met aanwijzingen (deze versie van ' +
+    'HilbertRaum voert ze niet uit).',
   'skills.import.note.analysisInvalid':
     'Het veld “analysis” heeft een onbekende waarde en wordt genegeerd.',
   'skills.import.note.analysisIgnoredForTool':
@@ -2356,6 +2365,9 @@ export const nl: UiCatalog<'nl'> = {
   'common.apply': 'Toepassen',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'Deze tekst komt uit een nieuwere versie van HilbertRaum, en deze versie kan de tekst niet ' +
+    'weergeven.',
   'indicator.offline': 'Lokaal · Offline',
   'indicator.online': 'Lokaal · Downloads toegestaan',
   'indicator.offlineDetail':
@@ -2617,6 +2629,14 @@ export const nl: UiCatalog<'nl'> = {
     'konden niet worden geopend. Het wachtwoord opnieuw invoeren helpt niet. Maak geen nieuwe ' +
     'werkruimte aan: laat de bestanden zoals ze zijn en herstel de map van de werkruimte vanuit ' +
     'een back-up.',
+  'main.workspace.schemaUnreadable':
+    'Je wachtwoord klopt, maar deze versie van HilbertRaum kan de werkruimte niet lezen. ' +
+    'Waarschijnlijk is de werkruimte het laatst gebruikt met een nieuwere versie. Je werkruimte is ' +
+    'ongewijzigd. Installeer de nieuwere versie om de werkruimte te openen: kies “Update installeren ' +
+    'vanuit bestand…”. Heb je geen updatebestand voor de nieuwere versie, dan kun je er een ' +
+    'downloaden via {address}/from/{version}. Is er op deze schijf nooit een nieuwere versie ' +
+    'gebruikt, laat de bestanden dan zoals ze zijn en lees de handleiding voor probleemoplossing in ' +
+    'de map docs op de schijf.',
   'main.workspace.vaultMissing':
     'Je wachtwoord klopt, maar het versleutelde bestand van de werkruimte ontbreekt op de schijf, en ' +
     'er is geen kopie meer waarmee het hersteld kan worden. Maak geen nieuwe werkruimte aan. Zet het ' +
@@ -2641,8 +2661,10 @@ export const nl: UiCatalog<'nl'> = {
     'zoekindexering, een bestandsvenster met de map van de werkruimte), wacht een moment en ' +
     'probeer het dan opnieuw. Er is niets verloren gegaan.',
   'main.workspace.newer':
-    'Deze werkruimte is geschreven door een nieuwere versie van HilbertRaum: werk de app bij om ' +
-    'de werkruimte te openen. Er is niets gewijzigd.',
+    'Deze werkruimte is het laatst gebruikt met een nieuwere versie van HilbertRaum, dus deze versie ' +
+    'kan de werkruimte niet openen. Je werkruimte is ongewijzigd. Installeer de nieuwere versie om ' +
+    'de werkruimte te openen: kies “Update installeren vanuit bestand…”. Heb je geen updatebestand ' +
+    'voor de nieuwere versie, dan kun je er een downloaden via {address}/from/{version}.',
   'main.workspace.createFailed': 'De werkruimte kon niet worden aangemaakt.',
   'main.workspace.passwordTooShort': 'Het wachtwoord moet minstens {min} tekens lang zijn.',
   'main.workspace.exists':
@@ -3078,8 +3100,8 @@ export const nl: UiCatalog<'nl'> = {
     'De werkruimte is vergrendeld. Ontgrendel de werkruimte om skills te beheren.',
   'main.skills.notPicked': 'Kies eerst het skillpakket met de bestandskiezer.',
   'main.skills.incompatible':
-    'Deze skill heeft een nieuwere versie van de app nodig. Werk de app bij om de skill te ' +
-    'gebruiken.',
+    'Deze skill heeft een nieuwere versie van HilbertRaum nodig. Installeer de update in ' +
+    'Instellingen → Updates om de skill te gebruiken.',
   'main.skills.run.unavailable': 'De actie van deze skill is op dit moment niet beschikbaar.',
   'main.skills.run.noDocument':
     'Voeg eerst een document aan deze chat toe en probeer het dan opnieuw.',
@@ -3203,6 +3225,7 @@ export const nl: UiCatalog<'nl'> = {
   'chat.packs.outcome.disabled': 'niet doorzocht: pakket uitgeschakeld',
   'chat.packs.outcome.file-missing': 'niet doorzocht: bestand ontbreekt',
   'chat.packs.outcome.identity-mismatch': 'niet doorzocht: ander archief op deze locatie',
+  'chat.packs.outcome.newer-format': 'niet doorzocht: nieuwer ZIM-formaat',
   'chat.packs.outcome.not-served': 'niet doorzocht: de naam botst met een ander pakket',
   'chat.packs.outcome.not-searchable': 'niet doorzocht: geen zoekindex',
   'chat.packs.outcome.tools-missing': 'niet doorzocht: kiwix-tools niet geïnstalleerd',
@@ -3296,6 +3319,9 @@ export const nl: UiCatalog<'nl'> = {
     'Onder Windows kan kiwix-manage dit archief niet lezen, omdat de bestandsnaam of de map een ' +
     'umlaut, een accent of een ander niet-ASCII-teken bevat. Kopieer het bestand onder een naam ' +
     'zonder zulke tekens naar de map zim/ op de schijf en voeg het opnieuw toe.',
+  'packs.addFailed.newerFormat':
+    'Dit archief gebruikt een nieuwer ZIM-formaat dan deze versie van HilbertRaum kan lezen, dus het ' +
+    'is niet toegevoegd. Een nieuwere versie van HilbertRaum kan het misschien wel toevoegen.',
   'packs.addFailed.other': 'Het archief kon niet worden toegevoegd.',
   'packs.removedToast': 'Kennispakket verwijderd',
   'packs.articleCount.one': '{count} artikel',
@@ -3308,6 +3334,10 @@ export const nl: UiCatalog<'nl'> = {
   'packs.state.identityMismatchTitle':
     'Het bestand op de locatie van dit pakket is een ander archief: verwijder dit pakket en voeg ' +
     'het bestand opnieuw toe',
+  'packs.state.newerFormat': 'Nieuwer formaat',
+  'packs.state.newerFormatTitle':
+    'Dit archief gebruikt een nieuwer ZIM-formaat dan deze versie van HilbertRaum kan lezen, dus het ' +
+    'wordt niet gebruikt. Een nieuwere versie van HilbertRaum kan het misschien wel gebruiken.',
   'packs.state.notSearchable': 'Geen zoekindex',
   'packs.state.notSearchableTitle':
     'Dit archief heeft geen zoekindex voor de volledige tekst. Bij vragen wordt het archief ' +

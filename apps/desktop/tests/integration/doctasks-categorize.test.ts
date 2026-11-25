@@ -163,6 +163,46 @@ describe('categorize doctask — A9 staleness re-extraction', () => {
     const cats = persistedCategories(stmts[0].id)
     expect(cats).toEqual(['Income', 'Fees'])
   })
+
+  it('G-34 (a): a NEWER version’s statement is not re-extracted; its rows are categorized as stored (labels written, D-4)', async () => {
+    // After "Go back" this build must never replace or delete what a newer version read, nor a correction
+    // on it. The owner's call (D-4, 2026-11-25): Categorize still writes its labels on those rows, as today.
+    // The document's text would re-extract to two DIFFERENT rows, so a re-extract would show.
+    const docId = await importText(w, 'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50', {
+      name: 'statement.txt'
+    })
+    const stmtId = seedStatement(docId, [
+      { desc: 'Gehalt ACME', amount: 2600 }, // the newer version read a different figure
+      { desc: 'Unklare Buchung', amount: -9.99 }
+    ])
+    w.db.prepare('UPDATE bank_statements SET extractor_version = ? WHERE id = ?').run(BANK_EXTRACTOR_VERSION + 1, stmtId)
+    const txRows = (): unknown[] =>
+      w.db
+        .prepare('SELECT id, row_index, date, description, amount, currency FROM bank_transactions WHERE statement_id = ? ORDER BY row_index')
+        .all(stmtId)
+    const firstTx = (txRows()[0] as { id: string }).id
+    w.db
+      .prepare(
+        `INSERT INTO bank_corrections (id, transaction_id, field, old_value, new_value, created_at)
+         VALUES ('corr-1', ?, 'amount', '2500', '2600', '2026-03-05T00:00:00.000Z')`
+      )
+      .run(firstTx)
+    const before = txRows()
+
+    const mgr = docTaskManager(w) // deterministic labels — the point is what is (not) replaced
+    const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
+    expect((await waitTerminal(mgr, jobId)).state).toBe('done')
+
+    const stmts = w.db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .all(docId) as Array<{ id: string; v: number }>
+    expect(stmts).toEqual([{ id: stmtId, v: BANK_EXTRACTOR_VERSION + 1 }]) // the same statement, its stamp kept
+    expect(txRows()).toEqual(before) // the same rows and figures
+    const corrections = w.db.prepare('SELECT id FROM bank_corrections').all()
+    expect(corrections).toEqual([{ id: 'corr-1' }])
+    expect(persistedCategories(stmtId)).toEqual(['Income', 'Spending']) // labels written on the stored rows
+    expect(categorizedByModel(stmtId)).toBe(0)
+  })
 })
 
 describe('categorize doctask — persist rollback (T3: no partial categorization survives a failure)', () => {

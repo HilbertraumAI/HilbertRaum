@@ -1,0 +1,765 @@
+{
+  "contract": "F-23, the model-manifest old-reader contract (plan Appendix B; docs/model-policy.md \"A manifest for a newer HilbertRaum\")",
+  "readers": [
+    "discoverManifests (src/main/services/models.ts)",
+    "validateManifest, pickManifestForRole (src/shared/manifest.ts)",
+    "fetch-models and verify-models, both twins (the skip rule, W-62 (b))"
+  ],
+  "verdicts": {
+    "accepts": "usable: validated, in the model list",
+    "lists": "listed under \"Needs a newer HilbertRaum\": display fields only, never selectable",
+    "drops": "refused with a log line: neither usable nor listed",
+    "ignores": "never read: not a manifest file"
+  },
+  "scriptsVerdicts": {
+    "use": "the script reads the manifest as before",
+    "skip": "the script skips it with one line (\"needs a newer HilbertRaum\")"
+  },
+  "appVersion": "0.1.66",
+  "appVersions": [
+    "0.1.66",
+    "0.1.66-beta.1",
+    ""
+  ],
+  "single": {
+    "dir": "single",
+    "files": [
+      {
+        "file": "a01-base.yaml",
+        "id": "g23-a01-base",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a complete manifest of a known role, no min_app_version"
+      },
+      {
+        "file": "a02-unknown-keys.yaml",
+        "id": "g23-a02-unknown-keys",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "sameAs": "a01-base.yaml",
+        "why": "unknown keys of every kind, at the top level and inside download and license_review, are ignored: the manifest reads exactly as a01 (identity aside)"
+      },
+      {
+        "file": "a03-min-equal.yaml",
+        "id": "g23-a03-min-equal",
+        "verdict": "accepts",
+        "at": {
+          "0.1.66-beta.1": "lists",
+          "": "lists"
+        },
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "min_app_version equal to the app; a pre-release of that release, or an app that does not know its version, lists it"
+      },
+      {
+        "file": "a04-min-below.yaml",
+        "id": "g23-a04-min-below",
+        "verdict": "accepts",
+        "at": {
+          "": "lists"
+        },
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "skip"
+        },
+        "why": "min_app_version below the app: parts compare as numbers (9 < 66, though \"0.1.9\" > \"0.1.66\" as text)"
+      },
+      {
+        "file": "a05-min-null.yaml",
+        "id": "g23-a05-min-null",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a null min_app_version is no minimum, whatever the app version"
+      },
+      {
+        "file": "a06-min-empty-value.yaml",
+        "id": "g23-a06-min-empty-value",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a key with no value is YAML null: no minimum"
+      },
+      {
+        "file": "a07-default-for-role-chat.yaml",
+        "id": "g23-a07-default-for-role-chat",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "default_for_role is accepted on chat, where nothing reads it"
+      },
+      {
+        "file": "a08-chat-only-keys.yaml",
+        "id": "g23-a08-chat-only-keys",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "speculative_decoding and disable_prompt_cache on chat, the one role that reads them"
+      },
+      {
+        "file": "a09-role-padded.yaml",
+        "id": "g23-a09-role-padded",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a quoted role is read trimmed"
+      },
+      {
+        "file": "a10-yml-extension.yml",
+        "id": "g23-a10-yml-extension",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a .yml file is a manifest too"
+      },
+      {
+        "file": "a11-min-quoted.yaml",
+        "id": "g23-a11-min-quoted",
+        "verdict": "accepts",
+        "at": {
+          "0.1.66-beta.1": "lists",
+          "": "lists"
+        },
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a quoted min_app_version is the same string"
+      },
+      {
+        "file": "a12-min-comment.yaml",
+        "id": "g23-a12-min-comment",
+        "verdict": "accepts",
+        "at": {
+          "0.1.66-beta.1": "lists",
+          "": "lists"
+        },
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a comment after the value is no part of it"
+      },
+      {
+        "file": "l01-role-unknown.yaml",
+        "id": "g23-l01-role-unknown",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a role this build does not know"
+      },
+      {
+        "file": "l02-role-case.yaml",
+        "id": "g23-l02-role-case",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "roles compare exactly: Chat is no role this build knows"
+      },
+      {
+        "file": "l03-min-above.yaml",
+        "id": "g23-l03-min-above",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "min_app_version above the app"
+      },
+      {
+        "file": "l04-min-numeric-above.yaml",
+        "id": "g23-l04-min-numeric-above",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "parts compare as numbers: 100 > 66, though \"0.1.100\" < \"0.1.66\" as text"
+      },
+      {
+        "file": "l05-min-two-parts.yaml",
+        "id": "g23-l05-min-two-parts",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "not exactly MAJOR.MINOR.PATCH (two parts) counts as newer; a [version] cast would read it as 1.0"
+      },
+      {
+        "file": "l06-min-yaml-number.yaml",
+        "id": "g23-l06-min-yaml-number",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a YAML number is no version string: newer"
+      },
+      {
+        "file": "l07-min-prerelease.yaml",
+        "id": "g23-l07-min-prerelease",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a pre-release minimum is not exactly MAJOR.MINOR.PATCH: newer"
+      },
+      {
+        "file": "l08-min-v-prefix.yaml",
+        "id": "g23-l08-min-v-prefix",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a leading v: newer"
+      },
+      {
+        "file": "l09-min-leading-zero.yaml",
+        "id": "g23-l09-min-leading-zero",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a leading zero in a part: newer"
+      },
+      {
+        "file": "l10-min-four-parts.yaml",
+        "id": "g23-l10-min-four-parts",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a fourth part: newer"
+      },
+      {
+        "file": "l11-min-empty-string.yaml",
+        "id": "g23-l11-min-empty-string",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "an empty string is a value, not null: newer"
+      },
+      {
+        "file": "l12-min-mapping.yaml",
+        "id": "g23-l12-min-mapping",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a mapping is no version string: newer"
+      },
+      {
+        "file": "l13-min-build-metadata.yaml",
+        "id": "g23-l13-min-build-metadata",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "build metadata on a minimum is not exactly MAJOR.MINOR.PATCH: newer"
+      },
+      {
+        "file": "l14-newer-display-only.yaml",
+        "id": "g23-l14-newer-display-only",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a manifest for a newer HilbertRaum is read for its display fields only: a bad size, no sha256, no runtime or format change nothing"
+      },
+      {
+        "file": "l15-min-above-otherwise-invalid.yaml",
+        "id": "g23-l15-min-above-otherwise-invalid",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "min_app_version is read before validation, so a newer field rule never drops the file"
+      },
+      {
+        "file": "l16-min-huge.yaml",
+        "id": "g23-l16-min-huge",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a major part beyond 64 bits is still above the app"
+      },
+      {
+        "file": "d01-bad-known-value.yaml",
+        "id": "g23-d01-bad-known-value",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a bad value of a known key"
+      },
+      {
+        "file": "d02-missing-required.yaml",
+        "id": "g23-d02-missing-required",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a required key is missing (sha256)"
+      },
+      {
+        "file": "d03-role-missing.yaml",
+        "id": "g23-d03-role-missing",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "no role at all is an error, not a newer manifest"
+      },
+      {
+        "file": "d04-role-blank.yaml",
+        "id": "g23-d04-role-blank",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a blank role is an error, not a newer manifest"
+      },
+      {
+        "file": "d05-role-number.yaml",
+        "id": "g23-d05-role-number",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a role that is no string is an error, not a newer manifest"
+      },
+      {
+        "file": "d06-speculative-outside-chat.yaml",
+        "id": "g23-d06-speculative-outside-chat",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "speculative_decoding outside chat stays rejected"
+      },
+      {
+        "file": "d07-prompt-cache-outside-chat.yaml",
+        "id": "g23-d07-prompt-cache-outside-chat",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "disable_prompt_cache outside chat stays rejected"
+      },
+      {
+        "file": "d08-newer-no-display-name.yaml",
+        "id": "g23-d08-newer-no-display-name",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a newer manifest without display_name cannot be listed"
+      },
+      {
+        "file": "d09-newer-unsafe-path.yaml",
+        "id": "g23-d09-newer-unsafe-path",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a newer manifest whose local_path leaves the drive is refused, not listed"
+      },
+      {
+        "file": "d10-not-yaml.yaml",
+        "id": "g23-d10-not-yaml",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "text the YAML parser refuses"
+      },
+      {
+        "file": "d11-not-a-mapping.yaml",
+        "verdict": "drops",
+        "why": "a YAML list is no manifest"
+      },
+      {
+        "file": "d12-role-null.yaml",
+        "id": "g23-d12-role-null",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a null role is an error, not a newer manifest"
+      },
+      {
+        "file": "i01-notes.txt",
+        "verdict": "ignores",
+        "why": "not a .yaml or .yml file"
+      },
+      {
+        "file": "i02-readme.md",
+        "verdict": "ignores",
+        "why": "not a .yaml or .yml file"
+      },
+      {
+        "file": "i03-manifest.json",
+        "verdict": "ignores",
+        "why": "a JSON manifest is never read"
+      },
+      {
+        "file": "runtime-sources.yaml",
+        "verdict": "ignores",
+        "why": "runtime-sources.yaml is the engine pin, never a model manifest, whatever it holds"
+      },
+      {
+        "file": "i04-backup.yaml.bak",
+        "verdict": "ignores",
+        "why": "only the last extension counts"
+      },
+      {
+        "file": "a13-new-runtime.yaml",
+        "id": "g23-a13-new-runtime",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a runtime/format pair release 1 does not run is no error: the model is listed in the unsupported state (model-policy \"runtime/format\"); behind min_app_version it would be listed as for a newer HilbertRaum"
+      },
+      {
+        "file": "l17-min-padded.yaml",
+        "id": "g23-l17-min-padded",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "a quoted minimum with blanks around it is not exactly MAJOR.MINOR.PATCH: newer (no trimming, unlike role)"
+      },
+      {
+        "file": "d13-new-enum-value.yaml",
+        "id": "g23-d13-new-enum-value",
+        "verdict": "drops",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "a new value of a closed enum (speculative_decoding: eagle3) without min_app_version: release 1 refuses the value and drops the file, as the release rule says; the scripts, which read role and min_app_version only, use it"
+      },
+      {
+        "file": "a14-min-camel-case.yaml",
+        "id": "g23-a14-min-camel-case",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "T2.7 (R1 MJ-6): the skills' spelling minAppVersion at the top level is a key release 1 does not know: ignored, so the manifest is used whatever version it names, by the app and by both twins"
+      },
+      {
+        "file": "a15-min-nested.yaml",
+        "id": "g23-a15-min-nested",
+        "verdict": "accepts",
+        "scripts": {
+          "0.1.66": "use",
+          "0.1.66-beta.1": "use",
+          "": "use"
+        },
+        "why": "T2.7 (R1 MJ-6): min_app_version nested in a block (here the skills' compatibility) is no top-level minimum: the block is an unknown key, so the manifest is used, by the app and by both twins"
+      },
+      {
+        "file": "l18-catalog-index.yaml",
+        "id": "g23-l18-catalog-index",
+        "verdict": "lists",
+        "scripts": {
+          "0.1.66": "skip",
+          "0.1.66-beta.1": "skip",
+          "": "skip"
+        },
+        "why": "T2.7 (R1 MJ-4): any .yaml under model-manifests/ is read as a manifest. A file that is no model (a catalog index) with id, display_name and a min_app_version above the app is listed as a model under \"Needs a newer HilbertRaum\", and both twins skip it"
+      },
+      {
+        "file": "d14-owned-hashes.yaml",
+        "verdict": "drops",
+        "why": "T2.7 (R1 MJ-4): a .yaml under model-manifests/ that is no model (a hash table) and has no id is read as a manifest too, and dropped with a log line"
+      }
+    ]
+  },
+  "escaped": [
+    {
+      "file": "e01-crlf.yaml",
+      "base64": "aWQ6IGcyMy1lMDEtY3JsZg0KZGlzcGxheV9uYW1lOiBHb2xkZW4gZzIzLWUwMS1jcmxmDQpmYW1pbHk6IGdvbGRlbg0Kcm9sZTogY2hhdA0KbWluX2FwcF92ZXJzaW9uOiAwLjEuNjYNCmZvcm1hdDogZ2d1Zg0KcnVudGltZTogbGxhbWFfY3BwDQpsaWNlbnNlOiBhcGFjaGUtMi4wDQpzaXplX29uX2Rpc2tfZ2I6IDAuMDAwMDAxDQpyZWNvbW1lbmRlZF9taW5fcmFtX2diOiAxDQpyZWNvbW1lbmRlZF9yYW1fZ2I6IDENCnJlY29tbWVuZGVkX2NvbnRleHRfdG9rZW5zOiAyMDQ4DQpsb2NhbF9wYXRoOiBtb2RlbHMvY2hhdC9nMjMtZTAxLWNybGYuZ2d1Zg0Kc2hhMjU2OiBSRVBMQUNFX1dJVEhfUkVBTF9IQVNIDQpkb3dubG9hZDoNCiAgdXJsOiBodHRwczovL2V4YW1wbGUuaW52YWxpZC9nMjMtZTAxLWNybGYuZ2d1Zg0KICBzaGEyNTY6IFJFUExBQ0VfV0lUSF9SRUFMX0hBU0gNCiAgc2l6ZV9ieXRlczogOQ0KICBsaWNlbnNlX3VybDogaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvTElDRU5TRQ0KbGljZW5zZV9yZXZpZXc6DQogIHN0YXR1czogYXBwcm92ZWQNCiAgcmV2aWV3ZWRfYnk6IGdvbGRlbg0KICByZXZpZXdlZF9hdDogJzIwMjYtMTEtMjUnDQogIG5vdGVzOiBUMi4xMCByZWFkZXIgZ29sZGVuDQo=",
+      "id": "g23-e01-crlf",
+      "verdict": "accepts",
+      "at": {
+        "0.1.66-beta.1": "lists",
+        "": "lists"
+      },
+      "scripts": {
+        "0.1.66": "use",
+        "0.1.66-beta.1": "skip",
+        "": "skip"
+      },
+      "why": "CRLF line ends, as an editor on Windows saves them: read exactly as LF, by the app and by the scripts (a CR after a value is no part of it)"
+    },
+    {
+      "file": "e02-bom-min-above.yaml",
+      "base64": "77u/bWluX2FwcF92ZXJzaW9uOiAwLjIuMAppZDogZzIzLWUwMi1ib20tbWluLWFib3ZlCmRpc3BsYXlfbmFtZTogR29sZGVuIGcyMy1lMDItYm9tLW1pbi1hYm92ZQpmYW1pbHk6IGdvbGRlbgpyb2xlOiBjaGF0CmZvcm1hdDogZ2d1ZgpydW50aW1lOiBsbGFtYV9jcHAKbGljZW5zZTogYXBhY2hlLTIuMApzaXplX29uX2Rpc2tfZ2I6IDAuMDAwMDAxCnJlY29tbWVuZGVkX21pbl9yYW1fZ2I6IDEKcmVjb21tZW5kZWRfcmFtX2diOiAxCnJlY29tbWVuZGVkX2NvbnRleHRfdG9rZW5zOiAyMDQ4CmxvY2FsX3BhdGg6IG1vZGVscy9jaGF0L2cyMy1lMDItYm9tLW1pbi1hYm92ZS5nZ3VmCnNoYTI1NjogUkVQTEFDRV9XSVRIX1JFQUxfSEFTSApkb3dubG9hZDoKICB1cmw6IGh0dHBzOi8vZXhhbXBsZS5pbnZhbGlkL2cyMy1lMDItYm9tLW1pbi1hYm92ZS5nZ3VmCiAgc2hhMjU2OiBSRVBMQUNFX1dJVEhfUkVBTF9IQVNICiAgc2l6ZV9ieXRlczogOQogIGxpY2Vuc2VfdXJsOiBodHRwczovL2V4YW1wbGUuaW52YWxpZC9MSUNFTlNFCmxpY2Vuc2VfcmV2aWV3OgogIHN0YXR1czogYXBwcm92ZWQKICByZXZpZXdlZF9ieTogZ29sZGVuCiAgcmV2aWV3ZWRfYXQ6ICcyMDI2LTExLTI1JwogIG5vdGVzOiBUMi4xMCByZWFkZXIgZ29sZGVuCg==",
+      "id": "g23-e02-bom-min-above",
+      "verdict": "lists",
+      "scripts": {
+        "0.1.66": "skip",
+        "0.1.66-beta.1": "skip",
+        "": "skip"
+      },
+      "why": "a UTF-8 byte-order mark in front of the first key, min_app_version above the app: the mark is no part of the key, for the app and for the scripts"
+    }
+  ],
+  "scenarios": [
+    {
+      "dir": "s1-one-id-space",
+      "why": "one id space: a usable manifest keeps its id over a same-id newer one, whatever the walk order; among newer ones the first in walk order wins; every loser is logged",
+      "usable": [
+        {
+          "id": "g23-shared",
+          "file": "b-usable.yaml"
+        }
+      ],
+      "newer": [
+        {
+          "id": "g23-newer-twice",
+          "file": "c-newer.yaml"
+        }
+      ],
+      "dropped": [
+        "a-newer.yaml",
+        "d-newer.yaml"
+      ]
+    },
+    {
+      "dir": "s2-walk-order",
+      "why": "the walk sorts each folder by code unit and goes depth first: B.yaml, a/z.yaml, a.yaml (a case-blind or locale sort gives another first file); the first usable file of an id wins",
+      "usable": [
+        {
+          "id": "g23-walk-first",
+          "file": "B.yaml"
+        },
+        {
+          "id": "g23-walk-second",
+          "file": "a/z.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [
+        "a.yaml"
+      ],
+      "pick": {
+        "embeddings": "g23-walk-first"
+      }
+    },
+    {
+      "dir": "s3-default-for-role",
+      "why": "default_for_role picks the role model among usable manifests",
+      "usable": [
+        {
+          "id": "g23-dfr-unflagged",
+          "file": "a.yaml"
+        },
+        {
+          "id": "g23-dfr-flagged",
+          "file": "b.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [],
+      "pick": {
+        "embeddings": "g23-dfr-flagged"
+      }
+    },
+    {
+      "dir": "s4-default-not-usable",
+      "why": "a flagged manifest that is newer or invalid is not usable: the first usable one of the role is the model",
+      "usable": [
+        {
+          "id": "g23-dfr-fallback",
+          "file": "a.yaml"
+        }
+      ],
+      "newer": [
+        {
+          "id": "g23-dfr-newer",
+          "file": "b.yaml"
+        }
+      ],
+      "dropped": [
+        "c.yaml"
+      ],
+      "pick": {
+        "embeddings": "g23-dfr-fallback"
+      }
+    },
+    {
+      "dir": "s5-two-flagged",
+      "why": "two usable manifests of one role both set default_for_role: the first in walk order is the model",
+      "usable": [
+        {
+          "id": "g23-flagged-first",
+          "file": "a.yaml"
+        },
+        {
+          "id": "g23-flagged-second",
+          "file": "b.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [],
+      "pick": {
+        "embeddings": "g23-flagged-first"
+      }
+    },
+    {
+      "dir": "s6-usable-first",
+      "why": "the usable manifest of an id comes first in walk order, the newer one after it: the usable one keeps the id, the newer one is logged",
+      "usable": [
+        {
+          "id": "g23-shared-again",
+          "file": "a-usable.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [
+        "b-newer.yaml"
+      ]
+    },
+    {
+      "dir": "s7-two-usable-one-id",
+      "why": "two usable manifests of one id (a renamed app-owned file beside the old one, W-62 (a)): the first in walk order is the model, whatever either holds, and every later one is logged as a duplicate; the walk is depth first with files and folders sorted together, so a/z.yaml comes before b.yaml",
+      "usable": [
+        {
+          "id": "g23-two-usable",
+          "file": "a/z.yaml"
+        }
+      ],
+      "newer": [],
+      "dropped": [
+        "b.yaml"
+      ]
+    }
+  ],
+  "flatRead": [
+    {
+      "file": "flat-read/nested-key-first.yaml",
+      "disagree": [
+        "local_path",
+        "sha256",
+        "url"
+      ],
+      "why": "the projector block comes first, so a first-match read at any indentation takes its local_path, sha256 and download url; role and min_app_version are read at column 0 only"
+    },
+    {
+      "file": "flat-read/nested-all-first.yaml",
+      "disagree": [
+        "id",
+        "local_path",
+        "sha256",
+        "runtime",
+        "format",
+        "url",
+        "size_bytes",
+        "license",
+        "license_url",
+        "status",
+        "withdrawn",
+        "bundled_on_preconfigured_drive"
+      ],
+      "why": "a block holding every key the scripts read flat comes first: each flat read takes the nested value; the nested role and min_app_version are not read (column 0 only)"
+    }
+  ]
+}

@@ -49,9 +49,11 @@ function countAsNever(dir: string): number {
 // rows, phaseB-perf-bench's two stubs) → 39. The documents-ingestion-ocr campaign retyped ocr.test's five fake
 // tesseract / engine stubs → 34. The chat-ui campaign dropped ChatAttach's drop-path stub cast → 33. The models-drive campaign retyped
 // resolve-model's discovered list → 32. The vault + local API campaign typed the settings write-gate and
-// db-settings invalid-value rows (18) and dropped workspace-ipc's mode cast → 13. LOWER
+// db-settings invalid-value rows (18) and dropped workspace-ipc's mode cast → 13. The app-update P2 exit dropped
+// db-schema-meta's setStampAppVersion cast (its parameter is `unknown`) and moved skills-analysis-bank's five fake
+// runtimes onto the typed `scriptedRuntime` → 9. LOWER
 // this when you remove casts; the test fails if it ever climbs (a new `as never` was added).
-const BASELINE = 13
+const BASELINE = 9
 
 describe('F-41 `as never` ratchet (audit-2026-07-16)', () => {
   it('the number of `as never` casts under tests/ never exceeds the recorded baseline', () => {

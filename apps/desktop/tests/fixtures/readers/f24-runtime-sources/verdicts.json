@@ -1,0 +1,128 @@
+{
+  "contract": "F-24, runtime-sources.yaml: release 1 reads only its bundled copy, through validateRuntimeSources (src/shared/runtime-sources.ts), whole-file",
+  "verdicts": {
+    "accepts": "the file validates; `families` lists the engine families it yields",
+    "drops": "the whole file is refused: that reader runs no engine"
+  },
+  "files": [
+    {
+      "file": "a1-base.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "the llama_cpp block alone (the others are optional)"
+    },
+    {
+      "file": "a2-new-family.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "a later release adds a family as a new top-level key: ignored, whatever it holds"
+    },
+    {
+      "file": "a3-new-keys.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "new keys at the top level, in a family block and in a build are ignored"
+    },
+    {
+      "file": "a4-new-arch.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "as built, arch is any non-empty string: a build for an arch no Kit runs is accepted and never selected (the writer duty still forbids a new os or arch value inside an existing family block)"
+    },
+    {
+      "file": "a5-size-bytes-garbage.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "size_bytes is a dialog label: a bad one reads as unknown, never fails the file"
+    },
+    {
+      "file": "a6-optional-families.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp",
+        "whisper_cpp",
+        "kiwix_tools",
+        "ocr"
+      ],
+      "why": "every optional family, valid"
+    },
+    {
+      "file": "d1-new-os.yaml",
+      "verdict": "drops",
+      "why": "a new os value inside a known family block refuses the whole file (no engine at all)"
+    },
+    {
+      "file": "d2-malformed-whisper.yaml",
+      "verdict": "drops",
+      "why": "one malformed block of a known optional family refuses the whole file, llama_cpp included"
+    },
+    {
+      "file": "d3-malformed-ocr.yaml",
+      "verdict": "drops",
+      "why": "an ocr dest that leaves the drive refuses the whole file"
+    },
+    {
+      "file": "d4-http-url.yaml",
+      "verdict": "drops",
+      "why": "a cleartext url refuses the whole file"
+    },
+    {
+      "file": "d5-duplicate-triple.yaml",
+      "verdict": "drops",
+      "why": "two builds for one (os, arch, backend) refuse the whole file"
+    },
+    {
+      "file": "d6-no-llama.yaml",
+      "verdict": "drops",
+      "why": "no llama_cpp block"
+    },
+    {
+      "file": "d7-whisper-not-mapping.yaml",
+      "verdict": "drops",
+      "why": "a known family that is no mapping refuses the whole file"
+    },
+    {
+      "file": "d8-kiwix-bad-executable.yaml",
+      "verdict": "drops",
+      "why": "a kiwix_tools executable with an extension refuses the whole file"
+    },
+    {
+      "file": "a7-new-backend.yaml",
+      "verdict": "accepts",
+      "families": [
+        "llama_cpp"
+      ],
+      "why": "as built, backend is any non-empty string: a build with a backend release 1 does not know is accepted, and as the first build listed for its os it is the default a reader picks there"
+    },
+    {
+      "file": "d9-not-yaml.yaml",
+      "verdict": "drops",
+      "why": "text the YAML parser refuses: no file at all"
+    },
+    {
+      "file": "d10-empty.yaml",
+      "verdict": "drops",
+      "why": "an empty file is no mapping"
+    },
+    {
+      "file": "d11-not-a-mapping.yaml",
+      "verdict": "drops",
+      "why": "a YAML list is no mapping"
+    },
+    {
+      "file": "d12-new-os-optional-family.yaml",
+      "verdict": "drops",
+      "why": "a new os value inside an optional family block refuses the whole file, llama_cpp included"
+    }
+  ]
+}

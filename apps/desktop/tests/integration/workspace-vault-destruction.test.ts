@@ -3,12 +3,14 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
   writeSync
 } from 'node:fs'
@@ -31,13 +33,14 @@ import {
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { walAwaitsCheckpoint, type Db } from '../../src/main/services/db'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { openRawDb } from '../helpers/db-fixtures'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
   FAST_KDF,
   corruptVault,
   damagedVault,
   editDescriptor,
+  endedUnlocked,
   freshVaultPaths,
   lockedVault,
   noisePastPageOne,
@@ -918,6 +921,49 @@ describe('issue #875 — the notice of a lock that finished at the last snapshot
     expect(existsSync(`${markerPath(vp)}.tmp`)).toBe(false)
     expect(statSync(markerPath(vp)).isDirectory()).toBe(true)
   })
+
+  // T2.16 fix round (R1 B-3): the start writes the marker before any password when its sweep shredded a session an
+  // unclean end left (#892), and its write temp was opened with 'w', which follows a link: review 1's probe had a second
+  // hard link there truncated and given the marker's bytes, and its name renamed onto the marker's. As the journal's own
+  // temp since PR #1030: whatever is at the temp's name is removed by its name first (`lstat`, never followed), and the
+  // temp is created anew ('wx'). The file the link led to keeps its bytes, and the marker is written.
+  const tempLink = (kind: 'hard' | 'junction' | 'symbolic') => (at: string, root: string): string => {
+    const victim = join(root, `victim-${kind}`)
+    if (kind === 'junction') {
+      mkdirSync(victim)
+      writeFileSync(join(victim, 'held'), 'a file outside config/')
+      symlinkSync(victim, at, 'junction')
+      return join(victim, 'held')
+    }
+    writeFileSync(victim, 'a file outside config/\n'.repeat(100))
+    if (kind === 'hard') linkSync(victim, at)
+    else symlinkSync(victim, at, 'file')
+    return victim
+  }
+  const canTempLink = (kind: 'hard' | 'junction' | 'symbolic'): boolean => {
+    if (kind === 'junction' && process.platform !== 'win32') return false // elsewhere the symbolic row covers a link
+    const root = tempRoot('vault-875-can')
+    try {
+      tempLink(kind)(join(root, 'link'), root)
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const kind of ['hard', 'junction', 'symbolic'] as const) {
+    it.skipIf(!canTempLink(kind))(`a ${kind} link at the marker's write temp: the start writes the marker, the file the link leads to keeps its bytes`, () => {
+      const vp = lockedVault('vault-875', PW)
+      endedUnlocked(vp, 9119, PW)
+      const victim = tempLink(kind)(`${markerPath(vp)}.tmp`, vp.root)
+      const victimBytes = readFileSync(victim)
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(readFileSync(victim).equals(victimBytes), 'the file the link leads to').toBe(true)
+      expect(['session_not_closed', 'session_not_closed_full']).toContain(ctl.getState().lockNotice)
+      expect(JSON.parse(readFileSync(markerPath(vp), 'utf8'))).toMatchObject({ v: 1, enc: expect.any(String) })
+      expect(existsSync(`${markerPath(vp)}.tmp`)).toBe(false)
+    })
+  }
 
   // A workspace wiped by hand (its `.enc` and descriptor deleted, say to reset a Kit) leaves `config/` with the marker
   // of a vault that is gone. With no vault, startup never reads it; the workspace created there removes it, so it does

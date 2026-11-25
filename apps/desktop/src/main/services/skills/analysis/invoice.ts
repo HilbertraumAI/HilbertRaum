@@ -4,6 +4,8 @@ import type { MessageKey, MessageParams } from '../../../../shared/i18n'
 import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
+  isInvoiceExtractionNewer,
+  isInvoiceNewer,
   isInvoiceStale,
   latestInvoiceId,
   loadInvoice,
@@ -649,10 +651,12 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted invoice when
       // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate — F5, the
       // parity with the bank path). Re-extract only when NONE exists yet, OR when the latest was produced
-      // by an outdated extractor (`isInvoiceStale`): a since-fixed parser bug must not keep serving
-      // mis-read figures. A re-extract REPLACES the stale invoice in place (`replaceExisting`) — the old
-      // `totals_reconciled` flag goes with it (the validate seam below recomputes it). Export is excluded
-      // by construction (`runInvoiceCsvExport` is never imported).
+      // by an outdated extractor (`isInvoiceStale`: NULL or a lower version): a since-fixed parser bug must
+      // not keep serving mis-read figures. A re-extract REPLACES the stale invoice in place
+      // (`replaceExisting`) — the old `totals_reconciled` flag goes with it (the validate seam below
+      // recomputes it). A NEWER version's invoice is never re-extracted (G-34 (a)): it is not stale, and the
+      // engine's guard stops the re-extract of a document that holds one anywhere (it returns the stored).
+      // Export is excluded by construction (`runInvoiceCsvExport` is never imported).
       let invoiceId = latestInvoiceId(db, target.id)
       if (!invoiceId || isInvoiceStale(db, invoiceId)) {
         const extraction = await runInvoiceExtraction(db, args, { ...deps, replaceExisting: true })
@@ -665,6 +669,10 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         }
         invoiceId = extraction.invoiceId
       }
+
+      // G-34 (a) (frozen): a document holding ANY newer version's invoice is never read again by this build,
+      // the glyph-soup retry below included (asked per document, like the engine's guard).
+      const newerExtraction = isInvoiceExtractionNewer(db, target.id)
 
       // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
       // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
@@ -679,9 +687,13 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       // promoted to 'suspect-confirmed' so no later turn retries again (one geometry pass is final).
       // ONE projection for the three provenance columns (P-5); re-read only when the geometry retry
       // REPLACES the row below. `dateOrderInferred`/`droppedRowCount` are consumed after the retry settles.
+      // Never on a document holding a newer version's reading (G-34 (a)): the retry would replace its rows,
+      // and could write 'suspect-confirmed' over its stored verdict, which is served as it is. This build
+      // hedges only on exactly 'suspect' and 'suspect-confirmed' (`loadInvoiceMeta`); any other stored value
+      // reads as normal text (T2.13 review M-3).
       let meta = loadInvoiceMeta(db, invoiceId)
       let textQuality = meta.textQuality
-      if (textQuality === 'suspect' && ctx.readDocumentSegments) {
+      if (textQuality === 'suspect' && ctx.readDocumentSegments && !newerExtraction) {
         const retry = await runInvoiceExtraction(db, args, {
           ...deps,
           readDocumentSegments: (id) => ctx.readDocumentSegments!(id, { layout: true }),
@@ -711,6 +723,15 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         }
       }
       const lowTextQuality = textQuality !== null
+
+      // G-34 (a) (frozen): when the invoice whose figures are shown (`invoiceId`, after any retry) is a newer
+      // version's reading, every answer below that shows them ends with C08 as its LAST line, after a blank
+      // line and after the text-quality caveat, built with `ctx.tr` like the answer's other lines (T2.13
+      // D-3): the format answer, the template (the empty one included) and the grounded-data postscript. The
+      // note follows the row shown, not the document (T2.13 review M-1). The unreadable-layout refusal and
+      // the fall-throughs never carry it.
+      const newerNote = isInvoiceNewer(db, invoiceId) ? ctx.tr('analysis.newerExtractorNote') : null
+      const withNewerNote = (answer: string): string => (newerNote ? `${answer}\n\n${newerNote}` : answer)
 
       // A machine-FORMAT request ("als JSON"/"as CSV"/"xml") is answered by SERIALIZING the already-
       // extracted invoice — deterministic, 0 model calls, no reconciliation needed. Guarded to a
@@ -772,9 +793,9 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         if (!(previous !== null && previous.includes(formatAnswer))) {
           return {
             // P3: reconciled-but-soupy text still hedges (the gate above already refused the bad case).
-            answer: lowTextQuality
-              ? `${formatAnswer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}`
-              : formatAnswer,
+            answer: withNewerNote(
+              lowTextQuality ? `${formatAnswer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}` : formatAnswer
+            ),
             citations: buildInvoiceCitations(db, target.id, target.title),
             coverage: computeCoverage(db, target.id)
           }
@@ -809,7 +830,7 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
         const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation, dateOrderInferred, droppedRowCount })
         return {
           // P3: reconciled-but-soupy text hedges the template too.
-          answer: lowTextQuality ? `${answer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}` : answer,
+          answer: withNewerNote(lowTextQuality ? `${answer}\n\n${ctx.tr('skills.invoiceAnalysis.textQualityCaveat')}` : answer),
           citations,
           coverage
         }
@@ -828,6 +849,7 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.invoiceAnalysis.dateOrderCaveat'))
       // P3: reconciled-but-soupy text hedges the grounded-data answer beneath the echo.
       if (lowTextQuality) postscriptParts.push(ctx.tr('skills.invoiceAnalysis.textQualityCaveat'))
+      if (newerNote) postscriptParts.push(newerNote) // G-34 (a): C08 is the last part, so the last line
       return {
         answer: '',
         mode: 'grounded-data',

@@ -150,6 +150,14 @@ export function registerSkillsIpc(ctx: AppContext): void {
     appVersion
   })
 
+  // W-65 (app-update wave, T2.14 fix round 2, review R2-3): an unavailable row whose folder now holds a skill made for a
+  // newer version says so (the Skills tab shows "Needs newer app", not "Files missing"). The registry's last reconcile
+  // knows which rows; nothing is stored. Every handler that answers a SkillInfo goes through this.
+  const withReason = (info: SkillInfo): SkillInfo => {
+    const reason = info.unavailable ? ctx.skills!.unavailableReason(info.installId) : null
+    return reason ? { ...info, unavailableReason: reason } : info
+  }
+
   ipcHandle(IPC.listSkills, (): SkillInfo[] => {
     requireUnlocked()
     // ctx.skills.list() reconciles disk→DB once per app process, on the first read after the first
@@ -159,13 +167,13 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // Count declared ids in one pass so duplicateId is O(n), not O(n²).
     const idCounts = new Map<string, number>()
     for (const r of records) idCounts.set(r.id, (idCounts.get(r.id) ?? 0) + 1)
-    return records.map((r) => recordToInfo(r, (idCounts.get(r.id) ?? 0) > 1, appVersion))
+    return records.map((r) => withReason(recordToInfo(r, (idCounts.get(r.id) ?? 0) > 1, appVersion)))
   })
 
   ipcHandle(IPC.getSkill, (_e, installId: string): SkillInfo | null => {
     requireUnlocked()
     const record = ctx.skills!.get(installId)
-    return record ? skillInfo(ctx.db, record, appVersion) : null
+    return record ? withReason(skillInfo(ctx.db, record, appVersion)) : null
   })
 
   // Deterministic skill suggestion for the composer picker (skills plan §10.2/§16, S8). Scope is
@@ -316,7 +324,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     }
     ctx.audit?.('skill_enabled', 'Skill enabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated, appVersion)
+    return withReason(skillInfo(ctx.db, updated, appVersion))
   })
 
   ipcHandle(IPC.disableSkill, (_e, installId: string): SkillInfo => {
@@ -327,7 +335,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     setSkillEnabled(ctx.db, installId, false, undefined, 'user')
     ctx.audit?.('skill_disabled', 'Skill disabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated, appVersion)
+    return withReason(skillInfo(ctx.db, updated, appVersion))
   })
 
   // SKA-32 (audit 2026-07-03, U7): the structural summary of the last reconcile's discovery errors —
@@ -352,7 +360,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
       installId
     )
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated, appVersion)
+    return withReason(skillInfo(ctx.db, updated, appVersion))
   })
 
   // ---- Tier-2 app-orchestrated tool runs (skills plan §6/§12.2/§16, S11b) -------------------------

@@ -1,0 +1,20 @@
+id: g23-l14-newer-display-only
+display_name: Golden g23-l14-newer-display-only
+family: golden
+role: hologram
+license: apache-2.0
+size_on_disk_gb: lots
+recommended_min_ram_gb: 1
+recommended_ram_gb: 1
+recommended_context_tokens: 2048
+local_path: models/chat/g23-l14-newer-display-only.gguf
+download:
+  url: https://example.invalid/g23-l14-newer-display-only.gguf
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 9
+  license_url: https://example.invalid/LICENSE
+license_review:
+  status: approved
+  reviewed_by: golden
+  reviewed_at: '2026-11-25'
+  notes: T2.10 reader golden

@@ -1,6 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { validateManifest, isRealSha256, manifestNeedsNewerApp } from '../../src/shared/manifest'
+import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, relative, sep } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import {
+  validateManifest,
+  isRealSha256,
+  manifestNeedsNewerApp,
+  pickManifestForRole,
+  type ModelManifest,
+  type ModelRole
+} from '../../src/shared/manifest'
+import { discoverManifests, setManifestAppVersion } from '../../src/main/services/models'
 import { rawManifest } from '../helpers/manifest-fixtures'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 
 describe('validateManifest', () => {
   it('accepts a well-formed manifest and camelCases fields', () => {
@@ -893,6 +906,121 @@ describe('manifestNeedsNewerApp — the (a+) comparator (#847)', () => {
     for (const app of ['0.1.65', '', 'junk']) {
       expect(manifestNeedsNewerApp({}, app)).toBe(false)
       expect(manifestNeedsNewerApp({ min_app_version: null }, app)).toBe(false)
+    }
+  })
+})
+
+// App-update wave T2.10 (W-62, F-23): release 1 is the oldest reader of every manifest a later release puts on a drive,
+// for ever. The golden set `tests/fixtures/readers/f23-manifests/` holds files written from the contract, and
+// `verdicts.json` says what release 1 does with each: accepts, lists ("Needs a newer HilbertRaum"), drops (logged) or
+// ignores (never reads). The verdicts are data: these rows only compare them with what the real walk does. A later
+// release may add files and lines, never change one (`golden-fixtures.sha256` locks the bytes).
+type F23Verdict = 'accepts' | 'lists' | 'drops' | 'ignores'
+interface F23Data {
+  appVersion: string
+  appVersions: string[]
+  single: { dir: string; files: Array<{ file: string; id?: string; verdict: F23Verdict; at?: Record<string, F23Verdict>; sameAs?: string }> }
+  /** Files whose bytes are no plain LF text (CRLF, a byte-order mark), held as base64 (T2.10 round 2). */
+  escaped: Array<{ file: string; base64: string; id: string; verdict: F23Verdict; at?: Record<string, F23Verdict> }>
+  scenarios: Array<{
+    dir: string
+    usable: Array<{ id: string; file: string }>
+    newer: Array<{ id: string; file: string }>
+    dropped: string[]
+    pick?: Partial<Record<ModelRole, string>>
+  }>
+}
+
+describe('F-23 golden manifests: what release 1 accepts, lists, drops and ignores (T2.10, W-62)', () => {
+  const SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f23-manifests')
+  const data = JSON.parse(readFileSync(join(SET, 'verdicts.json'), 'utf8')) as F23Data
+  /** The walk at `appVersion` (main sets it once from `app.getVersion()`; '' is an app that does not know its version). */
+  const discoverAt = (dir: string, appVersion: string): ReturnType<typeof discoverManifests> => {
+    setManifestAppVersion(appVersion)
+    try {
+      return discoverManifests(dir)
+    } finally {
+      setManifestAppVersion('')
+    }
+  }
+  /** Every file under `dir`, `/`-separated and relative. */
+  const filesOf = (dir: string, prefix = ''): string[] =>
+    readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? filesOf(dir, `${prefix}${e.name}/`) : [`${prefix}${e.name}`]
+    )
+  /** What one walk of `dir` made of each file in it. */
+  function verdictsOf(dir: string, res: ReturnType<typeof discoverManifests>): Record<string, F23Verdict> {
+    const full = (file: string): string => join(dir, ...file.split('/'))
+    return Object.fromEntries(
+      filesOf(dir).map((file): [string, F23Verdict] => {
+        if (res.manifests.some((m) => m.sourceFile === full(file))) return [file, 'accepts']
+        if (res.unsupported.some((u) => u.sourceFile === full(file))) return [file, 'lists']
+        if (res.errors.some((e) => e.startsWith(`${full(file)}: `))) return [file, 'drops']
+        return [file, 'ignores']
+      })
+    )
+  }
+
+  it('the set covers each verdict and every file in its folder has one', () => {
+    const dir = join(SET, data.single.dir)
+    expect(data.single.files.map((f) => f.file).sort()).toEqual(filesOf(dir).sort())
+    expect(new Set(data.single.files.map((f) => f.verdict))).toEqual(new Set(['accepts', 'lists', 'drops', 'ignores']))
+  })
+
+  it.each(data.appVersions.map((v) => [JSON.stringify(v), v] as const))('each file of the single set, at app version %s', (_label, appVersion) => {
+    const dir = join(SET, data.single.dir)
+    const res = discoverAt(dir, appVersion)
+    const expected = Object.fromEntries(data.single.files.map((f) => [f.file, f.at?.[appVersion] ?? f.verdict]))
+    expect(verdictsOf(dir, res)).toEqual(expected)
+    // A file that is used or listed is so under its own id.
+    for (const f of data.single.files.filter((x) => x.id !== undefined)) {
+      const found = [...res.manifests.map((m) => [m.sourceFile, m.manifest.id]), ...res.unsupported.map((u) => [u.sourceFile, u.manifest.id])]
+      const entry = found.find(([source]) => source === join(dir, f.file))
+      if (entry) expect(entry[1], f.file).toBe(f.id)
+    }
+  })
+
+  // Round 2: the bytes of a manifest a later release saved on Windows (CRLF) or with a byte-order mark. They go into a temp
+  // copy of the single set, so they are judged in the same walk as every other file.
+  it.each(data.appVersions.map((v) => [JSON.stringify(v), v] as const))('each file held escaped, in a copy of the single set, at app version %s', (_label, appVersion) => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-f23-escaped-'))
+    cpSync(join(SET, data.single.dir), dir, { recursive: true })
+    for (const e of data.escaped) writeFileSync(join(dir, e.file), Buffer.from(e.base64, 'base64'))
+    const res = discoverAt(dir, appVersion)
+    const verdicts = verdictsOf(dir, res)
+    expect(Object.fromEntries(data.escaped.map((e) => [e.file, verdicts[e.file]]))).toEqual(
+      Object.fromEntries(data.escaped.map((e) => [e.file, e.at?.[appVersion] ?? e.verdict]))
+    )
+    const ids = new Map<string, string>([
+      ...res.manifests.map((m): [string, string] => [m.sourceFile, m.manifest.id]),
+      ...res.unsupported.map((u): [string, string] => [u.sourceFile, u.manifest.id])
+    ])
+    for (const e of data.escaped) if (ids.has(join(dir, e.file))) expect(ids.get(join(dir, e.file)), e.file).toBe(e.id)
+  })
+
+  it('unknown keys change nothing: a file that holds them reads exactly as its twin without them (identity aside)', () => {
+    const dir = join(SET, data.single.dir)
+    const pairs = data.single.files.filter((f) => f.sameAs !== undefined)
+    expect(pairs.length).toBeGreaterThan(0)
+    const read = (file: string): Record<string, unknown> => {
+      const res = validateManifest(parseYaml(readFileSync(join(dir, file), 'utf8')))
+      expect(res.errors, file).toEqual([])
+      const { id: _id, displayName: _name, ...rest } = res.manifest as ModelManifest
+      return rest
+    }
+    for (const f of pairs) expect(read(f.file), f.file).toEqual(read(f.sameAs as string))
+  })
+
+  it.each(data.scenarios.map((s) => [s.dir, s] as const))('scenario %s: the usable list, the newer list, what is dropped and the role pick', (_dir, s) => {
+    const dir = join(SET, 'scenarios', s.dir)
+    const res = discoverAt(dir, data.appVersion)
+    const rel = (file: string): string => relative(dir, file).split(sep).join('/')
+    expect(res.manifests.map((m) => ({ id: m.manifest.id, file: rel(m.sourceFile) }))).toEqual(s.usable)
+    expect(res.unsupported.map((u) => ({ id: u.manifest.id, file: rel(u.sourceFile) }))).toEqual(s.newer)
+    const verdicts = verdictsOf(dir, res)
+    expect(Object.keys(verdicts).filter((file) => verdicts[file] === 'drops').sort()).toEqual([...s.dropped].sort())
+    for (const [role, id] of Object.entries(s.pick ?? {})) {
+      expect(pickManifestForRole(res.manifests.map((m) => m.manifest), role as ModelRole)?.id, role).toBe(id)
     }
   })
 })

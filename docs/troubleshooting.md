@@ -201,6 +201,12 @@ and tested with. It still works; the update brings it to the version the app exp
   engine**): the app first puts the new copy in place, so nothing is lost; restarting the app does
   the same. If the other program still holds the folder, the app says so again and changes nothing;
   wait a little longer, or restart the computer. If it keeps happening, see whether your antivirus program reports the engine's files.
+- **No AI engine after an update was cut short, on a drive that cannot be written:** when an update
+  of the engine was interrupted (the app closed or the drive was pulled) and the drive is now
+  write-protected, or another program holds the engine's folder at that moment, the app cannot finish
+  the swap at its start and that session has no AI engine. Make the drive writable (some USB sticks and
+  SD cards have a lock switch), close the other program, then start again: the next start finishes the
+  swap.
 - **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
   running. Wait until it has finished, then choose Update again.
 - **The button is greyed out:** like every download, the update needs **Allow internet access…** in
@@ -328,6 +334,16 @@ scripts/verify-models.sh --target /Volumes/HILBERTRAUM   # macOS/Linux
 On a developer drive, unverified models are allowed; a commercial drive requires a matching
 checksum.
 
+**If the verifier prints `SKIP   <id>: needs a newer HilbertRaum (…)`**, that model's manifest is for
+a newer version than the app in your copy of the scripts (an unknown `role`, a `min_app_version`
+above it, or a `min_app_version` that is no plain version, which is skipped the same way; the bracket
+says which, and for a `min_app_version` also the version it compared with). The app lists such a model under
+"Needs a newer HilbertRaum" and never runs it, so the verifier checks none of its files and leaves it
+out of `config/checksums.json`; its summary says how many it skipped. With `--kit` (`-Kit`) any skip
+fails the check: a Kit ships only manifests its own app can use. `fetch-models` skips the same
+manifests, counts them in its summary line (`| for a newer HilbertRaum <n>`), and stops with "needs a
+newer HilbertRaum: nothing to fetch" when `--only` names a model only such a manifest carries.
+
 **If the card says "No checksum" instead**, nothing is wrong with the file: the model's manifest
 has a placeholder in place of a real checksum, as a model you add yourself does until you capture
 its hash. There is no Download button, because a new copy cannot give the manifest a checksum. To
@@ -427,14 +443,18 @@ What to do:
   proves what happened, and your imported documents' encrypted copies under
   `workspace/documents/` may be individually recoverable.
 
+<!-- Maintainer note (app-update wave, P2): "install the newer version from an update file" in this paragraph is
+     the copy release 1 will show; the "Install update from a file…" button it leads to lands with P6, so on this
+     branch it is not built yet (T6.6 and T6.D check this entry against the built button). -->
 Never run two copies of the app at the same time against the same drive. Versions 0.1.59 and
 newer refuse a second instance on their own — but an older copy takes no such lock, so that
 protection only holds when **both** copies are 0.1.59 or newer. When upgrading, quit the old
 version, delete its app file from the drive, and only then start the new one (see "Two app
-versions on the drive" below). If the app says **"This workspace was written by a newer
-HilbertRaum — update the app to open it."**, you started an older copy on a workspace a newer copy has
-already opened: nothing was changed — update (or start the newer copy) and the workspace opens
-normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway. The
+versions on the drive" below). If the app says **"This workspace was last used with a newer version
+of HilbertRaum, so this version can’t open it. Your workspace is unchanged. …"**, you started an
+older copy on a workspace a newer copy has already opened: nothing was changed. Start the newer copy
+(put its app back on the drive in place of this one), or install the newer version from an update
+file as the message says, and the workspace opens normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway. The
 same message also covers the encrypted workspace's own files (issue #845): its
 `config/workspace.json` or its encrypted data in a format a newer copy wrote. The unlock screen
 shows it whatever password you type, because the older copy cannot check a password in a format
@@ -453,6 +473,32 @@ file (the newer copy already opened and locked the workspace since), the older c
 workspace without the message, leaves the file as it is and notes it in the diagnostics log. It is
 still your workspace's data, not encrypted: the newer copy removes it at its next unlock, and this
 copy replaces it if a later lock fails.
+
+---
+
+## The unlock screen says this version can't read the workspace
+
+The message starts **"Your password is correct, but this version of HilbertRaum can’t read the
+workspace."** The password is right. This version could not read the layout of the workspace's
+database, which is what happens when a newer version of HilbertRaum last used it and changed that
+layout: this version is older than the workspace. Nothing was changed: the encrypted workspace and its
+key file are as they were.
+
+What to do:
+
+<!-- Maintainer note (app-update wave, P2): "Install update from a file…" is the copy release 1 will show; the
+     button lands with P6, so on this branch it is not built yet (T6.6 and T6.D check this entry against it). -->
+- **A newer version was used on this drive** (another computer's copy, or before a "Go back"): open
+  the workspace with that newer version. Install it from an update file (**Install update from a
+  file…**, as the message says), or put that version's app back on the drive in place of this one
+  (never both side by side, see "Two app versions on the drive" below). It opens the workspace
+  normally.
+- **No newer version was ever used on this drive:** the workspace's database may be damaged instead.
+  Do not create a new workspace and do not delete anything: **keep the files as they are**. Quit the
+  app, copy the whole `workspace/` and `config/` folders somewhere safe, then restore the workspace
+  from a backup, as for "the workspace data on the drive is damaged" above.
+
+This message is shown only on the unlock screen, never when you create a workspace.
 
 ---
 
@@ -678,6 +724,27 @@ HilbertRaum to get the create step back: until then every unlock says "Could not
 
 ---
 
+## Files named `….quarantine` in the workspace folder
+
+`workspace/hilbertraum.sqlite.quarantine` (with `-wal`, `-shm` or `-journal` files of the same name
+beside it), or
+`hilbertraum.sqlite.recovery.quarantine`, or the same names ending `-1`, `-2` and so on, were set aside
+when a workspace was created on this drive. There was no workspace yet, but a database file from an
+earlier one (or one a person or another program left there) was in the workspace folder, and the app
+creates a new workspace only from scratch: it moved those files aside instead of using them, and never
+writes over one it set aside before.
+
+**Keep them unless you are sure you don't need them.** They may be the only copy of an earlier
+workspace on this drive: its chats, documents and settings. They do no harm where they are: your
+current workspace does not use them, and nothing in HilbertRaum reads or removes them.
+
+**These files are not encrypted**, so anyone with the drive can read them. To keep the data safe,
+copy them all together somewhere you trust (an SQLite tool opens the `.quarantine` file, with the
+`-wal`, `-shm` and `-journal` files beside it). Only if you are sure you will never need that data, quit HilbertRaum and delete them from
+the `workspace/` folder. Deleting is permanent: the app keeps no other copy.
+
+---
+
 ## "Could not open the workspace yet: another program is holding a recovery file"
 
 You see this on the unlock screen when a previous session's lock did not finish (see "Could
@@ -703,6 +770,30 @@ The same message also appears when the workspace's encrypted file is missing and
 yet set aside the copy your last session left (see "The encrypted workspace file was missing from
 the drive" above), usually because the drive is full or another program is reading the workspace:
 free some space or close that program, then unlock again.
+
+**If it comes back at every unlock, however long you wait,** and your `workspace` folder is a link
+(a junction or a symbolic link) to a folder somewhere else, no program is holding anything. With
+the encrypted file missing and a last session that ended without a lock, the app first has to fold
+that session's last changes (the `hilbertraum.sqlite-wal` file) into the copy it keeps, and it
+never writes through a link before you have typed your password. It keeps all your files as they
+are and refuses to open, at every start and every unlock, until `workspace` is a real folder again
+(see `docs/known-limitations.md`). Your data is safe. To get out of it without changing any file:
+
+1. Quit HilbertRaum.
+2. Copy the folder the link leads to, whole and as it is, to a new folder at the drive's root, for
+   example `workspace-copy`: every file in it (`hilbertraum.sqlite`, `hilbertraum.sqlite-wal`,
+   `hilbertraum.sqlite-shm` and the rest) and its `documents` and `images` folders. Don't open or
+   change any of the files. The drive needs room for the copy.
+3. Remove only the link itself, never the folder it leads to. On Windows, `rmdir workspace` in a
+   Command Prompt at the drive's root removes a junction or a folder link and leaves the folder it
+   leads to alone. On macOS and Linux, `rm workspace` (no slash at the end, no `-r`) removes a
+   symbolic link.
+4. Rename `workspace-copy` to `workspace`, start HilbertRaum and unlock with your usual password.
+   The app keeps the copy and encrypts it again, as "The encrypted workspace file was missing from
+   the drive" above describes.
+5. Leave the folder the link led to as it is until the workspace has opened and you have locked it
+   once. After that it holds an old state of the workspace, **not encrypted**: delete it once you
+   no longer need it.
 
 ---
 

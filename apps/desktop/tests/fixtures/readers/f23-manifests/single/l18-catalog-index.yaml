@@ -1,0 +1,6 @@
+id: g23-l18-catalog-index
+display_name: Catalog index
+min_app_version: 0.2.0
+models:
+  - g23-a01-base
+  - g23-l03-min-above

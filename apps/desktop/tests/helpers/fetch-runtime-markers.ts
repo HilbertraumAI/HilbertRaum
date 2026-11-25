@@ -3,6 +3,9 @@
 // (script-drift.test.ts holds `compareRuntimeVersions` to each row's `order`), so the scripts and the app cannot drift.
 // An engine newer than the pin (installed by a newer app, #516 + #842) is kept unless `-Commercial` (a sold drive
 // carries its app's pin) or `-AllowDowngrade`; an older one, or one neither side can order, is re-fetched as before.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DESKTOP_ROOT } from './repo-files'
 
 export type MarkerFamily = 'llama_cpp' | 'whisper_cpp' | 'kiwix_tools'
 
@@ -48,3 +51,77 @@ export const MARKER_ROWS: readonly MarkerRow[] = [
   { title: 'an upper-case build tag is not a build counter', family: 'llama_cpp', pin: 'b9585', marker: { version: 'B99999', backend: 'vulkan' }, flags: [], order: null, expect: 'refetch' },
   { title: 'a newer cpu/ safety net is kept', family: 'llama_cpp', pin: 'b9585', marker: { version: 'b99999', backend: 'cpu' }, cpuNet: true, flags: [], order: 1, expect: 'skip-newer' }
 ]
+
+// App-update wave T2.10 (W-62, F-24): the golden install markers, the second table beside MARKER_ROWS. Release 1 reads
+// every marker a later release leaves on a drive with three readers: the app's `readRuntimeMarkerState` (and the
+// pre-spawn check built on it) and both `fetch-runtime` twins. `tests/fixtures/readers/f24-markers/vectors.json` holds the
+// vectors with each reader's verdict, written from W-62's lists: assets.test.ts runs the app's readers over them,
+// script-execution.test.ts both twins. A vector's bytes are its `parts` joined; base64 carries the bytes (a NUL, a
+// byte-order mark, a raw control byte) the repo's hygiene nets refuse in a committed text file.
+
+export type MarkerPart = { text: string } | { base64: string } | { repeat: string; times: number }
+export type TwinVerdict = 'skip' | 'keep' | 'refetch'
+export interface MarkerGolden {
+  name: string
+  class: 'accepted' | 'damaged' | 'script-only refusal' | 'absent'
+  parts: MarkerPart[]
+  /** No file at the marker path (round 2). */
+  absent?: true
+  /** A folder at the marker path (round 2). */
+  folder?: true
+  /** Files this vector adds to the copy, name to text, beside the copy's own (round 3: a name holding a comma). */
+  files?: Record<string, string>
+  /** `readRuntimeMarkerState(dir).kind`. */
+  app: 'marker' | 'damaged' | 'absent'
+  /** The marker's own version and backend, when `app` is `marker`. */
+  version?: string
+  backend?: string
+  /** `verifyBinaryBeforeSpawn` for the program, with verification enforced. */
+  preSpawn: 'ok' | 'skip-legacy' | 'marker-damaged' | 'missing' | 'mismatch'
+  /** What a dry run of each twin does with the present copy: read it as the pinned install, or fetch it again. */
+  twins: { default: TwinVerdict; commercial: TwinVerdict }
+  /** The .sh twin's verdict, where it differs from the .ps1 twin's (round 2). */
+  sh?: { default: TwinVerdict; commercial: TwinVerdict }
+  /** The drive's pin for this vector (default: the copy's version). */
+  pin?: string
+  /** `utf8`: the .sh twin runs under a UTF-8 locale for this vector. */
+  shLocale?: 'utf8'
+  why: string
+}
+/** Round 2: the version relation of an installed engine against the pin (F-24). */
+export interface MarkerRelation {
+  name: string
+  /** What the copy's marker records; absent: the copy has no marker file (round 3). */
+  marker?: { version: string; backend: string }
+  pin: string
+  /** `compareRuntimeVersions(marker.version, pin)`; absent with no marker, which has no version to order. */
+  order?: -1 | 0 | 1 | null
+  /** `runtimeInstallRelation`. */
+  relation: 'older' | 'current' | 'newer' | 'unknown'
+  /** `runtimeInstallCurrent` (the install skip: version and backend equal). */
+  installCurrent: boolean
+  /** The twins on a drive pinned to `pin` (the copy's backend) holding the copy with that marker. */
+  twins: { default: TwinVerdict; commercial: TwinVerdict }
+  why: string
+}
+export interface MarkerGoldenSet {
+  /** The engine copy every vector is the marker of: its pin fields and its files' bytes. */
+  copy: { family: 'llama_cpp'; version: string; backend: string; os: 'win'; arch: string; extractTo: string; files: Record<string, string>; sha256: Record<string, string> }
+  /** What every writer records for `copy`. */
+  record: { version: string; backend: string; os: string; arch: string; binaries: Record<string, string> }
+  vectors: MarkerGolden[]
+  relations: MarkerRelation[]
+}
+
+export const MARKER_GOLDENS: MarkerGoldenSet = JSON.parse(
+  readFileSync(join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f24-markers', 'vectors.json'), 'utf8')
+) as MarkerGoldenSet
+
+/** A golden vector's bytes. */
+export function markerBytes(vector: MarkerGolden): Buffer {
+  return Buffer.concat(
+    vector.parts.map((part) =>
+      'text' in part ? Buffer.from(part.text, 'utf8') : 'base64' in part ? Buffer.from(part.base64, 'base64') : Buffer.from(part.repeat.repeat(part.times), 'utf8')
+    )
+  )
+}

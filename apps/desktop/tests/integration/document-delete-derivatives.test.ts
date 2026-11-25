@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -38,6 +38,7 @@ import type { SkillToolAudit } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
+import { FOLDER_LINKS, unlinkFolder } from '../helpers/folder-links'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -242,6 +243,50 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
     const runs = (db.prepare('SELECT COUNT(*) n FROM skill_runs').get() as { n: number }).n
     expect(runs).toBeGreaterThan(0)
   })
+
+  // T2.7 security fix round (F-3, FU-P2-6): the delete shreds the copy `locateStoredCopy` finds, which falls back to the
+  // recorded `stored_path` verbatim when the store holds no copy under the row's own name. A row naming a file outside the
+  // store (a later version's, a cloned drive's, or one in a database the app did not make) had that file shredded. Now only
+  // a file inside the store folder is shredded; the row goes, and a file elsewhere stays.
+  it('a row whose stored_path names a file outside the store: the row goes, the file stays byte for byte (F-3)', () => {
+    const db = freshDb()
+    const store = mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-store-'))
+    const victim = join(mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-outside-')), 'thesis.pdf')
+    writeFileSync(victim, 'USER FILE: the thesis')
+    const { docId } = seedDoc(db, { chunks: ['chunk a'], storedPath: victim })
+
+    expect(() => deleteDocument(db, store, docId)).not.toThrow()
+
+    expect(derivedCounts(db, docId)).toMatchObject({ documents: 0, chunks: 0 })
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: the thesis')
+  })
+
+  // T2.7 security re-check 1 (N-2): the guard above compared the store folder with itself, so with `documents/` a link
+  // to a folder elsewhere every file there passed. Containment is judged from the workspace folder now, as the start's
+  // sweep judges a store (T2.9 R2-3): behind a linked store folder nothing is shredded. The cost, recorded: a store a
+  // user keeps behind a link of their own keeps a deleted document's encrypted copy.
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the store folder ${label} to a folder elsewhere: a delete shreds nothing behind it, the row goes (N-2)`, () => {
+      const db = freshDb()
+      const ws = mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-ws-'))
+      const elsewhere = mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-elsewhere-'))
+      const store = join(ws, 'documents')
+      make(elsewhere, store)
+      try {
+        const { docId } = seedDoc(db, { chunks: ['chunk a'] })
+        const victim = join(elsewhere, `${docId}.pdf.enc`) // the row's own canonical name, behind the link
+        writeFileSync(victim, 'USER FILE: behind the link')
+        db.prepare('UPDATE documents SET stored_name = ? WHERE id = ?').run(`${docId}.pdf.enc`, docId)
+
+        expect(() => deleteDocument(db, store, docId)).not.toThrow()
+
+        expect(derivedCounts(db, docId)).toMatchObject({ documents: 0, chunks: 0 })
+        expect(readFileSync(victim, 'utf8')).toBe('USER FILE: behind the link')
+      } finally {
+        unlinkFolder(store)
+      }
+    })
+  }
 
   it('TEETH: without the ordered cleanup, the un-cascaded FK blocks the delete (the bug DATA-1 closes)', async () => {
     const db = freshDb()

@@ -923,6 +923,9 @@ export const fr: UiCatalog<'fr'> = {
     '**À noter\u00A0:** ce document était trop long pour être lu en entier, cette réponse n’en ' +
     'couvre donc que le début. Pour vérifier un point situé plus loin dans le document, posez ' +
     'directement la question sur ce détail.',
+  'analysis.newerExtractorNote':
+    '_Ces chiffres ont été lus par une version plus récente de HilbertRaum et sont affichés tels que ' +
+    'la version plus récente les a lus._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'J’ai lu le relevé en entier. Transactions\u00A0: **{count}**.',
   'skills.bankAnalysis.countPartial':
@@ -1205,8 +1208,8 @@ export const fr: UiCatalog<'fr'> = {
   'models.newerApp.heading': 'Nécessite une version plus récente de HilbertRaum',
   'models.newerApp.badge': 'Mise à jour requise',
   'models.newerApp.hint':
-    'Ce modèle est destiné à une version plus récente de HilbertRaum. Mettez l’application à jour ' +
-    'sur cet ordinateur pour l’utiliser.',
+    'Ce modèle nécessite une version plus récente de HilbertRaum. Pour l’utiliser, installez la mise ' +
+    'à jour dans Paramètres → Mises à jour.',
   'models.library.memory': 'Mémoire minimale\u00A0: {size}',
   'models.library.clear': 'Effacer les filtres',
   'models.library.showVariants': 'Afficher toutes les variantes ({count})',
@@ -1740,6 +1743,15 @@ export const fr: UiCatalog<'fr'> = {
   'skills.reconcile.folderErrors.other':
     '{count} dossiers de compétences n’ont pas pu être lus et sont ignorés. Chaque dossier doit ' +
     'contenir un fichier «\u00A0SKILL.md\u00A0» valide.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} compétence sur ce disque a été créée pour une version plus récente de HilbertRaum et ' +
+    'est ignorée. Pour l’utiliser, installez la mise à jour dans Paramètres → Mises à jour.',
+  'skills.reconcile.needsNewerApp.many':
+    '{count} compétences sur ce disque ont été créées pour une version plus récente de HilbertRaum ' +
+    'et sont ignorées. Pour les utiliser, installez la mise à jour dans Paramètres → Mises à jour.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} compétences sur ce disque ont été créées pour une version plus récente de HilbertRaum ' +
+    'et sont ignorées. Pour les utiliser, installez la mise à jour dans Paramètres → Mises à jour.',
   'skills.empty.title': 'Aucune compétence pour l’instant',
   'skills.empty.line':
     'Les compétences apprennent à l’assistant à effectuer une tâche précise. Ajoutez-en une pour ' +
@@ -1758,8 +1770,8 @@ export const fr: UiCatalog<'fr'> = {
   'skills.unavailable.title': 'Les fichiers de cette compétence ne sont plus sur le disque.',
   'skills.incompatible.chip': 'Mise à jour requise',
   'skills.incompatible.title':
-    'Cette compétence nécessite une version plus récente de l’application\u00A0: mettez ' +
-    'l’application à jour pour l’activer.',
+    'Cette compétence nécessite une version plus récente de HilbertRaum. Pour l’utiliser, installez ' +
+    'la mise à jour dans Paramètres → Mises à jour.',
   'skills.review.chip': 'À vérifier',
   'skills.warn.title': 'Vérifiez ce que cette compétence peut faire',
   'skills.warn.body':
@@ -1785,8 +1797,8 @@ export const fr: UiCatalog<'fr'> = {
   'skills.kind.instruction': 'Indications',
   'skills.kind.tool': 'Utilise des outils',
   'skills.tool.note':
-    'Pour l’instant, cette compétence ajoute uniquement des indications. Les outils qu’elle ' +
-    'décrit arriveront dans une version ultérieure.',
+    'Cette compétence ajoute uniquement des indications. Cette version de HilbertRaum n’exécute pas ' +
+    'les outils décrits par la compétence.',
   'skills.tool.note.active':
     'À votre demande, cette compétence peut exécuter des outils locaux approuvés sur un document ' +
     'que vous choisissez. Les outils en lecture seule peuvent aussi s’exécuter automatiquement ' +
@@ -1883,8 +1895,8 @@ export const fr: UiCatalog<'fr'> = {
     'Le champ «\u00A0language\u00A0» ne contient pas de code de langue valide\u00A0; ' +
     '«\u00A0en\u00A0» est utilisé.',
   'skills.import.note.allowedToolsIgnored':
-    'Les outils déclarés sont ignorés pour une compétence de type «\u00A0Indications\u00A0» (les ' +
-    'outils arriveront dans une version ultérieure).',
+    'Les outils déclarés sont ignorés pour une compétence de type «\u00A0Indications\u00A0» (cette ' +
+    'version de HilbertRaum ne les exécute pas).',
   'skills.import.note.analysisInvalid':
     'Le champ «\u00A0analysis\u00A0» a une valeur inconnue et est ignoré.',
   'skills.import.note.analysisIgnoredForTool':
@@ -2545,6 +2557,9 @@ export const fr: UiCatalog<'fr'> = {
   'common.apply': 'Appliquer',
   'common.labelValue': '{label}\u00A0: {value}',
   'common.percent': '{pct}\u00A0%',
+  'common.newerVersionText':
+    'Ce texte provient d’une version plus récente de HilbertRaum, et cette version ne peut pas ' +
+    'l’afficher.',
   'indicator.offline': 'Local · Hors ligne',
   'indicator.online': 'Local · Téléchargements autorisés',
   'indicator.offlineDetail':
@@ -2810,6 +2825,15 @@ export const fr: UiCatalog<'fr'> = {
     'endommagées et n’ont pas pu être ouvertes. Ressaisir le mot de passe n’y changera rien. Ne ' +
     'créez pas de nouvel espace de travail\u00A0: laissez les fichiers tels quels et restaurez ' +
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
+  'main.workspace.schemaUnreadable':
+    'Votre mot de passe est correct, mais cette version de HilbertRaum ne peut pas lire l’espace de ' +
+    'travail. Cet espace de travail a probablement été utilisé pour la dernière fois avec une ' +
+    'version plus récente. Votre espace de travail n’a pas été modifié. Pour l’ouvrir, installez la ' +
+    'version plus récente\u00A0: choisissez «\u00A0Installer une mise à jour depuis un ' +
+    'fichier…\u00A0». Si vous n’avez pas de fichier de mise à jour pour la version plus récente, ' +
+    'vous pouvez en télécharger un à l’adresse {address}/from/{version}. Si aucune version plus ' +
+    'récente n’a jamais été utilisée sur ce disque, laissez les fichiers tels quels et consultez le ' +
+    'guide de dépannage dans le dossier docs du disque.',
   'main.workspace.vaultMissing':
     'Votre mot de passe est correct, mais le fichier chiffré de l’espace de travail est absent du ' +
     'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
@@ -2839,8 +2863,12 @@ export const fr: UiCatalog<'fr'> = {
     'ouverte sur le dossier «\u00A0workspace\u00A0»), patientez un instant, puis réessayez. Rien ' +
     'n’est perdu.',
   'main.workspace.newer':
-    'Cet espace de travail a été enregistré par une version plus récente de HilbertRaum\u00A0: ' +
-    'mettez l’application à jour pour l’ouvrir. Rien n’a été modifié.',
+    'Cet espace de travail a été utilisé pour la dernière fois avec une version plus récente de ' +
+    'HilbertRaum, c’est pourquoi cette version ne peut pas l’ouvrir. Votre espace de travail n’a pas ' +
+    'été modifié. Pour l’ouvrir, installez la version plus récente\u00A0: choisissez ' +
+    '«\u00A0Installer une mise à jour depuis un fichier…\u00A0». Si vous n’avez pas de fichier de ' +
+    'mise à jour pour la version plus récente, vous pouvez en télécharger un à l’adresse ' +
+    '{address}/from/{version}.',
   'main.workspace.createFailed': 'L’espace de travail n’a pas pu être créé.',
   'main.workspace.passwordTooShort': 'Le mot de passe doit comporter au moins {min} caractères.',
   'main.workspace.exists':
@@ -3288,8 +3316,8 @@ export const fr: UiCatalog<'fr'> = {
   'main.skills.notPicked':
     'Choisissez d’abord le paquet de la compétence à l’aide du sélecteur de fichiers.',
   'main.skills.incompatible':
-    'Cette compétence nécessite une version plus récente de l’application. Mettez l’application ' +
-    'à jour pour l’utiliser.',
+    'Cette compétence nécessite une version plus récente de HilbertRaum. Pour l’utiliser, installez ' +
+    'la mise à jour dans Paramètres → Mises à jour.',
   'main.skills.run.unavailable': 'L’outil de cette compétence n’est pas disponible pour le moment.',
   'main.skills.run.noDocument': 'Ajoutez d’abord un document à cette conversation, puis réessayez.',
   'main.skills.run.busy':
@@ -3421,6 +3449,7 @@ export const fr: UiCatalog<'fr'> = {
   'chat.packs.outcome.disabled': 'non interrogé\u00A0: pack désactivé',
   'chat.packs.outcome.file-missing': 'non interrogé\u00A0: fichier absent',
   'chat.packs.outcome.identity-mismatch': 'non interrogé\u00A0: autre archive à cet emplacement',
+  'chat.packs.outcome.newer-format': 'non interrogé\u00A0: format ZIM plus récent',
   'chat.packs.outcome.not-served': 'non interrogé\u00A0: conflit de nom avec un autre pack',
   'chat.packs.outcome.not-searchable': 'non interrogé\u00A0: pas d’index de recherche plein texte',
   'chat.packs.outcome.tools-missing': 'non interrogé\u00A0: programmes kiwix-tools non installés',
@@ -3520,6 +3549,10 @@ export const fr: UiCatalog<'fr'> = {
     'dossier contient un tréma, un accent ou un autre caractère non ASCII. Copiez le fichier ' +
     'dans le dossier «\u00A0zim/\u00A0» du disque sous un nom sans ces caractères, puis ' +
     'ajoutez-le de nouveau.',
+  'packs.addFailed.newerFormat':
+    'Cette archive utilise un format ZIM plus récent que celui que cette version de HilbertRaum peut ' +
+    'lire. Elle n’a donc pas été ajoutée. Une version plus récente de HilbertRaum pourra peut-être ' +
+    'l’ajouter.',
   'packs.addFailed.other': 'L’archive n’a pas pu être ajoutée.',
   'packs.removedToast': 'Pack de connaissances retiré',
   'packs.articleCount.one': '{count} article',
@@ -3534,6 +3567,11 @@ export const fr: UiCatalog<'fr'> = {
   'packs.state.identityMismatchTitle':
     'Le fichier situé à l’emplacement de ce pack est une autre archive\u00A0: retirez ce pack et ' +
     'ajoutez de nouveau le fichier',
+  'packs.state.newerFormat': 'Format plus récent',
+  'packs.state.newerFormatTitle':
+    'Cette archive utilise un format ZIM plus récent que celui que cette version de HilbertRaum peut ' +
+    'lire. Elle n’est donc pas utilisée. Une version plus récente de HilbertRaum pourra peut-être ' +
+    'l’utiliser.',
   'packs.state.notSearchable': 'Sans index',
   'packs.state.notSearchableTitle':
     'Cette archive n’a pas d’index de recherche plein texte. Elle est ignorée lors des ' +

@@ -10,6 +10,7 @@ import {
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
+  VaultSchemaUnreadableError,
   WorkspaceExistsError,
   WrongPasswordError,
   isVaultNewerError,
@@ -29,6 +30,7 @@ import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import { failureForLog } from '../services/failure-for-log'
+import { workspaceFailureParams } from '../../shared/workspace-failure-keys'
 import { perfMark, perfMs } from '../services/perf'
 import {
   MIN_PASSWORD_LENGTH,
@@ -204,6 +206,18 @@ function logProbeFallbacks(ctx: AppContext): void {
 }
 
 /**
+ * App-update T2.2 (W-9): log each `last_writer` stamp an open could not write; the stamp is best effort, so the workspace
+ * opened as usual. The content-free code only (SQLite's result code and fixed description, a Node error code, or
+ * `no-app-version`), never SQLite's message, which quotes what a planted trigger says and names objects. The controller
+ * keeps the codes until a handler that can log (an unlock, a create, a lock); `main/index.ts` logs the start's.
+ */
+export function logStampFailures(workspace: { takeStampFailures?: () => string[] }): void {
+  for (const code of workspace.takeStampFailures?.() ?? []) {
+    log.warn("The workspace opened, but its database's last-writer stamp could not be written", { code })
+  }
+}
+
+/**
  * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
  * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
  * it, or it came from another workspace), or (#1027) because the workspace file opens under that key too and so holds
@@ -270,11 +284,21 @@ export interface WorkspaceIpcHooks {
    *  never for one that failed or was refused (a step after the open included), nor for an unlock that found it already
    *  open. `index.ts` binds the quit closure's `onWorkspaceUnlocked`. */
   onUnlocked?: () => void
+  /** App-update T2.6: the running app's version (`index.ts` passes `app.getVersion()`; repo-hygiene.test.ts holds the
+   *  call site). It fills the `{version}` of the newer-workspace copy (X01, C01) in main's message, and rides on the
+   *  states the gate is shown (`WorkspaceStateInfo.appVersion`), so the gate fills the same text before any unlock.
+   *  Left out (the test contexts), the copy shows `{version}` as written, in English, and the states carry none. */
+  appVersion?: string
 }
 
 export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks = {}): void {
   const ipcHandle = guardedHandleFor(ctx)
-  ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
+  // The parameters of every failure key, the gate's too (`shared/workspace-failure-keys.ts`).
+  const failureParams = workspaceFailureParams(hooks.appVersion)
+  /** A state the gate is shown, with this version on it (T2.6). */
+  const forGate = (state: WorkspaceStateInfo): WorkspaceStateInfo =>
+    hooks.appVersion === undefined ? state : { ...state, appVersion: hooks.appVersion }
+  ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => forGate(ctx.workspace.getState()))
 
   ipcHandle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
     // The renderer is the untrusted boundary in Electron (M-S2): args are TS-typed but
@@ -310,6 +334,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       }
       logStageOutcome(ctx)
       logProbeFallbacks(ctx)
+      logStampFailures(ctx.workspace)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
@@ -398,6 +423,23 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
           ok: false,
           reason: 'vault_damaged',
           message: tMain('main.workspace.vaultDamaged')
+        }
+      }
+      // W-68 (app-update wave, T2.14): the password verified, but SQLite cannot parse the database's schema ("malformed
+      // database schema"): most likely a newer version's schema text, possibly damage inside the schema itself. Its own
+      // reason and copy (C01: a newer version can open it; if none was ever used here, keep the files and see the
+      // troubleshooting guide), never `vault_damaged`'s "restore from a backup". The log line and the audit line are
+      // fixed words: SQLite's message quotes the schema, and the error keeps none of it. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultSchemaUnreadableError ||
+        (err instanceof Error && err.name === 'VaultSchemaUnreadableError')
+      ) {
+        log.warn('Workspace unlock refused: this version could not read the database schema (password verified)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (database schema unreadable)')
+        return {
+          ok: false,
+          reason: 'workspace_schema_unreadable',
+          message: tMain('main.workspace.schemaUnreadable', failureParams)
         }
       }
       // #844: the password verified and SQLite found a database, but opening it could not finish
@@ -495,25 +537,25 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       }
       // #845: the vault's own format (its descriptor, KDF, `.enc` frame or rekey journal) was written
       // by a NEWER build: refused before the password was checked and before anything was written. The
-      // same reason + copy as #247 (update the app; nothing was changed), with a log line naming the
-      // artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
+      // same reason + copy as #247 (install the newer version; the workspace is unchanged), with a log line naming
+      // the artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
       if (isVaultNewerError(err)) {
         log.warn('Workspace unlock refused: the vault format was written by a newer build', {
           what: err.what,
           found: err.found
         })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
-        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
       }
       // #247: the password verified but the database was written by a NEWER build. Its own
-      // reason + copy (update the app); the vault is untouched and nothing was written.
+      // reason + copy (install the newer version); the vault is untouched and nothing was written.
       if (isWorkspaceNewerError(err)) {
         log.warn('Workspace unlock refused: the database was written by a newer build', {
           found: err.found,
           supported: err.supported
         })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
-        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
       }
       // #956: a file error (a roll-forward or a rekey recovery that cannot write) logs its code and system call, never
       // its message, which names the drive's paths; any other error keeps its message (`failureForLog`).
@@ -557,6 +599,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         // the plain file (`attachLogKey` dispatches on the workspace mode).
         attachLogKey(ctx)
         log.info('Workspace created', { mode })
+        logStampFailures(ctx.workspace)
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
         // Settings are readable now — main-side emissions follow the user's language.
         refreshUiLanguage(ctx)
@@ -586,7 +629,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
             found: err.found,
             supported: err.supported
           })
-          return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
+          return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer', failureParams) }
         }
         // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
         // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
@@ -705,7 +748,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         }
         // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
         // longer the one this session unlocked; nothing was written), reads "change failed, your current
-        // password still works": true, and the gate's "update the app to open it" would be wrong on an
+        // password still works": true, and the gate's "install the newer version" would be wrong on an
         // open workspace. #956: a file error (the descriptor's temp, a document sidecar or a stored copy the rekey
         // stages) logs its code and system call, never its message, which names the path; any other error keeps its
         // message (`failureForLog`).
@@ -734,7 +777,8 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
     // invoke RESOLVES, so the refusal is what the user's next click gets either way.
     ctx.workspace.beginLock()
     try {
-      return await runLockTeardown(ctx)
+      // The locked state is the one the gate shows next (T2.6: with this version on it).
+      return forGate(await runLockTeardown(ctx))
     } catch (err) {
       // AUD-02 — the SINGLE disarm point for every failure path out of the teardown, including
       // the CODE-1a failed re-encrypt below and any throw from a teardown boundary. Arming a
@@ -959,6 +1003,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // (S-5: before, the line named no cause at all). No path, no message of the cause.
     log.error('Workspace lock failed — workspace stays unlocked', failureForLog(err))
     logProbeFallbacks(ctx)
+    logStampFailures(ctx.workspace) // the re-open after a failed lock stamps, often on a full drive
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
@@ -973,6 +1018,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
   }
   logProbeFallbacks(ctx)
+  logStampFailures(ctx.workspace)
   log.info('Workspace locked (sidecars stopped)')
   return state
 }

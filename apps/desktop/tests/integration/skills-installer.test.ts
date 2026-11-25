@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   existsSync,
+  lstatSync,
   symlinkSync
 } from 'node:fs'
 import { join } from 'node:path'
@@ -18,6 +19,7 @@ import {
   importSkill,
   exportSkill,
   deleteSkill,
+  skillInfo,
   SKILL_IMPORT_ERRORS,
   type SkillInstallerDeps
 } from '../../src/main/services/skills/installer'
@@ -567,6 +569,121 @@ describe('duplicate id — coexist with one active (DS12)', () => {
 
 })
 
+// W-65 (T2.14, decision 6): a package whose SKILL.md fails this version's checks but declares a well-formed minimum above
+// the running app was made for a newer version. The preview and the install both answer with the incompatible-skill text
+// (the renderer maps the code to `skills.incompatible.title`), never "The skill manifest is invalid", and nothing is placed.
+// The gate is fail-open: on an app version it cannot read the same package is an invalid manifest.
+describe('a package made for a newer version is refused as such (W-65)', () => {
+  const futureZip = (): Promise<string> =>
+    writeZip([{ name: 'SKILL.md', content: skillMdText({ id: 'from-the-future', kind: 'agent', minAppVersion: '0.2.0' }) }])
+
+  it.each([
+    ['an app below the minimum', '0.1.66', 'needsNewerApp'],
+    ['an unknown app version (fail-open)', '', 'invalidManifest']
+  ] as const)('on %s (app %j) the preview and the install answer %s', async (_name, appVersion, code) => {
+    const db = freshDb()
+    const deps = makeDeps({ appVersion })
+    const zip = await futureZip()
+    const preview = previewSkillPackage(db, zip, deps)
+    expect(preview.ok).toBe(false)
+    expect(preview.errorCodes).toEqual([code])
+    expect(preview.errors).toEqual([SKILL_IMPORT_ERRORS[code]])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS[code])
+    // Nothing placed and no row: the staging dir is gone and the skill never reached the registry.
+    expect(readdirSync(deps.userSkillsDir).filter((n) => !n.startsWith('.'))).toEqual([])
+    expect(getSkillsByDeclaredId(db, 'from-the-future')).toEqual([])
+  })
+})
+
+// App-update T2.7 fix round (R1 MJ-2): the same package used to get two verdicts. Dropped into user-skills/, a skill made
+// for a newer version is `needsNewerApp` whatever else its folder holds (discovery reads SKILL.md only); picked in Settings
+// → Skills, a `.js`, a `.png` or a tree five folders deep made the import say "file type not allowed" or "nests folders
+// more deeply than allowed" first. Now the import reads the package's SKILL.md when one of those two checks fails, and a
+// declared minimum above the app answers `needsNewerApp` (X03) instead. The package is refused either way and nothing is
+// placed: the file-type and depth checks still stand in front of every skill that installs.
+describe('a package made for a newer version gets one verdict, by import and by drop-in (T2.7, R1 MJ-2)', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])
+  interface Pkg {
+    id: string
+    files: Record<string, string | Buffer>
+    /** What the same folder dropped into user-skills/ is at 0.1.66: filed as made for a newer version, or a row the gate keeps off. */
+    dropIn: 'needsNewerApp' | 'incompatible'
+  }
+  const newKind = (id: string): string => skillMdText({ id, kind: 'agent', minAppVersion: '0.2.0' })
+  const PKGS: Array<[string, Pkg]> = [
+    ['a new kind with a .js file', { id: 'newer-js', files: { 'SKILL.md': newKind('newer-js'), 'scripts/run.js': 'run()' }, dropIn: 'needsNewerApp' }],
+    ['a new kind with a .png file', { id: 'newer-png', files: { 'SKILL.md': newKind('newer-png'), 'assets/logo.png': PNG }, dropIn: 'needsNewerApp' }],
+    [
+      'a new kind five folders deep',
+      { id: 'newer-deep', files: { 'SKILL.md': newKind('newer-deep'), 'a/b/c/d/e/notes.md': 'deep' }, dropIn: 'needsNewerApp' }
+    ],
+    [
+      'a kind release 1 knows with a .js file',
+      {
+        id: 'newer-known',
+        files: { 'SKILL.md': skillMdText({ id: 'newer-known', minAppVersion: '0.2.0' }), 'tool.js': 'run()' },
+        dropIn: 'incompatible'
+      }
+    ]
+  ]
+  type Source = 'a zip' | 'a zip with one top folder' | 'a folder'
+  async function packageAt(pkg: Pkg, source: Source): Promise<string> {
+    if (source === 'a folder') {
+      const dir = join(tempDir(), pkg.id)
+      for (const [rel, content] of Object.entries(pkg.files)) {
+        mkdirSync(join(dir, rel, '..'), { recursive: true })
+        writeFileSync(join(dir, rel), content)
+      }
+      return dir
+    }
+    const prefix = source === 'a zip' ? '' : `${pkg.id}/`
+    return writeZip(Object.entries(pkg.files).map(([rel, content]) => ({ name: `${prefix}${rel}`, content })))
+  }
+  const SOURCES: Source[] = ['a zip', 'a zip with one top folder', 'a folder']
+
+  it.each(PKGS.flatMap(([name, pkg]) => SOURCES.map((source) => [name, source, pkg] as const)))(
+    '%s, imported from %s: the preview and the install answer needsNewerApp, nothing placed',
+    async (_name, source, pkg) => {
+      const db = freshDb()
+      const deps = makeDeps({ appVersion: '0.1.66' })
+      const from = await packageAt(pkg, source)
+      const preview = previewSkillPackage(db, from, deps)
+      expect(preview.ok).toBe(false)
+      expect(preview.errorCodes).toEqual(['needsNewerApp'])
+      expect(preview.errors).toEqual([SKILL_IMPORT_ERRORS.needsNewerApp])
+      expect(() => importSkill(db, from, deps)).toThrow(SKILL_IMPORT_ERRORS.needsNewerApp)
+      expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir).filter((n) => !n.startsWith('.')) : []).toEqual([])
+      expect(getSkillsByDeclaredId(db, pkg.id)).toEqual([])
+    }
+  )
+
+  it.each(PKGS)('%s, dropped into user-skills/: made for a newer version there too', (_name, pkg) => {
+    const db = freshDb()
+    const deps = makeDeps({ appVersion: '0.1.66' })
+    for (const [rel, content] of Object.entries(pkg.files)) {
+      mkdirSync(join(deps.userSkillsDir, pkg.id, rel, '..'), { recursive: true })
+      writeFileSync(join(deps.userSkillsDir, pkg.id, rel), content)
+    }
+    const res = reconcileSkills(db, { ...deps, appVersion: '0.1.66' })
+    const row = getSkill(db, skillInstallId('user', pkg.id))
+    if (pkg.dropIn === 'needsNewerApp') {
+      expect(res.errorCodes).toEqual(['needsNewerApp'])
+      expect(row).toBeNull()
+    } else {
+      expect(res.errorCodes).toEqual([])
+      expect(row && skillInfo(db, row, '0.1.66')).toMatchObject({ enabled: false, incompatible: true, minAppVersion: '0.2.0' })
+    }
+  })
+
+  it('on an app version the gate cannot read, the structural reason stands (fail-open, as W-65)', async () => {
+    const db = freshDb()
+    const deps = makeDeps({ appVersion: '' })
+    const zip = await packageAt(PKGS[0][1], 'a zip')
+    expect(previewSkillPackage(db, zip, deps).errorCodes).toEqual(['badExtension'])
+    expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.badExtension)
+  })
+})
+
 describe('downgrade is developer-mode gated (DS15)', () => {
   it('refuses a lower version unless developer mode', async () => {
     const db = freshDb()
@@ -728,6 +845,84 @@ describe('delete — default-clear only, provenance survives (§22-C3 / SKA-38 /
     expect(() => deleteSkill(db, skillInstallId('app', 'shipped'), deps)).toThrow(
       SKILL_IMPORT_ERRORS.appReadOnly
     )
+  })
+})
+
+// App-update T2.7 fix round (R2 M-2): Delete removed `join(user-skills, row.path)` as the row said. Release 1 writes
+// `path` as a folder name and `source` as `app` or `user`; a row a later version wrote is read as stored. So the delete
+// removes files only for a user row whose `path` is a bare folder name that resolves inside `user-skills/`; any other row
+// is removed and every file stays. The user's own skills, their rows, and everything around `user-skills/` survive.
+describe('delete — a row another version wrote never removes more than its own folder (T2.7, R2 M-2)', () => {
+  const T = '2027-01-05T00:00:00.000Z'
+  /** Two user skills of the user's own, a file beside user-skills/, and a folder outside it. */
+  async function world(): Promise<{ db: Db; deps: SkillInstallerDeps; root: string; outside: string }> {
+    const db = freshDb()
+    const deps = makeDeps()
+    importSkill(db, await validZip({ id: 'mine' }), deps)
+    importSkill(db, await validZip({ id: 'other' }), deps)
+    const root = join(deps.userSkillsDir, '..')
+    writeFileSync(join(root, 'beside.txt'), 'kept')
+    const outside = join(root, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'keep.md'), 'kept')
+    return { db, deps, root, outside }
+  }
+  const insertRow = (db: Db, row: { installId: string; source: string; path: string }): void => {
+    db.prepare(
+      `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled, warning_ack, trusted_level,
+         manifest_json, unavailable_at, installed_at, updated_at, disabled_reason)
+       VALUES (?, 'later', 'Later', '2.0.0', 'instruction', ?, ?, 0, 1, ?, '{}', ?, ?, ?, NULL)`
+    ).run(row.installId, row.source, row.path, row.source, T, T, T)
+  }
+  /** Everything a delete of a foreign row must leave: the user's folders and rows, the files around user-skills/. */
+  function expectAllKept(w: { db: Db; deps: SkillInstallerDeps; root: string; outside: string }): void {
+    for (const id of ['mine', 'other']) {
+      expect(existsSync(join(w.deps.userSkillsDir, id, 'SKILL.md')), id).toBe(true)
+      expect(getSkill(w.db, skillInstallId('user', id)), id).not.toBeNull()
+    }
+    expect(readFileSync(join(w.root, 'beside.txt'), 'utf8')).toBe('kept')
+    expect(readFileSync(join(w.outside, 'keep.md'), 'utf8')).toBe('kept')
+  }
+
+  it.each([
+    ['an empty path', ''],
+    ['a path that is one dot', '.'],
+    ['a path that is two dots', '..'],
+    ['a path that climbs out', '../outside'],
+    ['a path with a separator', 'mine/sub']
+  ])('%s: the row goes, every file stays', async (_name, path) => {
+    const w = await world()
+    mkdirSync(join(w.deps.userSkillsDir, 'mine', 'sub'))
+    writeFileSync(join(w.deps.userSkillsDir, 'mine', 'sub', 'notes.md'), 'kept')
+    insertRow(w.db, { installId: 'user:later', source: 'user', path })
+    expect(deleteSkill(w.db, 'user:later', w.deps)).toEqual({ deleted: true })
+    expect(getSkill(w.db, 'user:later')).toBeNull()
+    expectAllKept(w)
+    expect(existsSync(join(w.deps.userSkillsDir, 'mine', 'sub', 'notes.md'))).toBe(true)
+  })
+
+  it('a folder that is a link to a folder elsewhere: the row goes, the link and what it reaches stay', async (ctx) => {
+    const w = await world()
+    const link = join(w.deps.userSkillsDir, 'linked')
+    try {
+      symlinkSync(w.outside, link, 'junction') // a junction needs no privilege on Windows; a plain link elsewhere
+    } catch {
+      ctx.skip()
+      return
+    }
+    insertRow(w.db, { installId: 'user:linked', source: 'user', path: 'linked' })
+    expect(deleteSkill(w.db, 'user:linked', w.deps)).toEqual({ deleted: true })
+    expect(getSkill(w.db, 'user:linked')).toBeNull()
+    expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    expectAllKept(w)
+  })
+
+  it('a source value release 1 does not know: the row goes, the user folder of that name and its row stay', async () => {
+    const w = await world()
+    insertRow(w.db, { installId: 'bundled:mine', source: 'bundled', path: 'mine' })
+    expect(deleteSkill(w.db, 'bundled:mine', w.deps)).toEqual({ deleted: true })
+    expect(getSkill(w.db, 'bundled:mine')).toBeNull()
+    expectAllKept(w)
   })
 })
 

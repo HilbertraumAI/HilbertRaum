@@ -27,6 +27,25 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-25 — BUILD_STATE §5 item 14 retired verbatim (§5 budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-25 (§5 budget, making room for the app-update wave's frozen-file list in §5
+item 3). The round it records closed on 2026-07-17 and nothing in it is still open; its ledger is unchanged:
+`docs/architecture.md` §50 (its wave narrative is further down, under "BUILD_STATE §5 items 11–14"). §5 keeps item 14 as
+a pointer under the same number. Citations of this item's full text now resolve here. Text below is byte-identical to
+what was removed, except that its two relative links are de-linkified like the rest of this file.
+
+14. **Full-audit 2026-07-16 — ROUND COMPLETE** (wave opened 2026-07-17, closed the same day;
+    **this item was still headed "REMEDIATION IN PROGRESS" until 2026-08-20** — a month after its
+    own body recorded the wave complete, which is the clearest evidence the file had grown past
+    being re-read). Baseline `4e02a48` (v0.1.50); 41 findings (0 Critical/High, 14 Medium,
+    27 Low), all 41 remediated across a nine-branch chain, merged as **PR #60**, gate
+    **4271/49**, version checkpoint **v0.1.51** tagged 2026-07-17. Durable ledger:
+    `docs/architecture.md` **§50**. Wave narrative:
+    `docs/build-log.md`. The §50 "pending owner actions" (delete both
+    working papers + restore the CLAUDE.md doc-lifecycle sentence, open/merge the stacked PR,
+    tag the checkpoint) are all discharged — **nothing open here.**
+
 ## 2026-11-23 — the closed 2026-10-14 #698 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-23 (preamble budget, making room for the #1028 line). Its record is

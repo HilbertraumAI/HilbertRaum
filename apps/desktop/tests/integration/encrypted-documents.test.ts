@@ -22,6 +22,7 @@ import {
   type DocumentCipher
 } from '../../src/main/services/workspace-vault'
 import type { Transcriber } from '../../src/main/services/transcriber'
+import { t } from '../../src/shared/i18n'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { recordingCipher, testCipher } from '../helpers/test-cipher'
@@ -162,6 +163,90 @@ describe('encrypted document cache (H1)', () => {
       .prepare('SELECT stored_path FROM documents WHERE id = ?')
       .get(doc.id) as unknown as { stored_path: string }
     expect(row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
+  })
+
+  // T2.7 security fix round (F-3, FU-P2-6): the migration above shreds the plaintext copy it found. With no copy under
+  // the row's own name in the store, `locateStoredCopy` finds the recorded `stored_path` verbatim, which may name a file
+  // outside the store (a later version's row, a cloned drive's, one in a database the app did not make), and that file
+  // was shredded. Now only a copy inside the store folder is shredded; one elsewhere stays.
+  it('a legacy row whose stored_path names a plaintext file outside the store: the re-index leaves that file (F-3)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    await processDocument(db, store, doc.id, {}) // a plaintext stored copy in the store
+    for (const name of readdirSync(store)) rmSync(join(store, name))
+    const victim = join(tempRoot('encdoc-outside'), 'contract-user-copy.txt')
+    writeFileSync(victim, SECRET_TEXT)
+    db.prepare('UPDATE documents SET stored_path = ?, stored_name = NULL WHERE id = ?').run(victim, doc.id)
+
+    await reindexDocument(db, store, doc.id, { cipher: testCipher() })
+
+    expect(readFileSync(victim, 'utf8')).toBe(SECRET_TEXT)
+  })
+
+  // T2.7 security follow-on (S-b): the same migration also wrote `<that path>.enc` beside the copy outside the store and
+  // pointed the row at it: a write outside the store, driven by a recorded path. A legacy copy outside the store is now
+  // no stored copy at all: the re-index takes the existing path for a missing one (the user's original, re-imported into
+  // the store, or "source missing" without it), and nothing outside the store is written, renamed or shredded.
+  it.each<[string, boolean]>([
+    ['the original still there: re-imported into the store', true],
+    ['the original gone: the row reads as its source missing', false]
+  ])('a legacy row whose stored_path names a file outside the store, %s; nothing is written outside (S-b)', async (_case, keepOriginal) => {
+    const db = freshDb()
+    const store = freshStore()
+    const original = writeSource('contract.txt', SECRET_TEXT)
+    const doc = createQueuedDocument(db, original)
+    await processDocument(db, store, doc.id, {}) // a plaintext stored copy in the store
+    for (const name of readdirSync(store)) rmSync(join(store, name))
+    if (!keepOriginal) rmSync(original)
+    const outside = tempRoot('encdoc-outside')
+    const victim = join(outside, 'contract-user-copy.txt')
+    writeFileSync(victim, 'USER FILE: a copy elsewhere')
+    db.prepare('UPDATE documents SET stored_path = ?, stored_name = NULL WHERE id = ?').run(victim, doc.id)
+
+    const info = await reindexDocument(db, store, doc.id, { cipher: testCipher() })
+
+    expect(readdirSync(outside)).toEqual(['contract-user-copy.txt'])
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: a copy elsewhere')
+    const row = db.prepare('SELECT stored_path, error_message FROM documents WHERE id = ?').get(doc.id) as {
+      stored_path: string
+      error_message: string | null
+    }
+    if (keepOriginal) {
+      expect(info.status).toBe('indexed')
+      expect(readdirSync(store)).toEqual([`${doc.id}.txt${ENCRYPTED_DOC_SUFFIX}`])
+      expect(row.stored_path).toBe(join(store, `${doc.id}.txt${ENCRYPTED_DOC_SUFFIX}`))
+    } else {
+      expect(info.status).toBe('failed')
+      expect(row.error_message).toBe(t('en', 'main.ingest.sourceMissing'))
+      expect(row.stored_path).toBe(victim)
+      expect(readdirSync(store)).toEqual([])
+    }
+  })
+
+  // T2.7 security re-check 2 (N-3): the import and the re-index name the store's files after the row's id
+  // (`<store>/<id><ext>[.enc]`, `<store>/<id>.parse<ext>`). An id with `..` or a separator (a row the app did not make)
+  // led out of the store: the original was encrypted over a file elsewhere on the drive. An id that is no bare name is
+  // refused before anything is written, and the row fails as its source missing.
+  it('a row whose id leads out of the store: the re-index writes nothing outside it and the file there stays (N-3)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    const outside = join(dirname(store), 'outside')
+    mkdirSync(outside)
+    const victim = join(outside, `victim.txt${ENCRYPTED_DOC_SUFFIX}`)
+    writeFileSync(victim, 'USER FILE: elsewhere on the drive')
+    const crafted = join('..', 'outside', 'victim')
+    db.prepare('UPDATE documents SET id = ? WHERE id = ?').run(crafted, doc.id)
+
+    const info = await reindexDocument(db, store, crafted, { cipher: testCipher() })
+
+    expect(readdirSync(outside)).toEqual([`victim.txt${ENCRYPTED_DOC_SUFFIX}`])
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: elsewhere on the drive')
+    expect(readdirSync(store)).toEqual([])
+    expect(info.status).toBe('failed')
+    const row = db.prepare('SELECT error_message FROM documents WHERE id = ?').get(crafted) as { error_message: string | null }
+    expect(row.error_message).toBe(t('en', 'main.ingest.sourceMissing'))
   })
 })
 

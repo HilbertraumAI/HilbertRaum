@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { useState } from 'react'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, getDefaultNormalizer } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
 import { passwordStrength } from '../../src/renderer/components'
-import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
+import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import {
   MIN_PASSWORD_LENGTH,
   type StartFailureCause,
@@ -34,6 +35,9 @@ const UNINITIALIZED: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
+
+/** The version main's state carries (app-update T2.6): any value but the package's own. */
+const APP_VERSION = '9.8.7'
 
 /** A minimal installed chat model for the starter-step gate. */
 const chatModel = (state: ModelInfo['state']): ModelInfo => modelInfo({ id: 'qwen3-4b-instruct-q4', state, recommended: true })
@@ -478,11 +482,21 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
 
   afterEach(() => window.localStorage.clear())
 
-  /** Render the gate in German, submit once, have main answer with `failure` (or the call reject with it), and expect
-   *  `shown` on a gate that stayed up. #955 item 3: after a create's `workspace_exists` the gate re-reads main's state;
-   *  here main still reads `uninitialized`, so the create form keeps the refusal (the switch to the unlock form when main
-   *  reads `locked` is the next describe's). */
-  async function failIn(call: 'unlock' | 'create', failure: Failure | Error, shown: string): Promise<void> {
+  /** Render the gate in German (or `opts.lang`), submit once, have main answer with `failure` (or the call reject with
+   *  it), and expect `shown` on a gate that stayed up. The gate's state is main's locked or uninitialized one, with no
+   *  app version, unless `opts.appVersion` gives one (app-update T2.6: main's state carries it). `opts.exact` compares
+   *  the text as rendered, no-break spaces included (the default normalizer folds U+00A0 into a plain space). #955
+   *  item 3: after a create's `workspace_exists` the gate re-reads main's state; here main still reads
+   *  `uninitialized`, so the create form keeps the refusal (the switch to the unlock form when main reads `locked` is
+   *  the next describe's). */
+  async function failIn(
+    call: 'unlock' | 'create',
+    failure: Failure | Error,
+    shown: string,
+    opts: { lang?: UiLanguage; appVersion?: string; exact?: boolean } = {}
+  ): Promise<void> {
+    const lang = opts.lang ?? 'de'
+    const version = opts.appVersion === undefined ? {} : { appVersion: opts.appVersion }
     const user = userEvent.setup()
     const answer = vi.fn(async (): Promise<WorkspaceActionResult> => {
       if (failure instanceof Error) throw failure
@@ -493,35 +507,39 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     stubApi(
       call === 'unlock'
         ? { unlockWorkspace: answer }
-        : { createWorkspace: answer, getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => UNINITIALIZED) }
+        : {
+            createWorkspace: answer,
+            getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...UNINITIALIZED, ...version }))
+          }
     )
     renderInLanguage(
       <WorkspaceGate
-        state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED}
+        state={{ ...(call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED), ...version }}
         onUnlocked={onUnlocked}
         onStateChange={onStateChange}
       />,
-      'de'
+      lang
     )
     if (call === 'unlock') {
-      await user.type(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder')), 'nope')
-      await user.click(screen.getByRole('button', { name: t('de', 'gate.unlock.submit') }))
+      await user.type(screen.getByPlaceholderText(t(lang, 'gate.passwordPlaceholder')), 'nope')
+      await user.click(screen.getByRole('button', { name: t(lang, 'gate.unlock.submit') }))
     } else {
       // A valid encrypted password, as the gate always sends. Main's too-short refusal can't be the
       // answer to it, but a stubbed `refused` row still checks the copy the gate would show for one.
-      await user.click(screen.getByRole('button', { name: t('de', 'gate.welcome.start') }))
-      const password = await screen.findByPlaceholderText(t('de', 'gate.passwordPlaceholder'))
+      await user.click(screen.getByRole('button', { name: t(lang, 'gate.welcome.start') }))
+      const password = await screen.findByPlaceholderText(t(lang, 'gate.passwordPlaceholder'))
       await user.type(password, 'longenough')
-      await user.type(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder')), 'longenough')
-      await user.click(screen.getByRole('button', { name: t('de', 'gate.create.submit') }))
+      await user.type(screen.getByPlaceholderText(t(lang, 'gate.create.confirmPlaceholder')), 'longenough')
+      await user.click(screen.getByRole('button', { name: t(lang, 'gate.create.submit') }))
       expect(answer).toHaveBeenCalledWith('longenough', 'encrypted')
     }
-    expect(await screen.findByText(shown)).toBeInTheDocument()
+    const asRendered = opts.exact ? { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) } : undefined
+    expect(await screen.findByText(shown, asRendered)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
     expect(onStateChange).not.toHaveBeenCalled()
     if (call === 'create' && !(failure instanceof Error)) {
-      expect(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder'))).toHaveValue('')
-      expect(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder'))).toHaveValue('')
+      expect(screen.getByPlaceholderText(t(lang, 'gate.passwordPlaceholder'))).toHaveValue('')
+      expect(screen.getByPlaceholderText(t(lang, 'gate.create.confirmPlaceholder'))).toHaveValue('')
     }
   }
 
@@ -543,6 +561,46 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
   ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
     const params = { min: MIN_PASSWORD_LENGTH }
     await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))
+  })
+
+  // W-68 (T2.14): a schema this version can't parse shows C01 ("probably last used with a newer version … keep the files
+  // as they are"), never the damaged copy and its backup advice, and never main's own text. C01's `{version}` and
+  // `{address}` are filled from main's state and the update address (T2.6; the rows below pin them in two languages).
+  it('unlock workspace_schema_unreadable shows the schema copy, never a backup (W-68)', async () => {
+    const key = 'main.workspace.schemaUnreadable'
+    const shown = t('de', key, { min: MIN_PASSWORD_LENGTH, version: APP_VERSION, address: UPDATE_ADDRESS })
+    expect(shown).not.toBe(key) // the catalogs carry it
+    expect(shown).not.toMatch(/backup/i)
+    await failIn('unlock', { ok: false, reason: 'workspace_schema_unreadable', message: 'main said this' }, shown, {
+      appVersion: APP_VERSION
+    })
+    expect(screen.queryByText(t('de', 'main.workspace.vaultDamaged'))).not.toBeInTheDocument()
+    for (const region of screen.getAllByRole('alert')) expect(region).not.toHaveTextContent(/backup/i)
+  })
+
+  // App-update T2.6: X01 (`main.workspace.newer`, unlock and create) and C01 (`.schemaUnreadable`, unlock only) name
+  // this version's number and the update address. The gate fills them from main's state (`appVersion`, there before
+  // any unlock) and the shared constant, as main fills its own message (workspace-ipc.test.ts's cross-check). So the
+  // text is the gate's language with nothing left unfilled, never the English that `t()` falls back to when a
+  // parameter is missing (T2.14's S-1). German and French: French also puts a no-break space before the colon.
+  it.each([
+    ['unlock', 'workspace_newer', 'main.workspace.newer', 'de'],
+    ['create', 'workspace_newer', 'main.workspace.newer', 'de'],
+    ['unlock', 'workspace_schema_unreadable', 'main.workspace.schemaUnreadable', 'de'],
+    ['unlock', 'workspace_newer', 'main.workspace.newer', 'fr'],
+    ['create', 'workspace_newer', 'main.workspace.newer', 'fr'],
+    ['unlock', 'workspace_schema_unreadable', 'main.workspace.schemaUnreadable', 'fr']
+  ] as const)('%s %s shows %s in %s with this version and the update address filled in (T2.6)', async (call, reason, key, lang) => {
+    const params = { min: MIN_PASSWORD_LENGTH, version: APP_VERSION, address: UPDATE_ADDRESS }
+    const shown = t(lang, key, params)
+    expect(shown).toContain(`${UPDATE_ADDRESS}/from/${APP_VERSION}`)
+    expect(shown).not.toContain('{')
+    expect(shown).not.toBe(t('en', key, params)) // the language's own text, not the English fallback
+    await failIn(call, { ok: false, reason, message: t('en', key, params) }, shown, {
+      lang,
+      appVersion: APP_VERSION,
+      exact: true
+    })
   })
 
   it.each([

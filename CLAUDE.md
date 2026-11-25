@@ -35,6 +35,7 @@ legend), and the Skills / Image-understanding records.
 - Do not call hosted AI APIs (OpenAI/Anthropic/Google/Mistral/etc.).
 - Never commit model weights, user data, embeddings, logs, or generated files.
   - "Logs" in that rule means runtime, user and application logs, which stay forbidden; the measurement evidence committed under `eval/results/` (benchmark runs kept deliberately as reviewable evidence) is not "logs" in that sense.
+  - Likewise the sha256-locked golden test fixtures (`apps/desktop/tests/fixtures/*-golden/`, `readers/`, `display-map/`, `schema-meta/`, every path the manifest `golden-fixtures.sha256` names) are not "generated files": they are committed on purpose as frozen-contract evidence. A change to one is a reviewed event, and its manifest line changes in the same commit (`CONTRIBUTING.md`).
 - Keep the app fully usable with **no internet connection**.
 - Keep all user data local by default; no plaintext workspace unless explicitly chosen.
 - No hardcoded developer-specific absolute paths; don't assume the drive path is identical across OSes.

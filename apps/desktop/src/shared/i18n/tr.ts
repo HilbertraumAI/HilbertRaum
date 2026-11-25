@@ -805,6 +805,9 @@ export const tr: UiCatalog<'tr'> = {
   'analysis.wholeDocBeginningOnly':
     '**Not:** bu belge tamamı okunamayacak kadar uzundu; bu yüzden bu yanıt yalnızca belgenin başını ' +
     'kapsıyor. Belgenin ilerleyen kısmındaki bir şeyi kontrol etmek için doğrudan o ayrıntıyı sorun.',
+  'analysis.newerExtractorNote':
+    '_Bu rakamlar HilbertRaum’un daha yeni bir sürümü tarafından okundu ve o sürümün okuduğu şekilde ' +
+    'gösteriliyor._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Hesap özetinin tamamında **{count}** işlem okudum.',
   'skills.bankAnalysis.countPartial':
@@ -1063,8 +1066,8 @@ export const tr: UiCatalog<'tr'> = {
   'models.newerApp.heading': 'Daha yeni bir HilbertRaum sürümü gerekli',
   'models.newerApp.badge': 'Yeni sürüm gerekli',
   'models.newerApp.hint':
-    'Bu model HilbertRaum’un daha yeni bir sürümü için. Kullanmak için bu bilgisayardaki uygulamayı ' +
-    'güncelleyin.',
+    'Bu model HilbertRaum’un daha yeni bir sürümünü gerektiriyor. Kullanmak için güncellemeyi ' +
+    'Ayarlar → Güncellemeler sekmesinde kurun.',
   'models.library.memory': 'Gereken bellek: en az {size}',
   'models.library.clear': 'Filtreleri temizle',
   'models.library.showVariants': 'Tüm varyantları göster ({count})',
@@ -1550,6 +1553,12 @@ export const tr: UiCatalog<'tr'> = {
   'skills.reconcile.folderErrors.other':
     '{count} beceri klasörü okunamadı ve atlanıyor. Her klasörde geçerli bir SKILL.md dosyası ' +
     'olmalıdır.',
+  'skills.reconcile.needsNewerApp.one':
+    'Bu sürücüdeki {count} beceri HilbertRaum’un daha yeni bir sürümü için yapıldı ve atlanıyor. ' +
+    'Kullanmak için güncellemeyi Ayarlar → Güncellemeler sekmesinde kurun.',
+  'skills.reconcile.needsNewerApp.other':
+    'Bu sürücüdeki {count} beceri HilbertRaum’un daha yeni bir sürümü için yapıldı ve atlanıyor. ' +
+    'Bunları kullanmak için güncellemeyi Ayarlar → Güncellemeler sekmesinde kurun.',
   'skills.empty.title': 'Henüz beceri yok',
   'skills.empty.line':
     'Beceriler, asistana belirli bir işi nasıl yapacağını öğretir. Başlamak için bir beceri ' +
@@ -1568,8 +1577,8 @@ export const tr: UiCatalog<'tr'> = {
   'skills.unavailable.title': 'Bu becerinin dosyaları artık sürücüde değil.',
   'skills.incompatible.chip': 'Yeni sürüm gerekli',
   'skills.incompatible.title':
-    'Bu beceri uygulamanın daha yeni bir sürümünü gerektiriyor; etkinleştirmek için uygulamayı ' +
-    'güncelleyin.',
+    'Bu beceri HilbertRaum’un daha yeni bir sürümünü gerektiriyor. Kullanmak için güncellemeyi ' +
+    'Ayarlar → Güncellemeler sekmesinde kurun.',
   'skills.review.chip': 'Kontrol et',
   'skills.warn.title': 'Bu becerinin neler yapabildiğini kontrol edin',
   'skills.warn.body':
@@ -1596,8 +1605,8 @@ export const tr: UiCatalog<'tr'> = {
   'skills.kind.instruction': 'Yönlendirme',
   'skills.kind.tool': 'Araç kullanır',
   'skills.tool.note':
-    'Şimdilik bu beceri yalnızca yönlendirme ekler. Açıkladığı araçlar sonraki bir sürümde ' +
-    'gelecek.',
+    'Bu beceri yalnızca yönlendirme ekler. HilbertRaum’un bu sürümü, becerinin açıkladığı araçları ' +
+    'çalıştırmaz.',
   'skills.tool.note.active':
     'İstediğinizde bu beceri, seçtiğiniz bir belge üzerinde izin verilmiş yerel araçları ' +
     'çalıştırabilir. Yalnızca okuyan araçlar sorunuzu yanıtlamak için otomatik olarak da ' +
@@ -1678,8 +1687,8 @@ export const tr: UiCatalog<'tr'> = {
   'skills.import.note.languageInvalid':
     '“language” alanı geçerli bir dil etiketi değil; “en” kullanılıyor.',
   'skills.import.note.allowedToolsIgnored':
-    'Bir yönlendirme becerisinde bildirilen araçlar yok sayılıyor (araçlar sonraki bir sürümde ' +
-    'gelecek).',
+    'Bir yönlendirme becerisinde bildirilen araçlar yok sayılıyor (HilbertRaum’un bu sürümü bu ' +
+    'araçları çalıştırmaz).',
   'skills.import.note.analysisInvalid':
     '“analysis” alanında bilinmeyen bir değer var; alan yok sayılıyor.',
   'skills.import.note.analysisIgnoredForTool':
@@ -2272,6 +2281,8 @@ export const tr: UiCatalog<'tr'> = {
   'common.apply': 'Uygula',
   'common.labelValue': '{label}: {value}',
   'common.percent': '%{pct}',
+  'common.newerVersionText':
+    'Bu metin HilbertRaum’un daha yeni bir sürümünden geliyor ve bu sürüm onu gösteremiyor.',
   'indicator.offline': 'Yerel · Çevrimdışı',
   'indicator.online': 'Yerel · İndirmeye izin verildi',
   'indicator.offlineDetail': 'Her şey bu sürücüde kalır. İnternet bağlantısı kullanılmaz.',
@@ -2510,6 +2521,13 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak sürücüdeki çalışma alanı verileri hasarlı ve açılamadı. Parolayı ' +
     'yeniden yazmak işe yaramaz. Yeni bir çalışma alanı oluşturmayın: dosyaları olduğu gibi ' +
     'bırakın ve çalışma alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.schemaUnreadable':
+    'Parolanız doğru, ancak HilbertRaum’un bu sürümü çalışma alanını okuyamıyor. Çalışma alanı büyük ' +
+    'olasılıkla en son daha yeni bir sürümle kullanıldı. Çalışma alanınız değişmedi. Açmak için daha ' +
+    'yeni sürümü kurun: “Dosyadan güncelleme kur…” seçeneğini seçin. Daha yeni sürüm için bir ' +
+    'güncelleme dosyanız yoksa {address}/from/{version} adresinden indirebilirsiniz. Bu sürücüde ' +
+    'hiçbir zaman daha yeni bir sürüm kullanılmadıysa dosyaları olduğu gibi bırakın ve sürücüdeki ' +
+    'docs klasöründe bulunan sorun giderme kılavuzuna bakın.',
   'main.workspace.vaultMissing':
     'Parolanız doğru, ancak çalışma alanının şifreli dosyası sürücüde yok ve onu kurtarmak için ' +
     'hiçbir kopya kalmadı. Yeni bir çalışma alanı oluşturmayın. Dosyayı yerine koyun veya çalışma ' +
@@ -2534,8 +2552,10 @@ export const tr: UiCatalog<'tr'> = {
     'dizini oluşturma, çalışma alanı klasörünü gösteren bir dosya penceresi), biraz bekleyin ve ' +
     'yeniden deneyin. Hiçbir şey kaybolmadı.',
   'main.workspace.newer':
-    'Bu çalışma alanı daha yeni bir HilbertRaum sürümüyle yazılmış; açmak için uygulamayı ' +
-    'güncelleyin. Hiçbir şey değiştirilmedi.',
+    'Bu çalışma alanı en son HilbertRaum’un daha yeni bir sürümüyle kullanıldı, bu yüzden bu sürüm ' +
+    'onu açamıyor. Çalışma alanınız değişmedi. Açmak için daha yeni sürümü kurun: “Dosyadan ' +
+    'güncelleme kur…” seçeneğini seçin. Daha yeni sürüm için bir güncelleme dosyanız yoksa ' +
+    '{address}/from/{version} adresinden indirebilirsiniz.',
   'main.workspace.createFailed': 'Çalışma alanı oluşturulamadı.',
   'main.workspace.passwordTooShort': 'Parola en az {min} karakter olmalıdır.',
   'main.workspace.exists':
@@ -2920,8 +2940,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.skills.locked': 'Çalışma alanı kilitli. Becerileri yönetmek için kilidini açın.',
   'main.skills.notPicked': 'Önce dosya seçiciyle beceri paketini seçin.',
   'main.skills.incompatible':
-    'Bu beceri uygulamanın daha yeni bir sürümünü gerektiriyor. Kullanmak için uygulamayı ' +
-    'güncelleyin.',
+    'Bu beceri HilbertRaum’un daha yeni bir sürümünü gerektiriyor. Kullanmak için güncellemeyi ' +
+    'Ayarlar → Güncellemeler sekmesinde kurun.',
   'main.skills.run.unavailable': 'Bu becerinin aracı şu anda kullanılamıyor.',
   'main.skills.run.noDocument': 'Önce bu sohbete bir belge ekleyin, ardından yeniden deneyin.',
   'main.skills.run.busy':
@@ -3037,6 +3057,7 @@ export const tr: UiCatalog<'tr'> = {
   'chat.packs.outcome.disabled': 'aranmadı: paket devre dışı',
   'chat.packs.outcome.file-missing': 'aranmadı: dosya eksik',
   'chat.packs.outcome.identity-mismatch': 'aranmadı: bu konumda farklı bir arşiv var',
+  'chat.packs.outcome.newer-format': 'aranmadı: daha yeni ZIM biçimi',
   'chat.packs.outcome.not-served': 'aranmadı: başka bir paketle ad çakışması',
   'chat.packs.outcome.not-searchable': 'aranmadı: tam metin dizini yok',
   'chat.packs.outcome.tools-missing': 'aranmadı: kiwix-tools kurulu değil',
@@ -3127,6 +3148,9 @@ export const tr: UiCatalog<'tr'> = {
     'Windows’ta kiwix-manage bu arşivi okuyamıyor, çünkü dosyanın adı veya klasörü bir umlaut, ' +
     'aksanlı bir harf ya da başka bir ASCII dışı karakter (ç, ğ, ı, ş gibi) içeriyor. Dosyayı bu ' +
     'tür karakterler içermeyen bir adla sürücünün zim/ klasörüne kopyalayın ve yeniden ekleyin.',
+  'packs.addFailed.newerFormat':
+    'Bu arşiv, HilbertRaum’un bu sürümünün okuyabildiğinden daha yeni bir ZIM biçimi kullanıyor; bu ' +
+    'yüzden eklenmedi. Belki HilbertRaum’un daha yeni bir sürümü onu ekleyebilir.',
   'packs.addFailed.other': 'Arşiv eklenemedi.',
   'packs.removedToast': 'Bilgi paketi kaldırıldı',
   'packs.articleCount.one': '{count} makale',
@@ -3138,6 +3162,10 @@ export const tr: UiCatalog<'tr'> = {
   'packs.state.identityMismatch': 'Farklı arşiv',
   'packs.state.identityMismatchTitle':
     'Bu paketin konumundaki dosya farklı bir arşiv. Bu paketi kaldırıp dosyayı yeniden ekleyin.',
+  'packs.state.newerFormat': 'Daha yeni biçim',
+  'packs.state.newerFormatTitle':
+    'Bu arşiv, HilbertRaum’un bu sürümünün okuyabildiğinden daha yeni bir ZIM biçimi kullanıyor; bu ' +
+    'yüzden kullanılmıyor. Belki HilbertRaum’un daha yeni bir sürümü onu kullanabilir.',
   'packs.state.notSearchable': 'Tam metin dizini yok',
   'packs.state.notSearchableTitle':
     'Bu arşivin tam metin arama dizini yok. Soru sorarken atlanır, ancak makaleleri okunabilir ' +

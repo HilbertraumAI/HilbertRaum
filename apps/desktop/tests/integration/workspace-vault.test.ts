@@ -17,12 +17,13 @@ import {
   symlinkSync,
   utimesSync
 } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { basename, join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { openDatabase } from '../../src/main/services/db'
+import { createConversation } from '../../src/main/services/chat'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { DEFAULT_SETTINGS, type PrivacyPolicy } from '../../src/shared/types'
 import {
@@ -45,6 +46,7 @@ import {
   applyPendingRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
+  QUARANTINE_SUFFIX,
   PlaintextNotAllowedError,
   VaultDescriptorMissingError,
   VaultOpenFailedError,
@@ -279,11 +281,12 @@ describe('encrypted vault lifecycle', () => {
   // the two used to leave that file, and the next start's rekey recovery rolls ANY `.enc.new` forward under a v2
   // descriptor: a workspace put back into the same folder (troubleshooting's "go back" step) had its `.enc` shredded and
   // replaced by the failed create's empty database, under a key nobody has. A directory where the descriptor's temp
-  // goes fails the commit's first write for real (EISDIR), after the stage.
+  // goes fails the commit's first write for real, after the stage (EEXIST since T2.7's F-2: the temp is created with
+  // 'wx', and a folder at its name is left; with 'w' it was EISDIR).
   it('a create that fails before its commit leaves no staged file, so a workspace put back later opens intact (#954 S-1)', () => {
     const vp = freshVaultPaths('vault')
     mkdirSync(`${vp.descriptorPath}.tmp`)
-    expect(() => createEncryptedVaultOnDisk(vp, 'brand-new-pw', FAST_KDF)).toThrow(/EISDIR/)
+    expect(() => createEncryptedVaultOnDisk(vp, 'brand-new-pw', FAST_KDF)).toThrow(/EEXIST/)
     expect(existsSync(vp.descriptorPath)).toBe(false) // not committed
     expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
     rmSync(`${vp.descriptorPath}.tmp`, { recursive: true })
@@ -367,8 +370,9 @@ describe('streaming file crypto (M5)', () => {
   })
 
   // Walk round (#956's lock line in the real app): an encrypt that fails removes its temp best-effort. A directory at
-  // the temp's name failed the open (EISDIR), and the cleanup's own `rm` of that directory threw `ERR_FS_EISDIR` over
-  // it, so the lock's log line named the cleanup, not the cause.
+  // the temp's name failed the open (EISDIR; EEXIST since T2.7's F-2, which creates the temp with 'wx' and leaves a folder
+  // at its name), and the cleanup's own `rm` of that directory threw `ERR_FS_EISDIR` over it, so the lock's log line
+  // named the cleanup, not the cause.
   it('an encrypt whose temp is a directory rethrows the open error, not the cleanup’s', () => {
     const src = tmpFile('plain.bin', randomBytes(64))
     const enc = `${src}.enc`
@@ -379,7 +383,7 @@ describe('streaming file crypto (M5)', () => {
     } catch (err) {
       thrown = err as NodeJS.ErrnoException
     }
-    expect({ code: thrown?.code, syscall: thrown?.syscall }).toEqual({ code: 'EISDIR', syscall: 'open' })
+    expect({ code: thrown?.code, syscall: thrown?.syscall }).toEqual({ code: 'EEXIST', syscall: 'open' })
     expect(existsSync(enc)).toBe(false)
   })
 
@@ -919,6 +923,135 @@ describe('WorkspaceController', () => {
     expect(() => ctrl.create('x', 'plaintext_dev')).toThrow(PlaintextNotAllowedError)
   })
 
+  // T2.7 security fix round (F-3, FU-P2-6 in P2): a create opened a working file it found at `hilbertraum.sqlite` (and
+  // its `-wal`) as the new workspace, kept its settings, and its unlock rolled a `.recovery` forward over the new `.enc`
+  // when that copy's time was later. A drive with no key file and no `.enc` could so hand the user a database the app
+  // did not make, its rows and settings encrypted under the user's new key. On a build that allows no plaintext
+  // workspace, a create now moves such leftovers aside under `<name>.quarantine` (`-wal` and `-shm` as
+  // `hilbertraum.sqlite.quarantine-wal` / `-shm`), opens none of them, and starts an empty database.
+  const quarantined = (path: string): string => `${path}${QUARANTINE_SUFFIX}`
+  const conversationCount = (ctl: WorkspaceController): number =>
+    (ctl.requireDb().prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n
+
+  it('a working database with its -wal and -shm and no key file: the create moves the three aside unchanged and starts an empty workspace (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-create')
+    const planted = openDatabase(vp.dbPath)
+    seedSettings(planted)
+    updateSettings(planted, { contextTokens: 7373 })
+    createConversation(planted, { title: 'planted' })
+    leaveAsKilled(vp, planted) // the main file, a -wal holding its last commits, and the -shm
+    const names = [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]
+    const before = names.map((path) => readFileSync(path).toString('base64'))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState().state).toBe('uninitialized')
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+      expect(conversationCount(ctl)).toBe(0)
+      const aside = [quarantined(vp.dbPath), `${quarantined(vp.dbPath)}-wal`, `${quarantined(vp.dbPath)}-shm`]
+      expect(aside.map((path) => readFileSync(path).toString('base64'))).toEqual(before)
+      ctl.lock()
+      expect(aside.every((path) => existsSync(path)), 'the next lock leaves them as they are').toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // T2.D round 3 (S-b; the owner's "keep the set-aside files"): a session in a rollback-journal mode (a later version's)
+  // that ended mid-transaction leaves its hot `hilbertraum.sqlite-journal` beside the working file. The create set the
+  // working file, `-wal` and `-shm` aside but not the journal, and SQLite deleted it, unshredded, when the create opened
+  // its new, empty database there: the set-aside copy lost the pages it needs. Now the journal moves with the three, to
+  // the first suffix free for all four. Case two: an earlier set-aside journal alone takes `.quarantine-journal`.
+  it.each([
+    ['nothing set aside before', '', null],
+    ['an earlier set-aside journal alone at hilbertraum.sqlite.quarantine-journal', '-1', 'EARLIER JOURNAL']
+  ])('a working database with a hot -journal, its -wal and -shm, no key file (%s): the create sets all four aside together and deletes nothing', (_case, suffix, earlier) => {
+    const vp = freshVaultPaths('vault-f3-journal')
+    const raw = openRawDb(vp.dbPath)
+    let files: Map<string, Buffer>
+    try {
+      raw.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; CREATE TABLE notes (body TEXT);')
+      raw.exec('BEGIN')
+      const insert = raw.prepare('INSERT INTO notes VALUES (?)')
+      for (let i = 0; i < 2000; i++) insert.run(`kept-${'k'.repeat(200)}${i}`)
+      raw.exec('COMMIT')
+      raw.exec("PRAGMA cache_size = 5; BEGIN; UPDATE notes SET body = 'UNCOMMITTED-' || body;")
+      files = new Map([vp.dbPath, `${vp.dbPath}-journal`].map((path) => [path, readFileSync(path)]))
+      raw.exec('ROLLBACK')
+    } finally {
+      raw.close()
+    }
+    files.set(`${vp.dbPath}-wal`, Buffer.from('wal'))
+    files.set(`${vp.dbPath}-shm`, Buffer.from('shm'))
+    for (const [path, bytes] of files) writeFileSync(path, bytes)
+    const earlierPath = `${quarantined(vp.dbPath)}-journal`
+    if (earlier !== null) writeFileSync(earlierPath, earlier)
+    const workspace = dirname(vp.dbPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(conversationCount(ctl)).toBe(0)
+      const aside = `${quarantined(vp.dbPath)}${suffix}`
+      for (const tail of ['', '-wal', '-shm', '-journal']) {
+        expect(readFileSync(`${aside}${tail}`).equals(files.get(`${vp.dbPath}${tail}`)!), `${aside}${tail}`).toBe(true)
+      }
+      expect(existsSync(`${vp.dbPath}-journal`), 'no journal is left beside the new database').toBe(false)
+      if (earlier !== null) expect(readFileSync(earlierPath, 'utf8'), 'the earlier set-aside journal').toBe(earlier)
+      ctl.lock()
+      const names = readdirSync(workspace).sort()
+      for (const tail of ['', '-wal', '-shm', '-journal']) expect(names).toContain(basename(`${aside}${tail}`))
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('a .recovery copy dated in the future and no key file: the create moves it aside and never rolls it forward (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-recovery')
+    const planted = openDatabase(vp.dbPath)
+    seedSettings(planted)
+    updateSettings(planted, { contextTokens: 7474 })
+    createConversation(planted, { title: 'planted' })
+    planted.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    planted.close()
+    const recovery = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    renameSync(vp.dbPath, recovery)
+    const future = new Date('2099-01-01T00:00:00Z')
+    utimesSync(recovery, future, future)
+    const before = readFileSync(recovery).toString('base64')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+      expect(conversationCount(ctl)).toBe(0)
+      expect(existsSync(recovery)).toBe(false)
+      expect(readFileSync(quarantined(recovery)).toString('base64')).toBe(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The other side of the owner's call: where a plaintext workspace is allowed (a dev build), a create still adopts the
+  // working file it finds, as before (the dev → encrypted path). The controller is not started here: a dev start opens
+  // that file as the plaintext workspace itself, and a create is refused while it is open.
+  it('a dev build that allows a plaintext workspace: the create still takes the working file it finds into the new workspace (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-dev')
+    const dev = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    dev.init()
+    updateSettings(dev.requireDb(), { contextTokens: 7575 })
+    dev.shutdown()
+    const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(7575)
+      expect(existsSync(quarantined(vp.dbPath))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
   it('shreds a leftover plaintext DB from a crash on startup, staying LOCKED (H1)', () => {
     const vp = lockedVault('vault', 'pw')
     // Simulate a hard crash before lock-on-quit: a decrypted working file + WAL/SHM are
@@ -1047,6 +1180,87 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     expect(ctl.unlock('pw').state).toBe('unlocked')
     // The `.enc` snapshot opened, not the shredded leftover.
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+    ctl.lock()
+  })
+
+  /**
+   * F-27 review 1 M-2: what a session in a rollback-journal mode (a later version's: every build runs the workspace in
+   * WAL mode) leaves when it ends mid-transaction, on the vault at `vp` (password `pw`): it committed `contextTokens`
+   * 7171 and a table of its own (`later_rows`, 2,000 rows), then began a transaction (`contextTokens` 9999, every
+   * `later_rows` row rewritten) whose changes spilled into the file. Its hot `hilbertraum.sqlite-journal` (those pages
+   * as committed) is read while that transaction is open and put back after the close, which rolls the transaction
+   * back and deletes the journal (as `leaveAsKilled` does for a `-wal`). `torn`: the working file as the spill left it
+   * goes back too, newer than `.enc`; otherwise it is gone.
+   */
+  function endedMidRollbackJournal(vp: VaultPaths, torn: boolean): void {
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    key.fill(0)
+    db.close()
+    const raw = openRawDb(vp.dbPath)
+    let journal: Buffer
+    let tornBytes: Buffer
+    try {
+      raw.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA mmap_size = 0;')
+      raw.exec('CREATE TABLE later_rows(id INTEGER PRIMARY KEY, v TEXT)')
+      raw.exec('BEGIN')
+      const insert = raw.prepare('INSERT INTO later_rows(v) VALUES (?)')
+      for (let i = 0; i < 2000; i++) insert.run(`later-${'y'.repeat(200)}${i}`)
+      raw.exec('COMMIT')
+      updateSettings(raw, { contextTokens: 7171 })
+      raw.exec('PRAGMA cache_size = 5; BEGIN;')
+      updateSettings(raw, { contextTokens: 9999 })
+      raw.exec("UPDATE later_rows SET v = 'UNCOMMITTED-' || v")
+      journal = readFileSync(`${vp.dbPath}-journal`)
+      tornBytes = readFileSync(vp.dbPath)
+      raw.exec('ROLLBACK')
+    } finally {
+      raw.close()
+    }
+    if (torn) {
+      writeFileSync(vp.dbPath, tornBytes)
+      backdate(vp.encPath)
+    } else rmSync(vp.dbPath)
+    writeFileSync(`${vp.dbPath}-journal`, journal)
+  }
+
+  it('a hot -journal a rollback-mode session left beside an intact .enc: the unlock removes it first and opens the snapshot, never damaged (F-27 R1 M-2)', () => {
+    const vp = lockedVault('vault', 'pw')
+    endedMidRollbackJournal(vp, false)
+    const enc = readFileSync(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // The start leaves the journal: it is no name its sweep knows.
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(true)
+    // Played into the fresh copy of `.enc`, those pages mix the later session into the snapshot, or read as a malformed
+    // database ("damaged" on an intact `.enc`), whichever pages the two files share.
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    const db = ctl.requireDb()
+    expect(getSettings(db).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'later_rows'").get()).toEqual({ n: 0 })
+    expect(db.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(false)
+    expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+    ctl.lock()
+  })
+
+  it('a torn working file with its own hot -journal, kept as .recovery: the unlock rolls it forward and leaves the journal for SQLite to play back (F-27 R1 M-2)', () => {
+    const vp = lockedVault('vault', 'pw')
+    endedMidRollbackJournal(vp, true)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    // The salvage keeps the torn file (newer than `.enc`, no -wal or -shm, a database to the probe); its journal stays.
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(true)
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(true)
+    ctl.unlock('pw')
+    // The copy decrypted after the roll-forward is that working file: its journal undoes the spilled transaction.
+    const db = ctl.requireDb()
+    expect(getSettings(db).contextTokens).toBe(7171)
+    expect(db.prepare("SELECT count(*) AS n FROM later_rows WHERE v LIKE 'UNCOMMITTED-%'").get()).toEqual({ n: 0 })
+    expect(db.prepare('SELECT count(*) AS n FROM later_rows').get()).toEqual({ n: 2000 })
+    expect(db.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+    expect(existsSync(`${vp.dbPath}-journal`)).toBe(false)
     ctl.lock()
   })
 

@@ -255,6 +255,32 @@ describe.each(PROJECT_ORDER_CASES)('ScopePopover project order (%s)', (lang, sql
   })
 })
 
+// W-71 (T2.14): a pack whose archive is in a newer ZIM format is one the ask can't search (its outcome says
+// `newer-format`), so the picker shows it as unavailable like every other such pack: the "not available" hint, never
+// tickable while unselected, and a selection that still carries it stays clearable (D6).
+describe('ScopePopover — a pack in a newer ZIM format (W-71)', () => {
+  it.each(['en', 'de'] as const)('%s: shown as not available, not tickable, a selected one still clearable', async (lang) => {
+    const newer = (id: string, title: string) =>
+      knowledgePack({ id, title, description: null, available: false, unavailableReason: 'newer-format' })
+    renderPopover(
+      {
+        docs: [makeDocumentInfo()],
+        packs: [newer('p-newer', 'Newer pack'), newer('p-newer-sel', 'Selected newer pack')],
+        scope: { collectionIds: [], documentIds: [], packIds: ['p-newer-sel'] }
+      },
+      lang
+    )
+    await userEvent.setup().click(screen.getByRole('button'))
+    const hint = t(lang, 'chat.scope.packUnavailable')
+    const box = await screen.findByRole('checkbox', { name: new RegExp(`^Newer pack\\s*${hint}$`) })
+    expect(box).toBeDisabled()
+    expect(box).not.toBeChecked()
+    const selected = screen.getByRole('checkbox', { name: new RegExp(`^Selected newer pack\\s*${hint}$`) })
+    expect(selected).toBeChecked()
+    expect(selected).toBeEnabled()
+  })
+})
+
 // #958: the same for knowledge packs (sorted by title). Main's SQL order is NOCASE (A-Z folding only).
 describe('ScopePopover pack order (#958)', () => {
   const C = String.fromCharCode

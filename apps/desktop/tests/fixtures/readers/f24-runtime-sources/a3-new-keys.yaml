@@ -1,0 +1,20 @@
+schema_note: added by a later release
+llama_cpp:
+  version: b9585
+  signing:
+    alg: ed25519
+  builds:
+    - os: win
+      arch: x64
+      backend: vulkan
+      url: https://example.invalid/llama-b9585-win-x64-vulkan.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win
+      signature_url: https://example.invalid/sig
+      notes: [one, two]
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://example.invalid/llama-b9585-win-x64-cpu.zip
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      extract_to: runtime/llama.cpp/win/cpu

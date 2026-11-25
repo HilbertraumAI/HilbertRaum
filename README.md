@@ -228,7 +228,11 @@ Whatever it fetches, the script verifies against the manifest via SHA-256 and co
 manifests and config onto the drive. Downloads resume if interrupted, and re-running skips
 what is already there. You can also fetch piecemeal (`fetch-models` / `fetch-runtime`, with
 `--only <id>` for a single model) or drop the files into `models/` and
-`runtime/llama.cpp/<os>/` by hand; see [`docs/packaging.md`](docs/packaging.md).
+`runtime/llama.cpp/<os>/` by hand; see [`docs/packaging.md`](docs/packaging.md). A manifest
+that needs a newer HilbertRaum than your checkout's app (an unknown role, or a `min_app_version`
+above `apps/desktop/package.json`'s version) is skipped by `fetch-models` and `verify-models` with
+a line `SKIP   <id>: needs a newer HilbertRaum (…)`, counted in their summaries and left out of
+`config/checksums.json`.
 
 > The whisper.cpp runtime ships prebuilt for Windows only. On a macOS/Linux build host,
 > `-WithAssets` skips it with a note; build it from source as described in
@@ -242,7 +246,8 @@ what is already there. You can also fetch piecemeal (`fetch-models` / `fetch-run
 > binaries for all three OSes from any host — `fetch-runtime --family kiwix_tools` fetches the
 > optional knowledge-pack tools the same way. Model weight URLs are real Hugging Face links, and
 > the bundled manifests carry real pinned SHA-256 hashes (captured from verified downloads with
-> `verify-models --generate`), so `fetch-models` checks every weight against them. To bump a
+> `verify-models --generate`, which records the manifests your checkout's app can use), so
+> `fetch-models` checks every weight against them. To bump a
 > runtime later, see [`docs/model-policy.md`](docs/model-policy.md).
 
 ### 3. Point the app at your models

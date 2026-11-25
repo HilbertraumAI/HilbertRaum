@@ -69,9 +69,12 @@ import {
 import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
+import { SCHEMA_VERSION, openDatabase, setStampAppVersion } from '../../src/main/services/db'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, t, type MessageKey } from '../../src/shared/i18n'
+import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import {
   CREATE_FAILURE_KEYS,
   UNLOCK_FAILURE_KEYS,
@@ -92,6 +95,7 @@ import {
   newerPlaintext,
   plantProbeTrap,
   newerVault,
+  schemaUnreadableVault,
   setFrameMagic,
   staleDatabaseStage,
   storeCopy,
@@ -112,6 +116,9 @@ import { docTaskManager, docTaskRuntime, docTaskWorld, importWords, waitTerminal
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const PW = 'right-password'
+/** The version a row passes the workspace IPC, as `main/index.ts` passes `app.getVersion()` (app-update T2.6): any
+ *  value other than the package's own, so a text that shows the real version by another route cannot pass. */
+const APP_VERSION = '9.8.7'
 
 /** A controller that ran `init()` over `vp`: its state is whatever the disk holds (and, given, the free space the drive
  *  reports, #892). */
@@ -207,7 +214,8 @@ describe('registerWorkspaceIpc', () => {
   })
 
   // #845: a change refused because the descriptor on disk is a newer build's says the change failed and the current
-  // password still works; the gate's "update the app to open it" would be wrong on a workspace that is open.
+  // password still works; the gate's newer-workspace copy ("install the newer version") would be wrong on a workspace
+  // that is open.
   it('change password over a descriptor a newer build rewrote mid-session answers "change failed", the descriptor untouched', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
@@ -391,6 +399,39 @@ describe('registerWorkspaceIpc', () => {
       registerWorkspaceIpc(workspaceIpcCtx(ctrl))
       const { result } = await invoke(handlers, IPC.getWorkspaceState)
       expect(result).toEqual(expected)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  // App-update T2.6: the gate fills the `{version}` of X01 (`main.workspace.newer`) and C01 (`.schemaUnreadable`) from
+  // the state main hands it, so the version must be on a locked workspace's state before any unlock was tried, and on
+  // the state a lock answers (the gate shows that one next). `main/index.ts` passes `app.getVersion()`
+  // (repo-hygiene.test.ts holds the call site).
+  it('answers the app version it was given on a locked workspace, before any unlock attempt (T2.6)', async () => {
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { appVersion: APP_VERSION })
+      const { result } = await invoke(handlers, IPC.getWorkspaceState)
+      expect(result).toEqual({
+        state: 'locked',
+        mode: 'encrypted',
+        plaintextAllowed: false,
+        encryptionRequired: true,
+        appVersion: APP_VERSION
+      })
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  it('a lock answers the locked state with the app version, the state the gate shows next (T2.6)', async () => {
+    const ctrl = unlockedVault()
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { appVersion: APP_VERSION })
+      const { result } = await invoke(handlers, IPC.lockWorkspace)
+      expect(result).toEqual({ ...ctrl.getState(), appVersion: APP_VERSION })
+      expect(ctrl.getState().state).toBe('locked')
     } finally {
       ctrl.shutdown()
     }
@@ -990,6 +1031,14 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         }
       }
     ],
+    // W-68 (T2.14): the password verified, and SQLite cannot parse the database's schema ("malformed database schema",
+    // what a newer version's schema text does here): its own copy (C01), not the damaged one.
+    workspace_schema_unreadable: [
+      {
+        how: 'a database whose schema this SQLite cannot parse, under this build’s stamp',
+        arrange: () => ({ workspace: startedOn(schemaUnreadableVault(lockedVault('wsipc', PW), PW)), args: [PW] })
+      }
+    ],
     workspace_exists: NEVER_SENT,
     plaintext_not_allowed: NEVER_SENT,
     refused: NEVER_SENT,
@@ -1015,6 +1064,8 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     ],
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
+    // W-68: unlock only (the copy deck: "never on the create form").
+    workspace_schema_unreadable: NEVER_SENT,
     workspace_newer: [
       {
         how: 'a plaintext database a newer build stamped',
@@ -1116,7 +1167,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       const key = TABLES[call][reason]
       expect(key, `${call} sends ${reason}, so its table needs a key`).not.toBeNull()
       const { workspace, args } = provocation.arrange()
-      registerWorkspaceIpc(workspaceIpcCtx(workspace))
+      registerWorkspaceIpc(workspaceIpcCtx(workspace), { appVersion: APP_VERSION })
       // The stand-ins (recovery blocked, the create belt) have no state of their own to keep.
       const stateBefore = workspace instanceof WorkspaceController ? workspace.getState() : null
       const before = mainUiLanguage()
@@ -1126,8 +1177,10 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
           const { result } = await invoke(handlers, CHANNELS[call], ...args)
           expect(result).toMatchObject({ ok: false, reason })
           const { message } = result as Extract<WorkspaceActionResult, { ok: false }>
-          // The gate renders every key with the password floor; keys without `{min}` ignore it.
-          expect(message, code).toBe(tMain(key!, { min: MIN_PASSWORD_LENGTH }))
+          // The gate renders every key with the password floor, this version's number and the update address (T2.6:
+          // X01 and C01 name the last two); a key without one of these placeholders ignores it. Nothing stays unfilled.
+          expect(message, code).toBe(tMain(key!, { min: MIN_PASSWORD_LENGTH, version: APP_VERSION, address: UPDATE_ADDRESS }))
+          expect(message, code).not.toContain('{')
         }
         if (stateBefore !== null) expect(workspace.getState()).toEqual(stateBefore)
       } finally {
@@ -1313,6 +1366,37 @@ describe('a lock whose probe fell back to the header (#876)', () => {
   })
 })
 
+// App-update T2.2 (W-9, F-10): every open stamps `last_writer`, best effort, so a stamp that cannot be written never fails
+// the unlock; support learns of it from one log line with a content-free code. Never SQLite's message: a trigger a later
+// or foreign build planted on the table quotes its own text there.
+describe('an unlock whose last-writer stamp could not be written (app-update T2.2)', () => {
+  it('opens, and logs exactly one line with the content-free code and none of the message text', async () => {
+    const quote = 'the quoted text of a planted trigger'
+    const version = (JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+    setStampAppVersion(version)
+    const vp = lockedVault('wsipc', PW)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    db.exec(`CREATE TRIGGER block_stamp BEFORE INSERT ON schema_meta BEGIN SELECT RAISE(ABORT, '${quote}'); END;`)
+    lockEncryptedVault(vp, db, key)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `T2.2 stamp marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      const logged = lines.filter((l) => l.includes('last-writer stamp'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toMatch(/"code":"sqlite \d+: [A-Za-z ]+"/)
+      expect(lines.join('\n')).not.toContain(quote)
+    } finally {
+      ctrl.shutdown()
+      setStampAppVersion('')
+    }
+  })
+})
+
 // #845: the user copy is the same for a newer database and a newer vault format; only the log tells support which
 // artifact a newer build wrote, and which version it found.
 describe('an unlock refused for a newer vault format (#845)', () => {
@@ -1352,6 +1436,40 @@ describe('an unlock refused for a newer vault format (#845)', () => {
       const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('vault damaged'))
       expect(logged).toHaveLength(1)
       expect(logged[0]).toContain('{"damage":"failed-authentication"}')
+    } finally {
+      workspace.shutdown()
+    }
+  })
+
+  // W-68 (T2.14): an unlock whose open fails because SQLite cannot parse the schema answers its own reason, never
+  // `vault_damaged` ("restore from a backup"). Its log line and audit line are fixed words: SQLite's message quotes a
+  // schema object's name and its SQL, and neither reaches the log, the audit or the answer. Nothing on the drive changes.
+  it('an unlock whose schema this SQLite cannot parse answers workspace_schema_unreadable with fixed log and audit words (W-68)', async () => {
+    const vp = schemaUnreadableVault(lockedVault('wsipc', PW), PW)
+    const enc = readFileSync(vp.encPath)
+    const descriptor = readFileSync(vp.descriptorPath)
+    const audit = vi.fn()
+    const workspace = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(workspace, { extra: { audit } }), { appVersion: APP_VERSION })
+    const marker = `W-68 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
+      expect(result).toEqual({
+        ok: false,
+        reason: 'workspace_schema_unreadable',
+        message: tMain('main.workspace.schemaUnreadable', { version: APP_VERSION, address: UPDATE_ADDRESS })
+      })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      expect(lines.filter((l) => l.includes('could not read the database schema'))).toHaveLength(1)
+      expect(lines.filter((l) => l.includes('vault damaged'))).toEqual([])
+      for (const quoted of ['w985_future', 'INDEZ', 'malformed']) expect(lines.join('\n')).not.toContain(quoted)
+      expect(audit.mock.calls).toEqual([['workspace_unlock_failed', 'Workspace unlock failed (database schema unreadable)']])
+      expect(workspace.getState().state).toBe('locked')
+      expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+      expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+      expect(existsSync(vp.dbPath)).toBe(false) // the decrypted copy is shredded, as after any failed open
     } finally {
       workspace.shutdown()
     }
@@ -1471,6 +1589,62 @@ describe('the log line of a create that failed for another reason than a file er
   })
 })
 
+// T2.7 security fix round (L-4; W-68's rule): a failure line keeps the message of an error that is no file error, so text
+// read from the drive reached app.log through two messages. The KDF's errors quoted a descriptor value (a crafted `algo`
+// array or `keyLen` string of any length: one line of about 2 MB empties the size-capped log, and the user's history with
+// it), and the create's open of a working file it found quoted that file's schema. The KDF's messages now name the
+// value's type only, and the create's open is wrapped as the unlock's is (`VaultOpenFailedError`: kind and codes only).
+describe('a workspace failure line carries no text read from the drive (T2.7, L-4)', () => {
+  const ATTACKER = 'ATTACKER-TEXT-'
+  const linesAfter = (marker: string): string => {
+    const all = readLogTail(100_000)
+    return all.slice(all.findIndex((l) => l.includes(marker)) + 1).join('\n')
+  }
+
+  it.each<[string, (kdf: Record<string, unknown>) => void]>([
+    ['an `algo` that is an array of text', (kdf) => void (kdf.algo = [ATTACKER.repeat(2000)])],
+    ['a `keyLen` that is text', (kdf) => void (kdf.keyLen = ATTACKER.repeat(2000))]
+  ])('an unlock over a descriptor with %s logs none of it', async (_case, edit) => {
+    const vp = editDescriptor(lockedVault('wsipc', PW), (d) => edit(d.kdf as Record<string, unknown>))
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `L-4 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
+      const lines = linesAfter(marker)
+      expect(lines).toContain('Workspace unlock failed')
+      expect(lines).not.toContain(ATTACKER)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  // Where a plaintext workspace is allowed (a dev build), the create still opens a working file it finds (F-3 keeps that
+  // path); one whose schema this SQLite cannot parse fails the open with SQLITE_CORRUPT, whose message quotes the schema.
+  // The controller is not started: a dev start would open that file as the plaintext workspace itself.
+  it('a create over a working file whose schema cannot be parsed logs SQLite’s codes, not the schema', async () => {
+    const vp = freshVaultPaths('wsipc')
+    openDatabase(vp.dbPath).close() // the app's schema, then an index text `CREATE INDEZ w985_future …` under this
+    writeNewerSchema(vp.dbPath, { userVersion: SCHEMA_VERSION }) // build's own stamp: not newer
+    const ctrl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `L-4 create marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+      expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
+      const lines = linesAfter(marker)
+      expect(lines).toContain('Workspace create failed')
+      expect(lines).toContain('"sqliteCode":11') // SQLITE_CORRUPT, as the open reported it
+      expect(lines).not.toContain('w985_future')
+      expect(lines).not.toContain('INDEZ')
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+})
+
 // #956: the unlock, password-change and lock arms logged `String(err)`, and a Node file error's text names the drive's
 // or the profile's absolute paths, which Diagnostics → Copy and Save log hand out. Each arm now logs `failureForLog`
 // (its rule is failure-for-log.test.ts's): these rows hold the wiring, each with a real file error (a directory where a
@@ -1499,14 +1673,16 @@ describe('a workspace failure line names no path (#956)', () => {
     const vp = lockedVault('wsipc', PW)
     failedLockState(vp, 7171, PW) // a working file newer than `.enc`: the start keeps it, the unlock re-encrypts it
     const ctrl = startedOn(vp)
-    mkdirSync(`${vp.encPath}.tmp`) // encryptFile's temp: EISDIR, Node's error naming the path
+    // encryptFile's temp: Node's error naming the path (EEXIST since T2.7's F-2, which creates the temp with 'wx' and
+    // leaves a folder at its name; EISDIR with 'w')
+    mkdirSync(`${vp.encPath}.tmp`)
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const marker = mark()
     try {
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
       const lines = linesAfter(marker, 'Workspace unlock failed')
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('EISDIR')
+      expect(lines[0]).toContain('EEXIST')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
     } finally {
       ctrl.shutdown()
@@ -1680,7 +1856,7 @@ describe('a workspace failure line names no path (#956)', () => {
   it('a password change whose key file write meets a file error logs its code, not the path', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
-    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EISDIR
+    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EEXIST since T2.7's F-2 ('wx'; EISDIR with 'w')
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const marker = mark()
     try {
@@ -1688,7 +1864,7 @@ describe('a workspace failure line names no path (#956)', () => {
       expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.changeFailed') })
       const lines = linesAfter(marker, 'Workspace password change failed')
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('EISDIR')
+      expect(lines[0]).toContain('EEXIST')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
     } finally {
       ctrl.lock()

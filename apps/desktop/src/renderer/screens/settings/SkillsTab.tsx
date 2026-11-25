@@ -46,6 +46,9 @@ export function SkillsTab(): JSX.Element {
   // SKA-32: the last reconcile's structural error summary (counts+codes only, never a folder
   // name). Non-zero → the calm "N skill folders could not be read" notice below the toolbar.
   const [reconcileStatus, setReconcileStatus] = useState<SkillReconcileStatus | null>(null)
+  // W-65: the folders made for a newer version (absent on the status when there are none, or from an older main).
+  const newerSkillFolders =
+    typeof reconcileStatus?.needsNewerAppCount === 'number' ? reconcileStatus.needsNewerAppCount : 0
   // Per-skill enable/disable in-flight set (audit FE-3): the Switch is disabled while a toggle is
   // pending and a second toggle for the same skill is ignored, so rapid clicks can't race (no
   // overlapping enable/disable whose last-resolved refresh wins). Disable-while-pending over
@@ -260,6 +263,12 @@ export function SkillsTab(): JSX.Element {
         </div>
         {/* SH-2 (#145): always-mounted so the FIRST load failure is announced. */}
         <ErrorBanner message={loadError} t={t} />
+        {/* W-65 (T2.14): skill folders made for a newer version get their own line (C06/C07), so the user is
+            sent to the update instead of looking for a typo; the "could not be read" line below no longer counts
+            them. Count only, like it. */}
+        {newerSkillFolders > 0 && (
+          <Banner tone="warning">{tCount('skills.reconcile.needsNewerApp', newerSkillFolders)}</Banner>
+        )}
         {/* SKA-32: reconcile errors were previously dropped silently — a drop-in with one YAML typo
             simply never appeared. Count only; the folder itself is user content and never named. */}
         {(reconcileStatus?.errorCount ?? 0) > 0 && (
@@ -378,6 +387,8 @@ function SkillRow({
   const { t, lang } = useT()
   const needsReview = skill.source === 'user' && !skill.warningAck
   const isApp = skill.source === 'app'
+  // W-65 (R2-3): the folder is there, rewritten by a newer version (the main side's last reconcile says so).
+  const madeForNewerVersion = skill.unavailable && skill.unavailableReason === 'needsNewerApp'
   const rowTitle = localizedSkillTitle(skill, lang)
   const rowDesc = localizedSkillDescription(skill, lang)
   return (
@@ -389,12 +400,15 @@ function SkillRow({
       </button>
       <div className="skill-row-trailing">
         <Badge tone="neutral">{t(TRUST_LABEL[skill.trustedLevel])}</Badge>
-        {skill.unavailable && (
+        {/* W-65 (T2.14 fix round 2, review R2-3): an unavailable row whose folder now holds a skill made for a
+            newer version shows the "Needs newer app" state below (X03), never "Files missing": its files are on
+            the drive. */}
+        {skill.unavailable && !madeForNewerVersion && (
           <Badge tone="error" icon="⚠" title={t('skills.unavailable.title')}>
             {t('skills.unavailable.chip')}
           </Badge>
         )}
-        {skill.incompatible && (
+        {(skill.incompatible || madeForNewerVersion) && (
           <Badge tone="warning" icon="⚠" title={t('skills.incompatible.title')}>
             {t('skills.incompatible.chip')}
           </Badge>

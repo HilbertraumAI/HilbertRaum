@@ -9,7 +9,7 @@ import {
 } from '../../src/main/services/drive'
 import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
 import { SIDECAR_FAMILY_SPECS, compareRuntimeVersions, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
-import { isRealSha256 } from '../../src/shared/manifest'
+import { declaresUnknownRole, isRealSha256, validateManifest } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
 import {
   DRIVE_LICENSE_ARTIFACTS,
@@ -557,6 +557,52 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
       for (const runtime of m[1].split('|')) pairs.add(`${runtime}|${m[2]}`)
     }
     expect(pairs).toEqual(canonicalRuntimeFormatPairs())
+  })
+})
+
+// App-update wave T2.10 (W-62 (b), 10.10): fetch-models and verify-models skip a manifest whose role their checkout's app
+// does not know. The role list is a second spelling of shared/manifest.ts's, taken here from the validator's own message
+// (the list it accepts), and the version they compare a min_app_version with is the checkout's apps/desktop/package.json,
+// the version the app built from it reports. What the twins then do is run, not read: script-execution.test.ts.
+describe('TS ↔ shell-script drift (the model scripts skip a manifest for a newer HilbertRaum, W-62 (b))', () => {
+  const MODEL_SCRIPTS = ['scripts/fetch-models.ps1', 'scripts/fetch-models.sh', 'scripts/verify-models.ps1', 'scripts/verify-models.sh']
+  /** The roles the app accepts, in its own order, from the error its validator gives an unknown role. */
+  const appRoles = (): string[] => {
+    const prefix = '"role" must be one of: '
+    const line = validateManifest({ role: 'no-such-role' }).errors.find((e) => e.startsWith(prefix))
+    expect(line, 'the validator names its roles').toBeDefined()
+    return line!.slice(prefix.length).split(', ')
+  }
+
+  it.each(MODEL_SCRIPTS)("%s spells the app's role list", (rel) => {
+    const roles = extractScriptArray(repoText(rel), rel.endsWith('.ps1') ? '$ModelRoles = @(' : 'MODEL_ROLES=(')
+    expect(roles).toEqual(appRoles())
+    for (const role of roles) expect(declaresUnknownRole({ role }), role).toBe(false)
+  })
+
+  // T2.7 fix round (R1 MJ-5): the app reads a manifest by its extension in any case (`K20.YAML`) and reserves
+  // runtime-sources in any case (models.ts collectManifestFiles); PowerShell's -in / -notin compare without case. The .sh
+  // twins' `find -name` did not, so `verify-models.sh --kit` passed a drive whose newer manifest was named in upper case.
+  // What the walks then find is run on both legs: script-execution.test.ts.
+  it.each(MODEL_SCRIPTS)('%s walks the manifest names the app walks, in any case', (rel) => {
+    const walk = codeLines(rel).map((l) => l.text).join('\n')
+    if (rel.endsWith('.ps1')) {
+      expect(walk).toContain("$_.Extension -in @('.yaml', '.yml') -and $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml')")
+    } else {
+      expect(walk).toMatch(/find "\$MANIFESTS_DIR" \\\( -iname '\*\.yaml' -o -iname '\*\.yml' \\\) -type f \\\n\s+! -iname 'runtime-sources\.yaml' ! -iname 'runtime-sources\.yml' \| sort/)
+      expect(walk).not.toMatch(/ -name '/)
+    }
+  })
+
+  it.each(MODEL_SCRIPTS)("%s reads the version it compares with from the checkout's apps/desktop/package.json", (rel) => {
+    const code = codeLines(rel).map((l) => l.text).join('\n')
+    if (rel.endsWith('.ps1')) {
+      expect(code).toMatch(/\$AppPackageJson = Join-Path \$RepoRoot 'apps\/desktop\/package\.json'/)
+      expect(code).toMatch(/ConvertFrom-Json\)\.version/)
+    } else {
+      expect(code).toMatch(/APP_PACKAGE_JSON="\$REPO_ROOT\/apps\/desktop\/package\.json"/)
+      expect(code).toMatch(/"version"/)
+    }
   })
 })
 

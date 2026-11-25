@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,7 +31,8 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     lstatSync: record('lstatSync', actual.lstatSync),
     statSync: record('statSync', actual.statSync),
-    realpathSync: record('realpathSync', actual.realpathSync),
+    // The real `.native` stays on the wrapper: the skill delete's containment test (folderContainment) calls it (T2.7).
+    realpathSync: Object.assign(record('realpathSync', actual.realpathSync), { native: actual.realpathSync.native }),
     readdirSync: record('readdirSync', actual.readdirSync),
     readFileSync: record('readFileSync', actual.readFileSync)
   }
@@ -502,6 +503,136 @@ describe('skills IPC — suggestSkills (#583)', () => {
     ipcState.handlers.clear()
     seededHarness({ app: [{ id: 'bank' }] }, { unlocked: false })
     await expect(invoke(handlers, IPC.suggestSkills, 'c1', 'bank statement')).rejects.toThrow(/locked/i)
+  })
+})
+
+// W-65 (T2.14 fix round 2, review R2-3): an unavailable row whose folder a newer version rewrote crosses the bridge with
+// its reason, from the registry's last reconcile, so the Skills tab shows "Needs newer app" instead of "Files missing";
+// a vanished folder's row carries none. Nothing about the row is stored differently.
+describe('skills IPC — the reason an unavailable skill row carries (W-65, R2-3)', () => {
+  it('listSkills and getSkill name the newer-version row, never the vanished one', async () => {
+    const w = makeSkillsWorld('skill-ipc', {
+      appVersion: '0.1.66',
+      seedUser: (dir) => ['mine', 'gone'].forEach((id) => writeSkillPackage(dir, { id }))
+    })
+    registerSkillsIpc(makeSkillsIpcContext(w))
+    const listed = async (): Promise<SkillInfo[]> => (await invoke(handlers, IPC.listSkills)).result as SkillInfo[]
+    expect((await listed()).map((s) => [s.installId, s.unavailable, s.unavailableReason])).toEqual([
+      ['user:gone', false, undefined],
+      ['user:mine', false, undefined]
+    ])
+
+    writeSkillPackage(w.userSkillsDir, { id: 'mine', kind: 'agent', minAppVersion: '0.2.0' })
+    rmSync(join(w.userSkillsDir, 'gone'), { recursive: true, force: true })
+    w.skills.reconcile() // what the next start, an import or a delete does
+    expect((await listed()).map((s) => [s.installId, s.unavailable, s.unavailableReason])).toEqual([
+      ['user:gone', true, undefined],
+      ['user:mine', true, 'needsNewerApp']
+    ])
+    const { result: one } = await invoke(handlers, IPC.getSkill, 'user:mine')
+    expect(one).toMatchObject({ unavailable: true, unavailableReason: 'needsNewerApp' })
+    const { result: other } = await invoke(handlers, IPC.getSkill, 'user:gone')
+    expect(other as SkillInfo).not.toHaveProperty('unavailableReason')
+  })
+})
+
+// App-update T2.7 fix round (R1 MJ-1 = R2 M-1): after a "Go back", release 1 reads `skills` rows a later version wrote,
+// and rewrites `manifest_json` only for a folder it can read. A row whose folder it cannot read (a skill that version
+// bundles, W-24) keeps that version's cached manifest. One such row with no `compatibility` or `permissions`, or a
+// cached manifest that is no JSON, threw for the whole Skills list, the composer's picker and the suggestion. Now each
+// member release 1 reads falls back to its own default, the row shows by the states it already has (unavailable: its
+// folder is not on the drive), and every other skill answers as before.
+describe('skills IPC — a skills row a later version wrote never fails the list (T2.7, R1 MJ-1 = R2 M-1)', () => {
+  const T = '2027-01-05T00:00:00.000Z'
+  const FOREIGN = { installId: 'app:later-only', id: 'later-only', title: 'Later only', version: '2.0.0', kind: 'workflow' }
+  const CEILING = { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' }
+  const NO_TRIGGERS = { keywords: [], mimeTypes: [], filenamePatterns: [] }
+  /** The cached manifest a later version writes for a skill it bundles, in release 1's shape. */
+  const SHAPED = {
+    id: FOREIGN.id,
+    title: FOREIGN.title,
+    description: 'Bundled by a later version',
+    version: FOREIGN.version,
+    author: 'Later',
+    language: 'de',
+    kind: FOREIGN.kind,
+    compatibility: {},
+    permissions: { documents: 'none', network: 'denied', filesystem: 'none' },
+    allowedTools: [],
+    reservesTools: false,
+    triggers: { keywords: ['bank statement'], mimeTypes: [], filenamePatterns: [] }
+  }
+  /** What release 1 reads of a cached manifest it cannot read at all: its own defaults, the rest from the row's columns. */
+  const DEFAULTS = {
+    id: FOREIGN.id,
+    title: FOREIGN.title,
+    description: '',
+    version: FOREIGN.version,
+    author: '',
+    language: 'en',
+    kind: FOREIGN.kind,
+    compatibility: {},
+    permissions: CEILING,
+    allowedTools: [],
+    triggers: NO_TRIGGERS
+  }
+  const without = (key: keyof typeof SHAPED): Record<string, unknown> => {
+    const { [key]: _gone, ...rest } = SHAPED
+    return rest
+  }
+
+  it.each<[string, string, Record<string, unknown>]>([
+    ['a cached manifest that is no JSON', '<<written by a later version>>', DEFAULTS],
+    ['a cached manifest that is JSON but no object', 'null', DEFAULTS],
+    ['no compatibility', JSON.stringify(without('compatibility')), { ...SHAPED, compatibility: {} }],
+    ['a compatibility that is no mapping', JSON.stringify({ ...SHAPED, compatibility: '0.2.0' }), { ...SHAPED, compatibility: {} }],
+    ['no permissions', JSON.stringify(without('permissions')), { ...SHAPED, permissions: CEILING }],
+    ['permissions that are a list', JSON.stringify({ ...SHAPED, permissions: ['documents'] }), { ...SHAPED, permissions: CEILING }],
+    [
+      'a permission value release 1 does not know',
+      JSON.stringify({ ...SHAPED, permissions: { documents: 'none', network: 'lan', filesystem: 'none' } }),
+      { ...SHAPED, permissions: { documents: 'none', network: 'denied', filesystem: 'none' } }
+    ],
+    [
+      'no triggers and no tool list',
+      JSON.stringify({ ...without('triggers'), allowedTools: 'ledger' }),
+      { ...SHAPED, triggers: NO_TRIGGERS, allowedTools: [] }
+    ],
+    [
+      'per-language texts that are no text',
+      JSON.stringify({ ...SHAPED, localized: { de: { title: 7, description: ['x'] }, fr: 'Titre', it: { title: 'Titolo' } } }),
+      { ...SHAPED, localized: { it: { title: 'Titolo' } } }
+    ]
+  ])('%s: the list, the picker, the suggestion and getSkill all answer', async (_name, manifestJson, reading) => {
+    const w = makeSkillsWorld('skill-ipc', {
+      appVersion: '0.1.66',
+      seedApp: (dir) => writeSkillPackage(dir, { id: 'ordinary', triggers: { keywords: ['bank statement'] } }),
+      seedUser: (dir) => writeSkillPackage(dir, { id: 'mine' })
+    })
+    // The row as the later version left it: on, no reason, its folder in that version's bundle, not on the drive.
+    w.db
+      .prepare(
+        `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled, warning_ack, trusted_level,
+           manifest_json, unavailable_at, installed_at, updated_at, disabled_reason)
+         VALUES (?, ?, ?, ?, ?, 'app', ?, 1, 1, 'app', ?, NULL, ?, ?, NULL)`
+      )
+      .run(FOREIGN.installId, FOREIGN.id, FOREIGN.title, FOREIGN.version, FOREIGN.kind, FOREIGN.id, manifestJson, T, T)
+    registerSkillsIpc(makeSkillsIpcContext(w))
+
+    const listed = (await invoke(handlers, IPC.listSkills)).result as SkillInfo[]
+    expect(listed.map((s) => [s.installId, s.unavailable, s.enabled])).toEqual([
+      ['app:later-only', true, true], // the folder is not on the drive: "Files missing", the switch locked
+      ['app:ordinary', false, true],
+      ['user:mine', false, false]
+    ])
+    const foreign = listed.find((s) => s.installId === FOREIGN.installId)!
+    expect(foreign).toMatchObject({ incompatible: false, minAppVersion: null, permissions: reading.permissions })
+    expect(foreign.localized).toEqual(reading.localized)
+    expect(getSkill(w.db, FOREIGN.installId)!.manifest).toEqual(reading)
+    const { result: one } = await invoke(handlers, IPC.getSkill, FOREIGN.installId)
+    expect(one).toEqual(foreign)
+    const { result: offers } = await invoke(handlers, IPC.suggestSkills, 'c1', 'please read my bank statement')
+    expect(offers).toEqual([{ installId: 'app:ordinary', title: 'Skill ordinary' }])
   })
 })
 

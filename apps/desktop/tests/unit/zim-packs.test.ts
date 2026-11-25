@@ -9,6 +9,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
 import { servingNameFor } from '../../src/main/services/zim/identity'
 import {
+  classifyPackSelection,
   listPacks,
   reconcile,
   registerPack,
@@ -16,7 +17,9 @@ import {
   resolvePack,
   retrievablePacks,
   servedCandidates,
+  servedRegistryRows,
   setPackEnabled,
+  unknownSearchablePacks,
   writeLibraryXml,
   type PackDeps
 } from '../../src/main/services/zim/packs'
@@ -449,6 +452,119 @@ describe('knowledge-pack registry', () => {
     expect(healing.healed).toBeGreaterThan(0)
     expect(userColumns(db)).toEqual(userStateBefore) // byte-identical across the whole pass
     warn.mockRestore()
+  })
+})
+
+// W-71 (app-update wave, T2.14): a ZIM archive in a format newer than the knowledge-pack tools read (libzim reads majors
+// 5 and 6; the major is the header's uint16 at offset 4). Release 1 never hands such a file to kiwix-manage or
+// kiwix-serve and says "newer format" instead of blaming the file. The rule is "above 6" only: every lower major reads
+// as it did before.
+describe('a ZIM archive in a newer format (W-71)', () => {
+  /** The harness's deps with every kiwix-manage call's archive path recorded. */
+  function counting(deps: PackDeps): { deps: PackDeps; managed: string[] } {
+    const managed: string[] = []
+    return {
+      managed,
+      deps: {
+        ...deps,
+        manageAdd: async (libraryXmlPath, zimPath) => {
+          managed.push(zimPath)
+          return deps.manageAdd(libraryXmlPath, zimPath)
+        }
+      }
+    }
+  }
+  const storedReason = (db: Db, id: string): string | null =>
+    (db.prepare('SELECT unavailable_reason AS r FROM knowledge_packs WHERE id = ?').get(id) as { r: string | null }).r
+
+  it.each([
+    [0, true],
+    [4, true],
+    [5, true],
+    [6, true],
+    [7, false],
+    [65535, false]
+  ])('Add packs… with an archive of format major %i: registered = %s, and kiwix-manage only ever sees a readable one', async (major, registered) => {
+    const { db, deps, zimDir } = makeHarness()
+    const { deps: counted, managed } = counting(deps)
+    const file = writeZimFixture(join(zimDir, `major-${major}.zim`), U.alpha, { major, trailing: 'body' })
+    if (registered) {
+      expect(await registerPack(db, counted, file)).toMatchObject({ id: U.alpha, available: true, unavailableReason: null })
+      expect(managed).toEqual([file])
+    } else {
+      await expect(registerPack(db, counted, file)).rejects.toMatchObject({ name: 'ZimNewerFormatError' })
+      expect(managed).toEqual([]) // refused between the header and the metadata read
+      expect(listPacks(db)).toEqual([])
+    }
+  })
+
+  it('a newer-format archive never registered gets no row from the reconcile, and kiwix-manage never sees it', async () => {
+    const { db, deps, zimDir } = makeHarness()
+    const { deps: counted, managed } = counting(deps)
+    writeZimFixture(join(zimDir, 'from-the-future.zim'), U.intruder, { major: 7, trailing: 'body' })
+    addZimFile(zimDir, 'today.zim', U.beta)
+    const report = await reconcile(db, counted)
+    expect(report.registered).toBe(1) // today.zim only
+    expect(listPacks(db).map((p) => p.id)).toEqual([U.beta])
+    expect(managed).toEqual([join(zimDir, 'today.zim')])
+    expect(await reconcile(db, counted)).toMatchObject({ changed: false, registered: 0, healed: 0, unavailable: 0 })
+    expect(managed).toEqual([join(zimDir, 'today.zim')])
+  })
+
+  it('a known pack whose file is now in a newer format is kept from every tool, stored as newer_format, and readable again once the file is', async () => {
+    const { db, deps, root, zimDir } = makeHarness()
+    const alphaFile = addZimFile(zimDir, 'alpha.zim', U.alpha)
+    await registerPack(db, deps, alphaFile)
+    await registerPack(db, deps, addZimFile(zimDir, 'beta.zim', U.beta))
+    // A newer version replaced the archive with one in its newer format (the same archive UUID).
+    writeZimFixture(alphaFile, U.alpha, { major: 7, trailing: 'body of alpha.zim' })
+    const { deps: counted, managed } = counting(deps)
+
+    // Before any reconcile the row still reads available, so the resolve itself must refuse the file.
+    expect(resolvePack(zimDir, { id: U.alpha, leaf: 'alpha.zim', recorded_path: alphaFile })).toEqual({
+      path: null,
+      reason: 'newer-format'
+    })
+    expect(servedCandidates(db, zimDir).map((c) => c.id)).toEqual([U.beta])
+    expect(retrievablePacks(db, zimDir, [U.alpha, U.beta]).map((p) => p.id)).toEqual([U.beta])
+    expect(classifyPackSelection(db, zimDir, [U.alpha]).outcomes).toEqual([
+      { packId: U.alpha, title: 'Title of alpha.zim', status: 'skipped', reason: 'newer-format', found: 0, admitted: 0 }
+    ])
+
+    const report = await reconcile(db, counted)
+    expect(report).toMatchObject({ changed: true, registered: 0, unavailable: 1 })
+    expect(listPacks(db).find((p) => p.id === U.alpha)).toMatchObject({ available: false, unavailableReason: 'newer-format' })
+    expect(storedReason(db, U.alpha)).toBe('newer_format')
+    expect(servedRegistryRows(db).map((r) => r.id)).toEqual([U.beta])
+    expect(unknownSearchablePacks(db).map((p) => p.id)).toEqual([U.beta])
+    expect(classifyPackSelection(db, zimDir, [U.alpha]).outcomes.map((o) => o.reason)).toEqual(['newer-format'])
+    // The library the sidecar serves is built from the served candidates: the newer file never reaches kiwix-manage.
+    await expect(writeLibraryXml(counted, join(root, 'library.xml'), servedCandidates(db, zimDir))).resolves.toBe(1)
+    expect(managed).toEqual([join(zimDir, 'beta.zim')])
+
+    // A second pass over the same drive writes nothing.
+    const stamp = (db.prepare('SELECT updated_at AS u FROM knowledge_packs WHERE id = ?').get(U.alpha) as { u: string }).u
+    expect(await reconcile(db, counted)).toMatchObject({ changed: false, registered: 0, healed: 0, unavailable: 0 })
+    expect((db.prepare('SELECT updated_at AS u FROM knowledge_packs WHERE id = ?').get(U.alpha) as { u: string }).u).toBe(stamp)
+
+    // The file in a readable format again: the next reconcile heals the row.
+    addZimFile(zimDir, 'alpha.zim', U.alpha)
+    await reconcile(db, counted)
+    expect(listPacks(db).find((p) => p.id === U.alpha)).toMatchObject({ available: true, unavailableReason: null })
+    expect(storedReason(db, U.alpha)).toBeNull()
+  })
+
+  it('an unavailable reason this version does not know (a newer version’s) reads as unavailable with no reason, and the next reconcile heals it', async () => {
+    const { db, deps, zimDir } = makeHarness()
+    await registerPack(db, deps, addZimFile(zimDir, 'alpha.zim', U.alpha))
+    db.prepare("UPDATE knowledge_packs SET unavailable_at = ?, unavailable_reason = 'quantum_flux' WHERE id = ?").run(
+      new Date().toISOString(),
+      U.alpha
+    )
+    expect(listPacks(db)[0]).toMatchObject({ available: false, unavailableReason: null })
+    await reconcile(db, deps)
+    expect(listPacks(db)[0]).toMatchObject({ available: true, unavailableReason: null })
+    expect(storedReason(db, U.alpha)).toBeNull()
   })
 })
 

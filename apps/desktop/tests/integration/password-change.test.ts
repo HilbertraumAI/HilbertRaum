@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, existsSync, linkSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, existsSync, linkSync, lstatSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { basename, dirname, join, relative } from 'node:path'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
@@ -224,6 +224,23 @@ describe('changePassword — migration vs O(1) re-wrap', () => {
     expect(() => ctl.unlock(current)).toThrow(WrongPasswordError)
     ctl.unlock('pw-next')
     expect(readEncryptedDoc(ctl, enc)).toBe('untouched content')
+    ctl.lock()
+  })
+
+  // App-update F-27 (d) (T2.11 S-3): a password change builds the version-2 descriptor anew from its six fields, so a
+  // field this version does not know is gone after one. A later version therefore never adds a field that matters under
+  // descriptor version 2: it raises the version, which release 1 refuses as newer.
+  it('a descriptor field this version does not know is gone after a password change (F-27 (d))', () => {
+    const vp = lockedVault('pwchange', 'pw-one')
+    const fields = (): string[] => Object.keys(JSON.parse(readFileSync(vp.descriptorPath, 'utf8')) as object).sort()
+    const written = JSON.parse(readFileSync(vp.descriptorPath, 'utf8')) as Record<string, unknown>
+    writeFileSync(vp.descriptorPath, JSON.stringify({ ...written, laterField: { kept: true } }), 'utf8')
+    const ctl = unlockedController(vp, 'pw-one')
+    expect(fields(), 'the unlock reads the descriptor and leaves it as written').toContain('laterField')
+    ctl.changePassword('pw-one', 'pw-two', FAST_ARGON)
+    expect(fields()).toEqual(['dataKey', 'kdf', 'mode', 'saltB64', 'verifier', 'version'])
+    ctl.lock()
+    expect(ctl.unlock('pw-two').state).toBe('unlocked')
     ctl.lock()
   })
 })
@@ -694,6 +711,95 @@ describe('rekey journal — aliases, unreachable entries, corruption (#241)', ()
     expect(existsSync(f.outside)).toBe(true)
     ctl.lock()
   })
+
+  // T2.16 fix round (R2 A1 = R1 B-6): the quarantine removed whatever was at `.corrupt` first, with `rmSync`. A folder
+  // there threw (`ERR_FS_EISDIR`, a file error), so every start and every unlock answered "try again" for good (review 2's
+  // probe P1), and a link there was removed. A folder, a junction or a link at that name is now never removed: the
+  // journal is set aside under the next free name, `.corrupt-<n>`, and the in-store classes roll forward as above. (Here
+  // the staged database is a #973 doubt, as no journal lists it, so the start leaves the set and the unlock settles it.)
+  const makeDirLink = (kind: 'junction' | 'dir') => (at: string, root: string): void => {
+    const target = join(root, `corrupt-target-${kind}`)
+    mkdirSync(target)
+    writeFileSync(join(target, 'held'), 'x')
+    symlinkSync(target, at, kind)
+  }
+  const canDirLink = (kind: 'junction' | 'dir'): boolean => {
+    const root = tempRoot('rekey-corrupt-can')
+    try {
+      makeDirLink(kind)(join(root, 'link'), root)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const IN_THE_WAY: Array<[string, (at: string, root: string) => void, boolean, string]> = [
+    [
+      'a folder',
+      (at) => {
+        mkdirSync(at)
+        writeFileSync(join(at, 'held'), 'x')
+      },
+      true,
+      '.corrupt-1'
+    ],
+    [
+      'a folder, and another at `.corrupt-1`',
+      (at) => {
+        for (const name of [at, `${at}-1`]) {
+          mkdirSync(name)
+          writeFileSync(join(name, 'held'), 'x')
+        }
+      },
+      true,
+      '.corrupt-2'
+    ],
+    ...(process.platform === 'win32'
+      ? [['a junction to a folder elsewhere', makeDirLink('junction'), true, '.corrupt-1'] as [string, (at: string, root: string) => void, boolean, string]]
+      : []),
+    ['a symbolic link to a folder elsewhere', makeDirLink('dir'), canDirLink('dir'), '.corrupt-1']
+  ]
+  for (const [what, plantAt, can, asideName] of IN_THE_WAY) {
+    it.skipIf(!can)(`a journal that cannot be parsed beside ${what} at its .corrupt name: the start goes on, the journal is set aside as ${asideName}, the thing in the way stays`, async () => {
+      const f = await committedStage()
+      writeFileSync(f.journalPath, '{ not json', 'utf8')
+      const corrupt = `${f.journalPath}.corrupt`
+      plantAt(corrupt, f.root)
+      const inTheWay = (): unknown => [lstatSync(corrupt).isSymbolicLink(), readdirSync(corrupt), readFileSync(join(corrupt, 'held'), 'utf8')]
+      const before = inTheWay()
+
+      const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.isRecoveryBlocked()).toBe(false)
+      expect(ctl.unlock('new-password').state).toBe('unlocked')
+      expect(existsSync(f.journalPath)).toBe(false)
+      expect(readFileSync(`${f.journalPath}${asideName}`, 'utf8')).toBe('{ not json')
+      expect(await readImage(ctl, f.root, f.imageA)).toEqual(IMAGE_A)
+      expect(await readImage(ctl, f.root, f.imageB)).toEqual(IMAGE_B)
+      expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES')
+      expect(inTheWay(), 'the thing at .corrupt, after the unlock').toEqual(before)
+      ctl.lock()
+    })
+  }
+
+  // Review 2's probe P1 as it was run: no stage at all, so the start itself settles the journal. Before, three starts and
+  // three unlocks with the right password each answered blocked (`ERR_FS_EISDIR`), the journal still there.
+  it('a journal that cannot be parsed beside a folder at its .corrupt name, nothing staged: no start is blocked, and the right password opens', () => {
+    const vp = lockedVault('rekey-corrupt-p1', 'pw')
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL)
+    writeFileSync(journal, '{ not json', 'utf8')
+    mkdirSync(`${journal}.corrupt`)
+    writeFileSync(join(`${journal}.corrupt`, 'held'), 'x')
+    for (let start = 0; start < 2; start++) {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.isRecoveryBlocked(), `start ${start + 1}`).toBe(false)
+      expect(existsSync(journal)).toBe(false)
+      expect(readFileSync(`${journal}.corrupt-1`, 'utf8')).toBe('{ not json')
+      expect(readdirSync(`${journal}.corrupt`)).toEqual(['held'])
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+      ctl.lock()
+    }
+  })
 })
 
 // #1015: the start swaps in the stages a committed password change left, with no key at hand. A swap it cannot make (a
@@ -1012,6 +1118,22 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
     expect(readEncryptedDoc(next, f.doc)).toBe('DOCUMENT-SURVIVES')
     expect(JSON.parse(readFileSync(f.journalPath, 'utf8'))).toEqual({ version: 1, staged: [stagedOutside], remove: [] })
     next.lock()
+  })
+
+  // App-update F-27 (d) (T2.11 S-3): the rewrite above builds a version-1 journal anew from its three fields (`version`,
+  // `staged`, `remove`), so a field this version does not know is gone after it. A later version never adds a field that
+  // matters under journal version 1: it raises the version, which release 1 refuses as newer.
+  it('a journal it rewrites keeps only its three fields: one this version does not know is gone (F-27 (d))', async () => {
+    const f = await committedStage((root) => join(root, 'legacy-store'))
+    const stagedOutside = `${f.outside}${REKEY_SUFFIX}`
+    linkSync(stagedOutside, join(f.root, 'backup-of-stage.bin')) // the outside stage waits, so the journal is rewritten
+    const written = JSON.parse(readFileSync(f.journalPath, 'utf8')) as Record<string, unknown>
+    writeFileSync(f.journalPath, JSON.stringify({ ...written, laterField: { kept: true } }), 'utf8')
+    const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    ctl.unlock('new-password')
+    ctl.lock()
+    expect(JSON.parse(readFileSync(f.journalPath, 'utf8'))).toEqual({ version: 1, staged: [stagedOutside], remove: [] })
   })
 
   // A Kit that comes back under another drive letter or mount point carries a journal whose every entry names the old

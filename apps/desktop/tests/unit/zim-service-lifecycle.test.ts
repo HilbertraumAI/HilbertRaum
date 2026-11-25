@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -1017,6 +1017,48 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     h.svc.setPackEnabled(h.db, alpha, true) // revision 3
     const port = await svcPort(h.svc.ensureServer(h.db))
     expect(h.svc.serverState()).toMatchObject({ revision: 3, build: 3, generation: 4, port, alive: true })
+    await h.svc.stop()
+  })
+
+  // W-71 (app-update wave, T2.14 fix round 1, review R1-1): a natural-crash restart resolves the packs again. A served
+  // pack's file replaced in place by one in a newer ZIM format while the session ran (no Refresh, no lock) must not reach
+  // the restarted kiwix-serve through the earlier build: the restart builds a library without it and removes the earlier
+  // one. (T05's step (5) keeps the other half: with the files unchanged the restart reuses the build.)
+  it('a crash restart after a served file turned into a newer ZIM format builds a library without it (W-71)', async () => {
+    const h = svcHarness()
+    const alpha = await h.addPack('alpha.zim')
+    const beta = await h.addPack('beta.zim')
+    expect([...(await h.svc.ensureServer(h.db))!.names.keys()].sort()).toEqual([alpha, beta].sort())
+    const firstBuild = h.serveSpawns[h.serveSpawns.length - 1]!.libraryXmlPath
+    writeZimFixture(join(h.zimDir, 'alpha.zim'), alpha, { major: 7, trailing: 'body of alpha.zim' })
+    h.lastServeChild().emit('exit', 1, null) // kiwix-serve dies on its own
+    await tick()
+    const addsBefore = h.buildAdds.length
+
+    const restarted = await h.svc.ensureServer(h.db)
+    const child = h.serveSpawns[h.serveSpawns.length - 1]!
+    expect(child.libraryXmlPath).not.toBe(firstBuild)
+    const library = readFileSync(child.libraryXmlPath, 'utf8')
+    expect(library).not.toContain('alpha.zim')
+    expect(library).toContain('beta.zim')
+    expect(h.buildAdds.slice(addsBefore).map((a) => basename(a.zimPath))).toEqual(['beta.zim'])
+    expect([...restarted!.names.keys()]).toEqual([beta])
+    expect(h.builds()).toEqual([basename(child.libraryXmlPath)]) // the earlier build is removed
+    await h.svc.stop()
+  })
+
+  it('a crash restart after the only served file turned into a newer ZIM format serves nothing and starts no child (W-71)', async () => {
+    const h = svcHarness()
+    const alpha = await h.addPack('alpha.zim')
+    expect(await h.svc.ensureServer(h.db)).not.toBeNull()
+    writeZimFixture(join(h.zimDir, 'alpha.zim'), alpha, { major: 7, trailing: 'body of alpha.zim' })
+    h.lastServeChild().emit('exit', 1, null)
+    await tick()
+    const spawnsBefore = h.serveSpawns.length
+
+    expect(await h.svc.ensureServer(h.db)).toBeNull()
+    expect(h.serveSpawns).toHaveLength(spawnsBefore)
+    expect(h.builds()).toEqual([]) // neither the empty build nor the earlier one is left
     await h.svc.stop()
   })
 

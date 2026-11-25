@@ -26,12 +26,19 @@
   message (BLOCK, exit 1), whatever is on disk and whatever -AcceptLicense says: the app
   refuses such a manifest, so any file of it fetched would never start.
 
+  A manifest this checkout's app cannot use is skipped with one SKIP line and counted in the
+  summary (W-62 (b), the app-update wave): a role the app does not know, or a min_app_version
+  above the version in apps/desktop/package.json (exactly MAJOR.MINOR.PATCH, as the app compares;
+  anything else, or a checkout whose version cannot be read, counts as newer). The app lists such
+  a manifest under "Needs a newer HilbertRaum" and never uses it, so nothing of it is fetched.
+
 .PARAMETER Target
   The prepared drive root (e.g. E:\). Required.
 
 .PARAMETER Only
   Fetch only the model with this id. An id no manifest carries, or one whose manifest
   declares no download block, exits 2: an explicit request that names nothing fetchable.
+  So does an id only a manifest for a newer HilbertRaum carries.
 
 .PARAMETER Bundled
   Fetch only the models a preconfigured Kit ships preloaded
@@ -95,6 +102,115 @@ function Get-ManifestField([string]$text, [string]$key) {
 }
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
+
+# --- W-62 (b), the app-update wave: skip a manifest this checkout's app cannot use -------------------
+# The app lists a manifest whose role it does not know, or whose min_app_version is above its own
+# version, under "Needs a newer HilbertRaum" and never uses it (shared/manifest.ts, F-23). Release 1's
+# scripts meet every later release's manifests, so they skip the same files, by the same rule. The same
+# block as verify-models.ps1's (script-drift.test.ts holds both twins of both scripts to the app).
+# The roles the app knows: a second spelling of shared/manifest.ts ROLES.
+$ModelRoles = @(
+  'chat'
+  'embeddings'
+  'reranker'
+  'transcriber'
+  'vision'
+  'translation'
+)
+# The version the app built from this checkout reports: apps/desktop/package.json's "version". Empty
+# when it cannot be read: then every min_app_version counts as newer, as in an app without a version.
+$AppPackageJson = Join-Path $RepoRoot 'apps/desktop/package.json'
+$AppVersion = ''
+if (Test-Path -LiteralPath $AppPackageJson) {
+  try { $AppVersion = [string]((Get-Content -LiteralPath $AppPackageJson -Raw | ConvertFrom-Json).version) } catch { $AppVersion = '' }
+}
+# The app's two version rules, case-sensitive and ASCII only ([0-9], never \d, which .NET reads as any
+# digit): a minimum is EXACTLY MAJOR.MINOR.PATCH (no leading zero); the app's own version may add a
+# -pre.release and a +build. Never a [version] cast: it reads `1.2` as a version.
+$MinAppVersionRe = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+$AppVersionRe = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+$AppParts = $null
+$AppPre = $false
+if ($AppVersion -cmatch $AppVersionRe) {
+  $AppParts = @($Matches[1], $Matches[2], $Matches[3])
+  $AppPre = [bool]$Matches[4]
+}
+$Checkout = if ($AppParts) { "this checkout is $AppVersion" } else { "this checkout's version is unknown" }
+
+# A < B for two runs of digits without leading zeros, of any length (no number type: no overflow).
+function Test-NumberBelow([string]$a, [string]$b) {
+  if ($a.Length -ne $b.Length) { return ($a.Length -lt $b.Length) }
+  return ([string]::CompareOrdinal($a, $b) -lt 0)
+}
+
+# The app's rule for a min_app_version that is there (manifestNeedsNewerApp): newer when it is not
+# exactly MAJOR.MINOR.PATCH, when this checkout's version is unknown, or when it is above it (a
+# pre-release does not meet its own release). Parts compare as whole numbers.
+function Test-MinAppVersionNewer([string]$value) {
+  if (-not ($value -cmatch $MinAppVersionRe)) { return $true }
+  $need = @($Matches[1], $Matches[2], $Matches[3])
+  if (-not $AppParts) { return $true }
+  for ($i = 0; $i -lt 3; $i++) {
+    if ($AppParts[$i] -cne $need[$i]) { return (Test-NumberBelow $AppParts[$i] $need[$i]) }
+  }
+  return $AppPre
+}
+
+# The manifest's id, min_app_version and role, read at column 0 only (a key nested in a block never
+# answers), the first of each. A field is @{ Kind; Value }: N (absent, or YAML null: no value, ~, null),
+# B (a block below the key: no string) or S and the value (quotes unwrapped; unquoted, cut at " #").
+function Get-GateFields([string]$text) {
+  $fields = @{}
+  $pending = $null
+  foreach ($raw in ($text -split "`n")) {
+    $line = $raw.TrimEnd("`r")
+    if ($pending) {
+      if ($line -cmatch '^[ \t]*(#.*)?$') { continue }
+      if ($line -cmatch '^[ \t]' -or $line -cmatch '^-([ \t]|$)') { $fields[$pending] = @{ Kind = 'B'; Value = '' } }
+      $pending = $null
+    }
+    if (-not ($line -cmatch '^(id|min_app_version|role)[ \t]*:(.*)$')) { continue }
+    $key = $Matches[1]
+    $v = $Matches[2] -replace '^[ \t]+', ''
+    if ($fields.ContainsKey($key)) { continue }
+    $c = if ($v.Length -gt 0) { [string]$v[0] } else { '' }
+    if ($c -eq '"' -or $c -eq "'") {
+      $body = $v.Substring(1)
+      $e = $body.IndexOf($c)
+      $fields[$key] = @{ Kind = 'S'; Value = $(if ($e -ge 0) { $body.Substring(0, $e) } else { $body }) }
+      continue
+    }
+    $v = ($v -replace '[ \t]+#.*$', '') -replace '[ \t]+$', ''
+    if ($v -eq '') { $fields[$key] = @{ Kind = 'N'; Value = '' }; $pending = $key }
+    elseif (@('~', 'null', 'Null', 'NULL') -ccontains $v) { $fields[$key] = @{ Kind = 'N'; Value = '' } }
+    else { $fields[$key] = @{ Kind = 'S'; Value = $v } }
+  }
+  return $fields
+}
+
+# Why this checkout's app cannot use the manifest (Why, empty: it can), and its id read at column 0
+# (Id). A missing or blank role is no reason (the app calls such a file invalid, and these scripts
+# never validate a manifest).
+function Get-SkipReason([string]$text) {
+  $g = Get-GateFields $text
+  $id = if ($g.ContainsKey('id') -and $g['id'].Kind -eq 'S') { $g['id'].Value } else { '' }
+  $why = ''
+  $min = $g['min_app_version']
+  if ($min -and $min.Kind -eq 'B') { $why = "min_app_version is no version string; $Checkout" }
+  elseif ($min -and $min.Kind -eq 'S' -and (Test-MinAppVersionNewer $min.Value)) {
+    $shown = if ($min.Value) { $min.Value } else { '(empty)' }
+    $why = "min_app_version $shown; $Checkout"
+  }
+  $role = $g['role']
+  if (-not $why -and $role) {
+    if ($role.Kind -eq 'B') { $why = 'a role that is no name' }
+    elseif ($role.Kind -eq 'S') {
+      $r = $role.Value.Trim()
+      if ($r -and ($ModelRoles -cnotcontains $r)) { $why = "role ""$r""" }
+    }
+  }
+  return [pscustomobject]@{ Id = $id; Why = $why }
+}
 
 function Get-Sha256([string]$path) {
   return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
@@ -302,11 +418,13 @@ $manifestFiles = @(Get-ChildItem -LiteralPath $ManifestsDir -Recurse -File |
 $planned = 0
 $fetched = 0
 $skipped = 0
+$newerCount = 0
 $hadFailure = $false
 # -Only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
 $onlySeen = $false
 $onlyUnbundled = $false
 $onlyFetchable = $false
+$onlyNewer = $false
 
 Write-Host "Fetch models -> $Target" -ForegroundColor Cyan
 if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow }
@@ -318,6 +436,15 @@ foreach ($mf in $manifestFiles) {
   $id = Get-ManifestField $text 'id'
   if ($Only -and $id -ne $Only) { continue }
   if ($Only) { $onlySeen = $true }
+  # W-62 (b): a manifest this checkout's app cannot use is skipped with one line and counted, whatever else
+  # it says: nothing of it is fetched (the app never uses it). Before -Bundled, so a Kit build names it too.
+  $gate = Get-SkipReason $text
+  if ($gate.Why) {
+    Write-Host ("  SKIP   {0}: needs a newer HilbertRaum ({1})" -f $(if ($id) { $id } else { $mf.Name }), $gate.Why) -ForegroundColor Yellow
+    $newerCount++
+    if ($Only) { $onlyNewer = $true }
+    continue
+  }
   if ($Bundled -and (Get-ManifestField $text 'bundled_on_preconfigured_drive') -ne 'true') {
     if ($Only) { $onlyUnbundled = $true }
     continue
@@ -468,6 +595,10 @@ if ($Only -and -not $onlySeen) {
   Write-Host ("No model manifest with id '{0}' under '{1}'." -f $Only, $ManifestsDir) -ForegroundColor Red
   exit 2
 }
+if ($Only -and -not $onlyFetchable -and $onlyNewer) {
+  Write-Host ("Model '{0}' needs a newer HilbertRaum: nothing to fetch." -f $Only) -ForegroundColor Red
+  exit 2
+}
 if ($Only -and $onlyUnbundled) {
   Write-Host ("Model '{0}' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." -f $Only) -ForegroundColor Red
   exit 2
@@ -478,7 +609,11 @@ if ($Only -and -not $onlyFetchable) {
 }
 
 Write-Host ''
-Write-Host ("Planned {0} | fetched {1} | skipped {2}" -f $planned, $fetched, $skipped) -ForegroundColor Cyan
+if ($newerCount -gt 0) {
+  Write-Host ("Planned {0} | fetched {1} | skipped {2} | for a newer HilbertRaum {3}" -f $planned, $fetched, $skipped, $newerCount) -ForegroundColor Cyan
+} else {
+  Write-Host ("Planned {0} | fetched {1} | skipped {2}" -f $planned, $fetched, $skipped) -ForegroundColor Cyan
+}
 # A Kit with nothing to preload fails at step 2, not after the builder's runtime downloads (#766).
 if ($Bundled -and $planned -eq 0) {
   Write-Host 'No bundled model (bundled_on_preconfigured_drive: true) with a download block: a Kit has nothing to preload.' -ForegroundColor Red

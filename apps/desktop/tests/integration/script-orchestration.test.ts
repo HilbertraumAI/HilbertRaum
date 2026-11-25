@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join, relative, sep } from 'node:path'
+import { basename, delimiter, join, relative, sep } from 'node:path'
 import { buildPolicyJson } from '../../src/main/services/drive'
 import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { SCRIPT_LEGS, extractScriptArray, outputOf, scriptRoot } from '../helpers/script-legs'
@@ -16,6 +16,10 @@ import { testBudgetMs } from '../helpers/hang-budget'
 
 const HEAVY_MS = testBudgetMs(240_000)
 vi.setConfig({ testTimeout: testBudgetMs(300_000) })
+
+// The canonical gate the builders run last (#233); `npm run build` writes it. Without it the gate half of a row is skipped.
+const GATE_TOOL = join(REPO_ROOT, 'apps', 'desktop', 'out', 'tools', 'assert-commercial-drive.mjs')
+const gateBuilt = existsSync(GATE_TOOL)
 
 const APP_VERSION = (JSON.parse(repoText('apps', 'desktop', 'package.json')) as { version: string }).version
 const MANIFEST_DOCS = modelManifestDocs()
@@ -196,6 +200,48 @@ for (const leg of SCRIPT_LEGS) {
       const out = outputOf(dry(kitTarget('orch-comma-'), [f('AppArtifact'), artifact]))
       expect(out).not.toContain('AppArtifact not found')
       expect(out).toContain(`copy ${artifact} -> `)
+    })
+
+    // 10.12 (app-update wave T2.10, W-62 (b), sheet decision 8): the builder's step 2 and the canonical gate judge a Kit
+    // target holding a manifest its own app cannot use alike. Step 2 skips it with one line and counts it, the gate names
+    // the same file, and neither counts its weight as bundled. (The verify-only rows of script-execution.test.ts hold
+    // verify-models --kit and the gate to the same refusal on a drive whose weights are there.)
+    const newerCopyOf = (text: string, id: string): string => `${text.replace(/^id: .*$/m, `id: ${id}`)}min_app_version: 99999.0.0\n`
+    const gate = (root: string) =>
+      spawnSync(process.execPath, [GATE_TOOL, '--target', root, '--platforms', 'win-x64', '--app-version', APP_VERSION], {
+        encoding: 'utf8',
+        timeout: testBudgetMs(60_000)
+      })
+
+    it('a bundled manifest for a newer HilbertRaum beside the bundled one: step 2 skips and counts it, the gate names the same file', () => {
+      const root = kitTarget('orch-newer-')
+      const doc = MANIFEST_DOCS.find((d) => d.doc.id === BUNDLED_ID)!
+      writeDriveFile(root, 'model-manifests/chat/newer-copy.yaml', newerCopyOf(doc.text, 'newer-copy'))
+      const out = outputOf(dry(root, []))
+      expect(out).toContain('SKIP   newer-copy: needs a newer HilbertRaum (min_app_version 99999.0.0')
+      expect(out).toContain(`fetch  ${BUNDLED_ID}`)
+      expect(out).toContain('| for a newer HilbertRaum 1')
+      expect(out).not.toContain('fetch  newer-copy')
+      expect(out).toMatch(step(7))
+      if (gateBuilt) expect(out).toMatch(/model manifest for a newer HilbertRaum: .*newer-copy\.yaml/)
+    })
+
+    it('the only bundled manifest needs a newer HilbertRaum: step 2 counts nothing bundled and stops the run, as the gate counts nothing', () => {
+      const root = scriptRoot('orch-only-newer-')
+      seed(root, [BUNDLED_ID], (id, text) => newerCopyOf(text, id))
+      const r = dry(root, [])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(1)
+      expect(out).toContain(`SKIP   ${BUNDLED_ID}: needs a newer HilbertRaum`)
+      expect(out).toContain('No bundled model (bundled_on_preconfigured_drive: true) with a download block')
+      expect(out).not.toMatch(step(3))
+      if (gateBuilt) {
+        const g = gate(root)
+        expect(g.status, outputOf(g)).toBe(1)
+        expect(g.stdout).toContain('no bundled model (bundled_on_preconfigured_drive: true)')
+        const file = basename(MANIFEST_DOCS.find((d) => d.doc.id === BUNDLED_ID)!.path)
+        expect(g.stdout).toMatch(new RegExp(`model manifest for a newer HilbertRaum: .*${file.replace(/\./g, '\\.')}`))
+      }
     })
 
     // #339 P8-4, a copyleft duty: no kiwix-tools binary reaches a Kit without its corresponding source.

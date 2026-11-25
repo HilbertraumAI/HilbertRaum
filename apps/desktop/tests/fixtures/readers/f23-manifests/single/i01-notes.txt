@@ -1,0 +1,1 @@
+Not a manifest: the walk reads .yaml and .yml files only.

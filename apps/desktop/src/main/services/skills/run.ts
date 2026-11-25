@@ -79,11 +79,13 @@ export interface BankExtractionDeps {
   /**
    * Re-extraction (A9): when set, DELETE every prior `bank_statements` row (and its transactions /
    * corrections) for the document inside the persist transaction BEFORE inserting the fresh one. The
-   * reuse paths pass it when the latest statement is STALE (`isBankStatementStale`) so a since-fixed
-   * parser bug's rows are replaced — and so re-extraction never accumulates duplicate statements. The
-   * persisted categories on the old rows are intentionally NOT carried over (the rows changed precisely
-   * because the parser changed them — the honest move is to recompute, which the breakdown's
-   * deterministic pass / the next categorize run does). Unset (the default) = the additive behaviour.
+   * reuse paths pass it when the latest statement is STALE (`isBankStatementStale`: NULL or a lower
+   * version) so a since-fixed parser bug's rows are replaced — and so re-extraction never accumulates
+   * duplicate statements. The persisted categories on the old rows are intentionally NOT carried over (the
+   * rows changed precisely because the parser changed them — the honest move is to recompute, which the
+   * breakdown's deterministic pass / the next categorize run does). Unset (the default) = the additive
+   * behaviour. Neither ever reaches a document that holds a newer version's statement (G-34 (a)): the
+   * engine's guard in `runDomainExtractionInner` extracts, deletes and inserts nothing there.
    */
   replaceExisting?: boolean
 }
@@ -339,8 +341,14 @@ export interface DomainRunConfig<TOutput, TLoaded> {
   extractToolName: string
   /** Newest persisted row id for a document, or null (`latestBankStatementId` / `latestInvoiceId`). */
   latestId(db: Db, documentId: string): string | null
-  /** Whether the latest persisted row is from an outdated extractor (`isBankStatementStale` / …). */
+  /** Whether the latest persisted row must be RE-EXTRACTED: NULL or a lower extractor version
+   *  (`isBankStatementStale` / `isInvoiceStale`, G-34 (a)). A newer version's row is never stale. */
   isStale(db: Db, id: string): boolean
+  /** G-34 (a): whether ANY of the document's persisted rows is a newer version's reading
+   *  (`isBankExtractionNewer` / `isInvoiceExtractionNewer`) — the engine's guard reads it. */
+  holdsNewer(db: Db, documentId: string): boolean
+  /** The stored child-row count of one persisted row (transactions / line items): the guard's result count. */
+  storedCountOf(db: Db, id: string): number
   /**
    * Self-locking re-extraction (the public `run…Extraction`, normalized) — used ONLY on the staleness
    * path inside `prepareDomainRun`. It MUST be the self-locking adapter (not the raw inner) so a
@@ -414,6 +422,23 @@ export async function runDomainExtractionInner<TOutput, TLoaded>(
       return { ok: false, runId, errorCode: 'unavailable', error: msg }
     }
 
+    // G-34 (a) (frozen, owner 2026-11-23): this build is the oldest one that will ever read a workspace, so
+    // a document holding ANY row a newer version read is never extracted again here — no tool run, no
+    // delete, no insert — whoever calls: the reuse paths, the two Extract buttons and the glyph-soup retry
+    // pass `replaceExisting` (whose delete takes every row of the document, corrections included), and the
+    // additive path would put an own-version row in front of the newer one. Asked per DOCUMENT, the key the
+    // delete uses, so a newer row that is not the latest is protected too. The run ends `done`, pointing at
+    // the stored extraction with its stored count: true, and it needs no new error copy (T2.13 D-5). Runs
+    // on one document are serialized by the document lock the adapters hold, so this cannot race a delete.
+    // Decided on `holdsNewer` ALONE: when the latest row has no usable id ('' or NULL, damage only), the run
+    // still touches nothing and ends `done` with no result ref and a count of 0 (T2.13 review R2 m-1).
+    if (config.holdsNewer(db, args.documentId)) {
+      const storedRef = config.latestId(db, args.documentId) || null
+      const count = storedRef ? config.storedCountOf(db, storedRef) : 0
+      finishRun(db, runId, 'done', now(), storedRef, null)
+      return storedRef ? { ok: true, runId, resultRef: storedRef, count } : { ok: true, runId, count }
+    }
+
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -443,6 +468,7 @@ export async function runDomainExtractionInner<TOutput, TLoaded>(
       db.exec('BEGIN')
       // Re-extraction (A9/F5): replace the document's prior (stale) rows in the SAME transaction, so a
       // re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
+      // Never reached on a document holding a newer version's row (the G-34 (a) guard above).
       if (deps.replaceExisting) config.deleteForDocument(db, args.documentId)
       resultRef = config.insertExtraction(db, { output, documentId: args.documentId, runId, completedAt })
       db.prepare(
@@ -785,6 +811,9 @@ const BANK_RUN_CONFIG: DomainRunConfig<ExtractTransactionsOutput, LoadedTransact
   extractToolName: EXTRACT_TOOL_NAME,
   latestId: latestBankStatementId,
   isStale: isBankStatementStale,
+  holdsNewer: isBankExtractionNewer,
+  storedCountOf: (db, statementId) =>
+    (db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(statementId) as { n: number }).n,
   // Self-locking re-extraction (re-entrant under a downstream seam's own hold), normalized for the
   // staleness path. Reuses the public `runBankExtraction` so the lock + reshape stay in one place.
   reExtract: async (db, args, deps) => {
@@ -880,26 +909,80 @@ export function latestBankStatementId(db: Db, documentId: string): string | null
 }
 
 /**
- * Whether a statement was produced by a DIFFERENT extractor than the one running (A9). True when its
- * `extractor_version` is NULL (extracted before versioning) or NOT EQUAL to the current
- * `BANK_EXTRACTOR_VERSION` — older rows may carry a since-fixed parser bug (a mis-signed amount, a
- * lost payee), and NEWER rows (SKA-26, skills-audit-2026-07-03 §3.3) are the downgrade case: the app
- * runs from the portable drive so it normally roams WITH the workspace, and a version mismatch in
- * either direction means a deliberate rollback (where the newer extractor IS the suspected bug — the
- * one moment serving its rows as fresh would be worst) or a second install against the same workspace.
- * Deterministic extractors make `!==` safe: same version ⇒ same rows, so re-extraction never loops.
- * The accepted cost (BUILD_STATE R9): a workspace alternating between two app versions re-extracts on
- * every switch, and each `replaceExisting` re-extract drops the persisted per-row categories — but the
- * rows changed with the parser, so recomputing them is the honest move (the `replaceExisting` doctrine).
- * The reuse paths (analysis read-back + categorize doctask) re-extract a stale statement
- * (with `replaceExisting`) instead of serving its rows. A statement at the current version is fresh.
+ * G-34 (a) (frozen, owner 2026-11-23) — what this build does with a stored extraction, read from its
+ * `extractor_version` stamp. ONE rule for both stamped tables (`bank_statements`, `invoices`):
+ *  - `'reextract'`: NULL (extracted before versioning) or an integer BELOW this build's number (zero and
+ *    negatives included): the rows may carry a since-fixed parser bug, so the reuse paths re-extract them;
+ *  - `'current'`: an integer EQUAL to it: reused as stored (deterministic extractor: same version ⇒ same
+ *    rows, so re-extraction never loops);
+ *  - `'newer'`: ANYTHING ELSE — a higher integer, a real, text, a blob, an integer past 2^53. This build and
+ *    every earlier one write a small positive integer or NULL, so such a stamp is a later version's (or
+ *    damage). This build is the oldest one that will ever read a workspace: after a user goes back from a
+ *    newer version it serves that version's rows as stored, never replacing or deleting them nor what hangs
+ *    off them (the corrections). A deliberate rollback of a bad extractor ships a HIGHER number instead.
+ * Decided in SQL and returned as a verdict, never as the raw value: the comparison cannot throw (reading an
+ * integer past 2^53 into JS does) and an odd stamp cannot be mis-compared in JS. This reverses SKA-26's
+ * "a newer row re-extracts too" (`!==`) for the higher half; the lower and NULL halves are unchanged.
+ */
+export type ExtractorVerdict = 'reextract' | 'current' | 'newer'
+
+/** The tables that carry an `extractor_version` stamp: a closed list, since the name is spliced into SQL. */
+export type ExtractionTable = 'bank_statements' | 'invoices'
+
+// The verdict over one row's stamp; `?1` = this build's extractor number. `typeof()` first: the column's
+// INTEGER affinity turns the texts '12' / '12.0' into the integer 12 but stores a real, other text or a
+// blob as such, and those must never compare as a number.
+const EXTRACTOR_VERDICT_SQL = `CASE
+    WHEN extractor_version IS NULL THEN 'reextract'
+    WHEN typeof(extractor_version) = 'integer' AND extractor_version < ?1 THEN 'reextract'
+    WHEN typeof(extractor_version) = 'integer' AND extractor_version = ?1 THEN 'current'
+    ELSE 'newer' END`
+
+/** The G-34 (a) verdict for one stored row of `table` (by `id`) against `own`, or null for an unknown id. */
+export function extractorVerdict(db: Db, table: ExtractionTable, id: string, own: number): ExtractorVerdict | null {
+  const row = db
+    .prepare(`SELECT ${EXTRACTOR_VERDICT_SQL} AS verdict FROM ${table} WHERE id = ?2`)
+    .get(own, id) as { verdict: ExtractorVerdict } | undefined
+  return row?.verdict ?? null
+}
+
+/** Whether ANY stored row of `table` for the document has the verdict `'newer'` against `own`. Asked by
+ *  `document_id`, the key the replace delete uses, so a newer row that is not the latest counts too. */
+export function holdsNewerExtraction(db: Db, table: ExtractionTable, documentId: string, own: number): boolean {
+  return (
+    db
+      .prepare(`SELECT 1 AS hit FROM ${table} WHERE document_id = ?2 AND (${EXTRACTOR_VERDICT_SQL}) = 'newer' LIMIT 1`)
+      .get(own, documentId) !== undefined
+  )
+}
+
+/**
+ * Whether a statement must be RE-EXTRACTED (A9): its `extractor_version` is NULL or below the current
+ * `BANK_EXTRACTOR_VERSION` (the `'reextract'` verdict above) — older rows may carry a since-fixed parser bug
+ * (a mis-signed amount, a lost payee). A statement at the current version is fresh; a NEWER version's
+ * statement is not stale either (G-34 (a)): it is served as stored. The reuse paths (analysis read-back,
+ * categorize doctask, the downstream run prefix) re-extract a stale statement (with `replaceExisting`)
+ * instead of serving its rows; an unknown id is not stale (callers handle the missing case).
  */
 export function isBankStatementStale(db: Db, statementId: string): boolean {
-  const row = db
-    .prepare('SELECT extractor_version AS v FROM bank_statements WHERE id = ?')
-    .get(statementId) as { v: number | null } | undefined
-  if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
-  return row.v == null || row.v !== BANK_EXTRACTOR_VERSION
+  return extractorVerdict(db, 'bank_statements', statementId, BANK_EXTRACTOR_VERSION) === 'reextract'
+}
+
+/**
+ * Whether the document holds a NEWER version's bank reading (G-34 (a)): any of its statements has the
+ * `'newer'` verdict. The engine's guard reads it: no extraction ever runs over such a document.
+ */
+export function isBankExtractionNewer(db: Db, documentId: string): boolean {
+  return holdsNewerExtraction(db, 'bank_statements', documentId, BANK_EXTRACTOR_VERSION)
+}
+
+/**
+ * Whether ONE statement is a newer version's reading (the `'newer'` verdict). The bank answer that shows
+ * this statement's figures ends with C08 (`analysis.newerExtractorNote`) exactly when it is true: the note
+ * follows the row shown, not the document (T2.13 review M-1).
+ */
+export function isBankStatementNewer(db: Db, statementId: string): boolean {
+  return extractorVerdict(db, 'bank_statements', statementId, BANK_EXTRACTOR_VERSION) === 'newer'
 }
 
 /**

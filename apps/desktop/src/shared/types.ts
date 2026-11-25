@@ -366,6 +366,15 @@ export interface WorkspaceStateInfo {
   lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full' | 'encrypted_file_missing'
   /** #1024: present exactly when `state` is `start_failed`: the cause the gate words and the code it shows. */
   startFailure?: BackendStartFailure
+  /**
+   * App-update T2.6: the running app's version (`app.getVersion()`, which `main/index.ts` passes the workspace IPC),
+   * on what `getWorkspaceState` and `lockWorkspace` answer in a normal start: the states the gate is shown. The gate
+   * fills the `{version}` of `main.workspace.newer` and `main.workspace.schemaUnreadable` with it before any unlock,
+   * as main fills its own message (`workspaceFailureParams`, `shared/workspace-failure-keys.ts`). Absent in a failed
+   * start (`start_failed`, where nothing is unlocked; the update plan's P6 adds it there) and on the states an unlock,
+   * a create or a password change answers (the shell takes those, not the gate).
+   */
+  appVersion?: string
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
@@ -378,13 +387,18 @@ export interface WorkspaceStateInfo {
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
  *  is lost.
  *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
- *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. Also (#845)
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; the copy says to install the newer version. Also (#845)
  *  a vault format a newer build wrote (descriptor, KDF, `.enc` frame, rekey journal), refused
  *  before the password is checked.
  *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
  *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
  *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
  *  or after an update start the previous version.
+ *  `workspace_schema_unreadable` (W-68, app-update wave T2.14): unlock only. The password verified,
+ *  but SQLite cannot parse the database's schema ("malformed database schema", what a newer
+ *  version's schema text does here, and also damage inside the schema itself). Refused like
+ *  damage (the decrypted copy shredded, `.enc` untouched), with copy that names a newer version
+ *  instead of a backup.
  *  `vault_missing` (#911): the password verified, but the encrypted workspace file is missing from
  *  the drive and no copy was left to restore it from (a damaged one is shredded at this unlock).
  *  Neither `.enc` nor the working file was written; put the file back or
@@ -420,6 +434,7 @@ export type WorkspaceActionResult =
         | 'vault_open_failed'
         | 'vault_recovery_blocked'
         | 'workspace_newer'
+        | 'workspace_schema_unreadable'
         | 'workspace_exists'
         | 'plaintext_not_allowed'
         | 'refused'
@@ -2442,8 +2457,11 @@ export interface KnowledgePack {
    * UUID — the pack was replaced or overwritten, so old citations still name the archive that
    * was registered and the viewer reports it as unavailable rather than reading a stranger's
    * article under this pack's title.
+   * `'newer-format'` (W-71, app-update wave T2.14): the file IS this archive, but in a ZIM format
+   * newer than the knowledge-pack tools read (a header major above 6), so it is never handed to
+   * them. Stored `'newer_format'`; a stored value this build does not know reads as `null`.
    */
-  unavailableReason: 'missing' | 'identity-mismatch' | null
+  unavailableReason: 'missing' | 'identity-mismatch' | 'newer-format' | null
   /**
    * Whether the archive carries a full-text (Xapian) index the sidecar can search (#301 P4,
    * finding M7, plan §2.5). CONFIRMED only by a validated `/suggest` probe run from the end of
@@ -2488,7 +2506,9 @@ export type KnowledgePackOutcomeStatus = 'searched' | 'skipped' | 'failed'
  * because the served library and the search response disagree about this pack's name
  * · `timeout`: the pack's request was cut by the per-ask deadline mid-flight · `deadline`:
  * the pack was never started before the per-ask deadline · `server-restarted`: the request guard
- * discarded both attempts (`StaleServerError`).
+ * discarded both attempts (`StaleServerError`) · `newer-format` (W-71, app-update wave T2.14):
+ * `KnowledgePack.unavailableReason` `newer-format`, the archive is in a ZIM format newer than the
+ * tools read.
  */
 export type KnowledgePackOutcomeReason =
   | 'selection-limit'
@@ -2505,6 +2525,7 @@ export type KnowledgePackOutcomeReason =
   | 'timeout'
   | 'deadline'
   | 'server-restarted'
+  | 'newer-format'
 
 /**
  * The per-ask outcome of one selected pack (#301 P4, findings M6/M7/M8; owner ruling §7:
@@ -2536,13 +2557,16 @@ export interface KnowledgePackOutcome {
  * refused (a `KiwixManageError` of `kind: 'exit'`) AND its command line still carried a non-ASCII
  * character (`nonAsciiArgv`, #787: no ASCII spelling of the archive existed from the app's own
  * library folder — a non-ASCII file name, or a non-ASCII folder outside the app's own) — never on
- * other platforms, and never for a spawn/verify/timeout failure.
+ * other platforms, and never for a spawn/verify/timeout failure. `'newer-format'` (W-71, app-update
+ * wave T2.14): the header says a ZIM format newer than the tools read (a major above 6); refused
+ * before kiwix-manage runs.
  */
 export type KnowledgePackAddFailureReason =
   | 'not-a-zim'
   | 'tools-missing'
   | 'manager'
   | 'path-unsupported'
+  | 'newer-format'
   | 'other'
 
 /**
@@ -3285,6 +3309,12 @@ export interface SkillInfo {
   /** True once the on-disk folder has vanished (mark-unavailable; the row is kept). */
   unavailable: boolean
   /**
+   * W-65 (app-update wave, T2.14 fix round 2, review R2-3): set on an `unavailable` row whose folder is still there
+   * but now holds a skill made for a newer version, so the Skills tab shows "Needs newer app" (copy deck X03) instead
+   * of "Files missing". Derived by the last reconcile, never stored; absent otherwise.
+   */
+  unavailableReason?: SkillUnavailableReason
+  /**
    * True when the skill declares a `compatibility.minAppVersion` NEWER than this app (§6.5): it is
    * listed but cannot be enabled/suggested/run until the app is updated. Optional/additive.
    */
@@ -3376,9 +3406,16 @@ export interface SkillPreview {
  * Counts + fixed reason codes ONLY — never folder names or package content (§22-M1). Drives the
  * Settings → Skills "N skill folders could not be read" notice.
  */
+/** W-65 (T2.14 fix round 2): why an unavailable skill row is unavailable, when more than "its folder is gone" is known.
+ *  `needsNewerApp`: its folder now holds a skill made for a newer version (the discovery code of the same name). */
+export type SkillUnavailableReason = 'needsNewerApp'
+
 export interface SkillReconcileStatus {
   errorCount: number
   errorCodes: string[]
+  /** W-65 (app-update wave, T2.14): skill folders made for a newer version, counted apart from `errorCount` (their own
+   *  "made for a newer version" line, copy deck C06/C07). Absent when there are none. */
+  needsNewerAppCount?: number
 }
 
 /**

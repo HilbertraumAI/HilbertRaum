@@ -1,0 +1,865 @@
+{
+  "contract": "F-24, the engine install marker `.hilbertraum-runtime.json` (plan Appendix B; docs/data-contracts.md, #1028), the lists of W-62",
+  "readers": {
+    "app": "readRuntimeMarkerState (src/main/services/assets.ts): \"marker\", \"damaged\" or \"absent\"",
+    "preSpawn": "verifyBinaryBeforeSpawn (src/main/services/binary-verifier.ts), enforced, for the program",
+    "twins": "fetch-runtime.{sh,ps1} (marker_readable, $ReadInstallMarker) on a drive whose pin matches and whose files are there: \"skip\" (read as the pinned install) or \"refetch\"; default mode and --commercial. `sh`, where given, is the .sh twin's verdict where it differs from the .ps1 twin's"
+  },
+  "parts": "a vector is its parts joined: `text` as UTF-8, `base64` decoded, `repeat` repeated `times` times. Bytes the repo hygiene nets refuse in a text file (a NUL, a byte-order mark, raw control bytes) are held as base64. `absent`: no file at the marker path; `folder`: a folder there. `files` (round 3): files the vector adds to the copy, name to text, beside the copy's own.",
+  "relationsWhy": "the version relation: compareRuntimeVersions(installed, pin) = order, runtimeInstallRelation = relation, runtimeInstallCurrent (the install skip) = installCurrent, and the twins on a drive pinned to `pin` holding the copy with that marker: \"skip\" (the pinned install), \"keep\" (newer than the pin, kept) or \"refetch\". A row with no `marker` (round 3) is the copy with no marker file, and has no `order`",
+  "copy": {
+    "family": "llama_cpp",
+    "version": "b9585",
+    "backend": "vulkan",
+    "os": "win",
+    "arch": "x64",
+    "extractTo": "runtime/llama.cpp/win",
+    "files": {
+      "llama-server.exe": "server bytes",
+      "ggml.dll": "ggml bytes"
+    },
+    "sha256": {
+      "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+      "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+    }
+  },
+  "record": {
+    "version": "b9585",
+    "backend": "vulkan",
+    "os": "win",
+    "arch": "x64",
+    "binaries": {
+      "llama-server.exe": "6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b",
+      "ggml.dll": "fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a"
+    }
+  },
+  "recordWhy": "what every writer records for `copy` (writeRuntimeMarker, the in-app stage, both twins after an install): each writer's marker is read as a marker by the app, passes the pre-spawn check, and is skipped by both twins",
+  "vectors": [
+    {
+      "name": "unknown top-level fields of any kind",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"signature\":{\"alg\":\"ed25519\",\"of\":[\"llama-server.exe\"],\"n\":-1.5e3},\"note\":\"x\",\"count\":3,\"flag\":true,\"nothing\":null,\"list\":[1,\"two\",{\"three\":3}]}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "a later writer adds top-level fields; every reader reads past them"
+    },
+    {
+      "name": "a nested version and backend inside a later field",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"signature\":{\"version\":\"1\",\"backend\":\"ed25519\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "the marker's own version and backend are the top-level ones"
+    },
+    {
+      "name": "a UTF-8 byte-order mark in front",
+      "class": "accepted",
+      "parts": [
+        {
+          "base64": "77u/eyJ2ZXJzaW9uIjoiYjk1ODUiLCJiYWNrZW5kIjoidnVsa2FuIiwib3MiOiJ3aW4iLCJhcmNoIjoieDY0IiwiYmluYXJpZXMiOnsibGxhbWEtc2VydmVyLmV4ZSI6IjZmYWMxYzllMjIyMTU3ZDFiYWEwN2U2NjlkNmRmNWI2YmU3MTc3ZGMzNjIzMDZjNzlhY2ZjMmM2ZjMxZGZkMGIiLCJnZ21sLmRsbCI6ImZmZjJkZDQxMjJiOTk4YjMxZTAwOGIzNjk2ODljNzJlZDk4YmU4NjM4MGUyMGQwYWJlNDM1NGY5NDNlYTAwNGEifX0="
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "no writer writes one, an editor may; every reader reads past one"
+    },
+    {
+      "name": "an unknown version shape",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"custom-1\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "custom-1",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "pin": "custom-1",
+      "why": "the version is any string to the readers (the relation calls it unknown); the twins read it and compare it with a pin of the same text"
+    },
+    {
+      "name": "upper-case hashes",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6FAC1C9E222157D1BAA07E669D6DF5B6BE7177DC362306C79ACFC2C6F31DFD0B\",\"ggml.dll\":\"FFF2DD4122B998B31E008B369689C72ED98BE86380E20D0ABE4354F943EA004A\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "writers record lower case; upper case reads as the same hash"
+    },
+    {
+      "name": "an empty binaries map",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "skip-legacy",
+      "twins": {
+        "default": "skip",
+        "commercial": "refetch"
+      },
+      "why": "a map that records nothing is the hash-less marker it always was: tolerated at spawn, re-fetched by a Kit build"
+    },
+    {
+      "name": "a C1 control in an unknown string",
+      "class": "accepted",
+      "parts": [
+        {
+          "base64": "eyJ2ZXJzaW9uIjoiYjk1ODUiLCJiYWNrZW5kIjoidnVsa2FuIiwib3MiOiJ3aW4iLCJhcmNoIjoieDY0IiwiYmluYXJpZXMiOnsibGxhbWEtc2VydmVyLmV4ZSI6IjZmYWMxYzllMjIyMTU3ZDFiYWEwN2U2NjlkNmRmNWI2YmU3MTc3ZGMzNjIzMDZjNzlhY2ZjMmM2ZjMxZGZkMGIiLCJnZ21sLmRsbCI6ImZmZjJkZDQxMjJiOTk4YjMxZTAwOGIzNjk2ODljNzJlZDk4YmU4NjM4MGUyMGQwYWJlNDM1NGY5NDNlYTAwNGEifSwibm90ZSI6ImHChWIifQ=="
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "shLocale": "utf8",
+      "why": "U+0085 is no control character to JSON; the .sh twin reads it under a UTF-8 locale too"
+    },
+    {
+      "name": "binaries that is a list",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":[\"llama-server.exe\"]}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "`binaries` not an object"
+    },
+    {
+      "name": "binaries that is null",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":null}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "`binaries` not an object"
+    },
+    {
+      "name": "a recorded value that is not hex",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"not-a-hash\"}}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a non-hex value"
+    },
+    {
+      "name": "a map without the program",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "skip",
+        "commercial": "refetch"
+      },
+      "why": "as built: the shared reading is a marker, the pre-spawn check refuses it as damaged (program-unrecorded), a Kit build (--commercial) re-fetches it, and the twins outside commercial mode keep it (they never look for the program in the map)"
+    },
+    {
+      "name": "a raw control byte in a value",
+      "class": "damaged",
+      "parts": [
+        {
+          "base64": "eyJ2ZXJzaW9uIjoiYjk1ODUiLCJiYWNrZW5kIjoidnVsa2FuIiwib3MiOiJ3AW4iLCJhcmNoIjoieDY0IiwiYmluYXJpZXMiOnsibGxhbWEtc2VydmVyLmV4ZSI6IjZmYWMxYzllMjIyMTU3ZDFiYWEwN2U2NjlkNmRmNWI2YmU3MTc3ZGMzNjIzMDZjNzlhY2ZjMmM2ZjMxZGZkMGIiLCJnZ21sLmRsbCI6ImZmZjJkZDQxMjJiOTk4YjMxZTAwOGIzNjk2ODljNzJlZDk4YmU4NjM4MGUyMGQwYWJlNDM1NGY5NDNlYTAwNGEifX0="
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "control bytes inside a string"
+    },
+    {
+      "name": "garbage between fields",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\" @@@@ ,\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "garbage"
+    },
+    {
+      "name": "a trailing comma",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "trailing commas"
+    },
+    {
+      "name": "single quotes",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{'version':'b9585','backend':'vulkan','os':'win','arch':'x64','binaries':{'llama-server.exe':'6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b','ggml.dll':'fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a'}}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "single quotes"
+    },
+    {
+      "name": "wrong-case names",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"Version\":\"b9585\",\"Backend\":\"vulkan\",\"OS\":\"win\",\"Arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "wrong-case names"
+    },
+    {
+      "name": "NUL bytes after the object",
+      "class": "damaged",
+      "parts": [
+        {
+          "base64": "eyJ2ZXJzaW9uIjoiYjk1ODUiLCJiYWNrZW5kIjoidnVsa2FuIiwib3MiOiJ3aW4iLCJhcmNoIjoieDY0IiwiYmluYXJpZXMiOnsibGxhbWEtc2VydmVyLmV4ZSI6IjZmYWMxYzllMjIyMTU3ZDFiYWEwN2U2NjlkNmRmNWI2YmU3MTc3ZGMzNjIzMDZjNzlhY2ZjMmM2ZjMxZGZkMGIiLCJnZ21sLmRsbCI6ImZmZjJkZDQxMjJiOTk4YjMxZTAwOGIzNjk2ODljNzJlZDk4YmU4NjM4MGUyMGQwYWJlNDM1NGY5NDNlYTAwNGEifX0AAAAA"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "NULs"
+    },
+    {
+      "name": "a whole marker over 64 KiB",
+      "class": "script-only refusal",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"pad\":\""
+        },
+        {
+          "repeat": "x",
+          "times": 70000
+        },
+        {
+          "text": "\"}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "the app reads markers up to 1 MiB; both twins refuse one over 64 KiB at once"
+    },
+    {
+      "name": "no binaries key at all",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\"}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "skip-legacy",
+      "twins": {
+        "default": "skip",
+        "commercial": "refetch"
+      },
+      "why": "the marker of an older Kit, written before binary hashes: a hash-less marker, tolerated at spawn, re-fetched by a Kit build (--commercial)"
+    },
+    {
+      "name": "a pretty-printed marker (line breaks and blanks between tokens)",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\n  \"version\": \"b9585\",\n  \"backend\": \"vulkan\",\n  \"os\": \"win\",\n  \"arch\": \"x64\",\n  \"binaries\": {\n    \"llama-server.exe\": \"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\n    \"ggml.dll\": \"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"\n  }\n}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "sh": {
+        "default": "skip",
+        "commercial": "refetch"
+      },
+      "why": "JSON allows blanks; every JSON reader reads it. The .sh twin finds recorded hashes with a one-line sed, so under --commercial it finds none and fetches the copy again (the safe side); the .ps1 twin keeps it. The writer duty keeps the marker on one line"
+    },
+    {
+      "name": "nested os, arch and binaries inside a later field",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"signature\":{\"os\":\"none\",\"arch\":\"none\",\"binaries\":{\"llama-server.exe\":\"ed25519\"}}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "the marker's own fields are the top-level ones; a nested map of the same name is read past"
+    },
+    {
+      "name": "a brace, a comma and a backslash inside an unknown string",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"note\":\"a}b,c\\\\d\"}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "JSON escapes and structural characters inside a string after the map change nothing for any reader"
+    },
+    {
+      "name": "a recorded file that is not there",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"gone.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "missing",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "the marker reads, but a library it records is gone: the copy is damaged files at spawn, and both twins fetch it again in any mode (#998)"
+    },
+    {
+      "name": "a recorded name that leaves the folder",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"../outside.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "mismatch",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a key outside the copy is refused at spawn as a tamper; the twins find no such file in the folder and fetch again"
+    },
+    {
+      "name": "a field that is a number",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":64,\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a required field that is not a string"
+    },
+    {
+      "name": "a JSON list",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "[]"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "valid JSON that is not one object"
+    },
+    {
+      "name": "an empty file",
+      "class": "damaged",
+      "parts": [],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "no JSON at all"
+    },
+    {
+      "name": "a raw control byte in an unknown string",
+      "class": "damaged",
+      "parts": [
+        {
+          "base64": "eyJ2ZXJzaW9uIjoiYjk1ODUiLCJiYWNrZW5kIjoidnVsa2FuIiwib3MiOiJ3aW4iLCJhcmNoIjoieDY0IiwiYmluYXJpZXMiOnsibGxhbWEtc2VydmVyLmV4ZSI6IjZmYWMxYzllMjIyMTU3ZDFiYWEwN2U2NjlkNmRmNWI2YmU3MTc3ZGMzNjIzMDZjNzlhY2ZjMmM2ZjMxZGZkMGIiLCJnZ21sLmRsbCI6ImZmZjJkZDQxMjJiOTk4YjMxZTAwOGIzNjk2ODljNzJlZDk4YmU4NjM4MGUyMGQwYWJlNDM1NGY5NDNlYTAwNGEifSwibm90ZSI6ImEBYiJ9"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a control byte inside any string, a field release 1 does not know included"
+    },
+    {
+      "name": "a folder at the marker name",
+      "class": "damaged",
+      "parts": [],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "folder": true,
+      "why": "something other than a regular file at the marker path never heals by waiting"
+    },
+    {
+      "name": "a whole marker of exactly 64 KiB",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"pad\":\""
+        },
+        {
+          "repeat": "x",
+          "times": 65288
+        },
+        {
+          "text": "\"}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "the twins read a marker up to 64 KiB, this size included"
+    },
+    {
+      "name": "a whole marker one byte over 64 KiB",
+      "class": "script-only refusal",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"pad\":\""
+        },
+        {
+          "repeat": "x",
+          "times": 65289
+        },
+        {
+          "text": "\"}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "one byte over the twins' cap: fetched again; the app still reads it"
+    },
+    {
+      "name": "a whole marker over 1 MiB",
+      "class": "damaged",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"pad\":\""
+        },
+        {
+          "repeat": "x",
+          "times": 1048329
+        },
+        {
+          "text": "\"}"
+        }
+      ],
+      "app": "damaged",
+      "preSpawn": "marker-damaged",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "larger than any writer writes: the app reads it as damaged without reading it"
+    },
+    {
+      "name": "no marker file",
+      "class": "absent",
+      "parts": [],
+      "app": "absent",
+      "preSpawn": "skip-legacy",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "absent": true,
+      "why": "a bundle placed by hand, or a drive older than the marker: tolerated at spawn, fetched again by both twins"
+    },
+    {
+      "name": "a comma inside a recorded name, its file there",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"lib,1.dll\":\"a8688fc6430812f40a85d21d02907ccc1df6d1c65618d124a88dc0130a5899d9\"}}"
+        }
+      ],
+      "files": {
+        "lib,1.dll": "lib bytes"
+      },
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "a file name may hold a comma: the app and the .ps1 twin read the name and find the file; the .sh twin splits its name lookup at the comma and never looks for that file, which changes nothing while the file is there"
+    },
+    {
+      "name": "a comma inside a recorded name whose file is gone",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"lib,1.dll\":\"a8688fc6430812f40a85d21d02907ccc1df6d1c65618d124a88dc0130a5899d9\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "missing",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "sh": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "the same marker with the comma-named library gone: the app refuses the copy at its start (missing) and the .ps1 twin fetches it again; the .sh twin, whose name lookup splits the name at its comma, does not notice the gone file and skips the copy (a writer duty keeps commas out of names)"
+    },
+    {
+      "name": "structural characters in a string before the map",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"note\":\"a}b,c\\\\d\\\"binaries\\\":{\",\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "ok",
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "a brace, a comma, a backslash and an escaped quote spelling \"binaries\":{ inside a string before the map change nothing for any reader: the .sh lookups look only after the last real \"binaries\":{"
+    },
+    {
+      "name": "a nested binaries map after the top-level one, a recorded file gone",
+      "class": "accepted",
+      "parts": [
+        {
+          "text": "{\"version\":\"b9585\",\"backend\":\"vulkan\",\"os\":\"win\",\"arch\":\"x64\",\"binaries\":{\"llama-server.exe\":\"6fac1c9e222157d1baa07e669d6df5b6be7177dc362306c79acfc2c6f31dfd0b\",\"ggml.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\",\"gone.dll\":\"fff2dd4122b998b31e008b369689c72ed98be86380e20d0abe4354f943ea004a\"},\"signature\":{\"binaries\":{\"llama-server.exe\":\"ed25519\"}}}"
+        }
+      ],
+      "app": "marker",
+      "version": "b9585",
+      "backend": "vulkan",
+      "preSpawn": "missing",
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "sh": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "W-4: the .sh twin still finds the top-level hash past a nested map (as in \"nested os, arch and binaries inside a later field\"), but takes the recorded names from the last map on the line, the nested one: a library the top-level map records that is gone goes unnoticed by it and the copy is skipped; the .ps1 twin fetches it again and the app refuses it at its start (missing)"
+    }
+  ],
+  "relations": [
+    {
+      "name": "an older build",
+      "marker": {
+        "version": "b9000",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": -1,
+      "relation": "older",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "older: the update is offered; the twins fetch the pin"
+    },
+    {
+      "name": "the pinned build",
+      "marker": {
+        "version": "b9585",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": 0,
+      "relation": "current",
+      "installCurrent": true,
+      "twins": {
+        "default": "skip",
+        "commercial": "skip"
+      },
+      "why": "current: nothing to do"
+    },
+    {
+      "name": "a newer build (more digits)",
+      "marker": {
+        "version": "b10000",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": 1,
+      "relation": "newer",
+      "installCurrent": false,
+      "twins": {
+        "default": "keep",
+        "commercial": "refetch"
+      },
+      "why": "build counters compare as numbers (b10000 > b9585, though not as text); newer: never replaced, kept by the twins unless --commercial"
+    },
+    {
+      "name": "the pinned version in another backend",
+      "marker": {
+        "version": "b9585",
+        "backend": "cpu"
+      },
+      "pin": "b9585",
+      "order": 0,
+      "relation": "current",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "the relation ignores the backend; the install skip compares version and backend, so the twins fetch the pinned backend"
+    },
+    {
+      "name": "a version of no known shape",
+      "marker": {
+        "version": "custom-1",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": null,
+      "relation": "unknown",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "unknown: reported, never updated by an update; the twins fetch the pin"
+    },
+    {
+      "name": "a suffixed build tag",
+      "marker": {
+        "version": "b9585-rc1",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": null,
+      "relation": "unknown",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a suffix is no known shape"
+    },
+    {
+      "name": "a dotted version against a build pin",
+      "marker": {
+        "version": "v1.8.6",
+        "backend": "vulkan"
+      },
+      "pin": "b9585",
+      "order": null,
+      "relation": "unknown",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a shape change between marker and pin cannot be ordered"
+    },
+    {
+      "name": "a newer dotted release",
+      "marker": {
+        "version": "v1.8.10",
+        "backend": "vulkan"
+      },
+      "pin": "v1.8.6",
+      "order": 1,
+      "relation": "newer",
+      "installCurrent": false,
+      "twins": {
+        "default": "keep",
+        "commercial": "refetch"
+      },
+      "why": "dotted parts compare as numbers (10 > 6)"
+    },
+    {
+      "name": "an older dotted release with one part fewer",
+      "marker": {
+        "version": "v1.8",
+        "backend": "vulkan"
+      },
+      "pin": "v1.8.6",
+      "order": -1,
+      "relation": "older",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "a missing part counts as zero"
+    },
+    {
+      "name": "no marker",
+      "pin": "b9585",
+      "relation": "unknown",
+      "installCurrent": false,
+      "twins": {
+        "default": "refetch",
+        "commercial": "refetch"
+      },
+      "why": "the copy's files with no marker: no version to order (no `order`), the relation is unknown (reported, never updated), not current, and the twins fetch the pin"
+    }
+  ]
+}

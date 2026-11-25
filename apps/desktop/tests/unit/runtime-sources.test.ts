@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { committedRuntimeSources } from '../helpers/catalog'
+import { DESKTOP_ROOT } from '../helpers/repo-files'
 
 function build(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -490,5 +494,42 @@ describe('validateRuntimeSources', () => {
     expect(res.ocr!.files.length).toBeGreaterThan(0)
     for (const f of res.ocr!.files) expect(f.url, f.lang).toContain(res.ocr!.version)
     for (const f of res.families!.kiwix_tools!.sourceBundle!.files) expect(f.url, f.name).toContain(f.version)
+  })
+})
+
+// App-update wave T2.10 (W-62, F-24): release 1 reads only its own bundled runtime-sources.yaml, but every later release
+// writes a drive copy the sell gate and fetch-runtime read, and the yaml validator is whole-file: one block release 1
+// refuses leaves that reader with no engine at all. `tests/fixtures/readers/f24-runtime-sources/` holds files written from
+// the contract, and `verdicts.json` says which release 1 accepts (and which families each yields) and which it refuses.
+describe('F-24 golden runtime-sources.yaml files: what release 1 accepts and refuses (T2.10, W-62)', () => {
+  const SET = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f24-runtime-sources')
+  const data = JSON.parse(readFileSync(join(SET, 'verdicts.json'), 'utf8')) as {
+    files: Array<{ file: string; verdict: 'accepts' | 'drops'; families?: string[] }>
+  }
+
+  it('every yaml file of the set has a verdict, and both verdicts occur', () => {
+    const files = readdirSync(SET).filter((name) => name.endsWith('.yaml'))
+    expect(data.files.map((f) => f.file).sort()).toEqual(files.sort())
+    expect(new Set(data.files.map((f) => f.verdict))).toEqual(new Set(['accepts', 'drops']))
+  })
+
+  it.each(data.files.map((f) => [f.file, f] as const))('%s', (_file, f) => {
+    // A file the YAML parser refuses is refused like an invalid one (round 2): the reader gets no sources from it.
+    let raw: unknown
+    try {
+      raw = parseYaml(readFileSync(join(SET, f.file), 'utf8'))
+    } catch {
+      expect(f.verdict, 'the YAML parser refuses it').toBe('drops')
+      return
+    }
+    const res = validateRuntimeSources(raw)
+    if (f.verdict === 'drops') {
+      expect(res.ok, 'refused whole').toBe(false)
+      expect(res.sources).toBeUndefined()
+      return
+    }
+    expect(res.errors).toEqual([])
+    const yielded = [...Object.keys(res.families ?? {}), ...(res.ocr ? ['ocr'] : [])]
+    expect(yielded.sort()).toEqual([...(f.families ?? [])].sort())
   })
 })

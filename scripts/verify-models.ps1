@@ -18,22 +18,30 @@
   -Generate writes <Target>/config/checksums.json capturing the SHA-256 of every present
   weight (so a drive builder can record real hashes once).
 
+  A manifest this checkout's app cannot use is skipped with one SKIP line and counted (W-62 (b),
+  the app-update wave): a role the app does not know, or a min_app_version above the version in
+  apps/desktop/package.json (exactly MAJOR.MINOR.PATCH, as the app compares; anything else, or a
+  checkout whose version cannot be read, counts as newer). The app lists such a manifest under
+  "Needs a newer HilbertRaum" and never uses it, so none of its files is judged.
+
 .PARAMETER Target
   The prepared drive root (e.g. E:\). Required.
 
 .PARAMETER Generate
-  Write config/checksums.json from the weights present on the drive.
+  Write config/checksums.json from the weights present on the drive (usable manifests only).
 
 .PARAMETER Strict
   Ship gate: exit 1 unless every manifest weight is VERIFIED (MISSING/UNVERIFIED/
-  MISMATCH/UNSUPPORTED all fail) and at least one weight exists.
+  MISMATCH/UNSUPPORTED all fail) and at least one weight exists. A skipped manifest's
+  weight is not judged (intended: it is not this app's).
 
 .PARAMETER Kit
   The Kit ship gate, -Strict over what a preconfigured Kit ships (#766): every bundled
   model (bundled_on_preconfigured_drive: true, at least one of them) and every model with
   any file on the drive. A model with no file on the drive is the in-app download catalog,
   listed as CATALOG and not verified. Implies -Strict. Mirrors
-  services/commercial-drive.ts assertCommercialDrive's weightsVerified check.
+  services/commercial-drive.ts assertCommercialDrive's weightsVerified check. Fails on any
+  skipped manifest: a Kit ships its own app.
 
 .EXAMPLE
   .\scripts\verify-models.ps1 -Target E:\
@@ -86,6 +94,114 @@ function Get-ManifestField([string]$text, [string]$key) {
 }
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
+
+# --- W-62 (b), the app-update wave: skip a manifest this checkout's app cannot use -------------------
+# The app lists a manifest whose role it does not know, or whose min_app_version is above its own
+# version, under "Needs a newer HilbertRaum" and never uses it (shared/manifest.ts, F-23). Release 1's
+# scripts meet every later release's manifests, so they skip the same files, by the same rule.
+# The roles the app knows: a second spelling of shared/manifest.ts ROLES (script-drift.test.ts).
+$ModelRoles = @(
+  'chat'
+  'embeddings'
+  'reranker'
+  'transcriber'
+  'vision'
+  'translation'
+)
+# The version the app built from this checkout reports: apps/desktop/package.json's "version". Empty
+# when it cannot be read: then every min_app_version counts as newer, as in an app without a version.
+$AppPackageJson = Join-Path $RepoRoot 'apps/desktop/package.json'
+$AppVersion = ''
+if (Test-Path -LiteralPath $AppPackageJson) {
+  try { $AppVersion = [string]((Get-Content -LiteralPath $AppPackageJson -Raw | ConvertFrom-Json).version) } catch { $AppVersion = '' }
+}
+# The app's two version rules, case-sensitive and ASCII only ([0-9], never \d, which .NET reads as any
+# digit): a minimum is EXACTLY MAJOR.MINOR.PATCH (no leading zero); the app's own version may add a
+# -pre.release and a +build. Never a [version] cast: it reads `1.2` as a version.
+$MinAppVersionRe = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+$AppVersionRe = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+$AppParts = $null
+$AppPre = $false
+if ($AppVersion -cmatch $AppVersionRe) {
+  $AppParts = @($Matches[1], $Matches[2], $Matches[3])
+  $AppPre = [bool]$Matches[4]
+}
+$Checkout = if ($AppParts) { "this checkout is $AppVersion" } else { "this checkout's version is unknown" }
+
+# A < B for two runs of digits without leading zeros, of any length (no number type: no overflow).
+function Test-NumberBelow([string]$a, [string]$b) {
+  if ($a.Length -ne $b.Length) { return ($a.Length -lt $b.Length) }
+  return ([string]::CompareOrdinal($a, $b) -lt 0)
+}
+
+# The app's rule for a min_app_version that is there (manifestNeedsNewerApp): newer when it is not
+# exactly MAJOR.MINOR.PATCH, when this checkout's version is unknown, or when it is above it (a
+# pre-release does not meet its own release). Parts compare as whole numbers.
+function Test-MinAppVersionNewer([string]$value) {
+  if (-not ($value -cmatch $MinAppVersionRe)) { return $true }
+  $need = @($Matches[1], $Matches[2], $Matches[3])
+  if (-not $AppParts) { return $true }
+  for ($i = 0; $i -lt 3; $i++) {
+    if ($AppParts[$i] -cne $need[$i]) { return (Test-NumberBelow $AppParts[$i] $need[$i]) }
+  }
+  return $AppPre
+}
+
+# The manifest's id, min_app_version and role, read at column 0 only (a key nested in a block never
+# answers), the first of each. A field is @{ Kind; Value }: N (absent, or YAML null: no value, ~, null),
+# B (a block below the key: no string) or S and the value (quotes unwrapped; unquoted, cut at " #").
+function Get-GateFields([string]$text) {
+  $fields = @{}
+  $pending = $null
+  foreach ($raw in ($text -split "`n")) {
+    $line = $raw.TrimEnd("`r")
+    if ($pending) {
+      if ($line -cmatch '^[ \t]*(#.*)?$') { continue }
+      if ($line -cmatch '^[ \t]' -or $line -cmatch '^-([ \t]|$)') { $fields[$pending] = @{ Kind = 'B'; Value = '' } }
+      $pending = $null
+    }
+    if (-not ($line -cmatch '^(id|min_app_version|role)[ \t]*:(.*)$')) { continue }
+    $key = $Matches[1]
+    $v = $Matches[2] -replace '^[ \t]+', ''
+    if ($fields.ContainsKey($key)) { continue }
+    $c = if ($v.Length -gt 0) { [string]$v[0] } else { '' }
+    if ($c -eq '"' -or $c -eq "'") {
+      $body = $v.Substring(1)
+      $e = $body.IndexOf($c)
+      $fields[$key] = @{ Kind = 'S'; Value = $(if ($e -ge 0) { $body.Substring(0, $e) } else { $body }) }
+      continue
+    }
+    $v = ($v -replace '[ \t]+#.*$', '') -replace '[ \t]+$', ''
+    if ($v -eq '') { $fields[$key] = @{ Kind = 'N'; Value = '' }; $pending = $key }
+    elseif (@('~', 'null', 'Null', 'NULL') -ccontains $v) { $fields[$key] = @{ Kind = 'N'; Value = '' } }
+    else { $fields[$key] = @{ Kind = 'S'; Value = $v } }
+  }
+  return $fields
+}
+
+# Why this checkout's app cannot use the manifest (Why, empty: it can), and its id read at column 0
+# (Id). A missing or blank role is no reason (the app calls such a file invalid, and these scripts
+# never validate a manifest).
+function Get-SkipReason([string]$text) {
+  $g = Get-GateFields $text
+  $id = if ($g.ContainsKey('id') -and $g['id'].Kind -eq 'S') { $g['id'].Value } else { '' }
+  $why = ''
+  $min = $g['min_app_version']
+  if ($min -and $min.Kind -eq 'B') { $why = "min_app_version is no version string; $Checkout" }
+  elseif ($min -and $min.Kind -eq 'S' -and (Test-MinAppVersionNewer $min.Value)) {
+    $shown = if ($min.Value) { $min.Value } else { '(empty)' }
+    $why = "min_app_version $shown; $Checkout"
+  }
+  $role = $g['role']
+  if (-not $why -and $role) {
+    if ($role.Kind -eq 'B') { $why = 'a role that is no name' }
+    elseif ($role.Kind -eq 'S') {
+      $r = $role.Value.Trim()
+      if ($r -and ($ModelRoles -cnotcontains $r)) { $why = "role ""$r""" }
+    }
+  }
+  return [pscustomobject]@{ Id = $id; Why = $why }
+}
 
 # Supported (runtime -> format) pairs — mirror models.ts SUPPORTED_RUNTIME_FORMATS (the app's
 # §7.4 gate; drift test M-A1). A ggml/whisper_cpp weight (the bundled transcriber) has a real
@@ -173,7 +289,20 @@ $results = @()
 $hadMismatch = $false
 $bundledModels = 0
 
+# W-62 (b): set aside, one line each, every manifest this checkout's app cannot use; nothing below sees it.
+$usableFiles = @()
+$newerCount = 0
 foreach ($mf in $manifestFiles) {
+  $gate = Get-SkipReason (Get-Content -LiteralPath $mf.FullName -Raw)
+  if ($gate.Why) {
+    Write-Host ("  SKIP   {0}: needs a newer HilbertRaum ({1})" -f $(if ($gate.Id) { $gate.Id } else { $mf.Name }), $gate.Why) -ForegroundColor Yellow
+    $newerCount++
+  } else {
+    $usableFiles += $mf
+  }
+}
+
+foreach ($mf in $usableFiles) {
   $text = Get-Content -LiteralPath $mf.FullName -Raw
   $id = Get-ManifestField $text 'id'
   $localPath = Get-ManifestField $text 'local_path'
@@ -243,7 +372,7 @@ foreach ($mf in $manifestFiles) {
 }
 
 if ($Generate) {
-  $entries = foreach ($mf in $manifestFiles) {
+  $entries = foreach ($mf in $usableFiles) {
     $text = Get-Content -LiteralPath $mf.FullName -Raw
     $id = Get-ManifestField $text 'id'
     $localPath = Get-ManifestField $text 'local_path'
@@ -285,6 +414,11 @@ if ($Generate) {
   Write-Host "Wrote $dst" -ForegroundColor Cyan
 }
 
+# W-62 (b): outside -Kit a skip is counted, not a failure (-Kit fails on it below).
+if ($newerCount -gt 0 -and -not $Kit) {
+  Write-Host ("{0} manifest(s) skipped: they need a newer HilbertRaum ({1})." -f $newerCount, $Checkout) -ForegroundColor Yellow
+}
+
 if ($hadMismatch) {
   Write-Host 'One or more weights FAILED checksum verification.' -ForegroundColor Red
   exit 1
@@ -293,6 +427,12 @@ if ($hadMismatch) {
 # -Strict = the sellable posture (assertCommercialDrive parity): every weight must be
 # VERIFIED against a REAL manifest hash, and there must be at least one weight.
 if ($Strict -or $Kit) {
+  # W-62 (b), sheet decision 8: a Kit is built with its own app, so a manifest that app cannot use is a
+  # defect on it (the canonical gate says the same), and a Kit is never silently smaller.
+  if ($Kit -and $newerCount -gt 0) {
+    Write-Host ("KIT: {0} manifest(s) need a newer HilbertRaum ({1}) - a Kit ships only manifests its own app can use." -f $newerCount, $Checkout) -ForegroundColor Red
+    exit 1
+  }
   if ($Kit -and $bundledModels -eq 0) {
     Write-Host 'KIT: no bundled model (bundled_on_preconfigured_drive: true) - a Kit ships its bundled set preloaded.' -ForegroundColor Red
     exit 1

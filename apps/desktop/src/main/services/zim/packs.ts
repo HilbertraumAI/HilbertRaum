@@ -6,7 +6,7 @@ import { MAX_SELECTED_PACKS } from '../../../shared/types'
 import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
 import { ftIndexHint, parseLibraryXml, type KiwixBook } from './client'
-import { ZimHeaderError, nativeArchivePath, readZimHeader } from './identity'
+import { ZimHeaderError, ZimNewerFormatError, nativeArchivePath, readZimHeader, zimFormatTooNew } from './identity'
 import { zimErrorClass } from './error-class'
 import { KiwixManageError } from './tools'
 
@@ -82,8 +82,10 @@ export interface PackDeps {
 }
 
 /** Why a registered pack is not usable right now. Stored `'identity_mismatch'`, surfaced
- *  `'identity-mismatch'` (the shared-type spelling). */
-export type UnavailableReason = 'missing' | 'identity-mismatch'
+ *  `'identity-mismatch'` (the shared-type spelling). W-71 (app-update wave, T2.14):
+ *  `'newer-format'`, stored `'newer_format'`: the file IS this archive, in a ZIM format newer than
+ *  the tools read. */
+export type UnavailableReason = 'missing' | 'identity-mismatch' | 'newer-format'
 
 interface PackRow {
   id: string
@@ -108,12 +110,22 @@ interface PackRow {
 }
 
 const toStoredReason = (reason: UnavailableReason): string =>
-  reason === 'identity-mismatch' ? 'identity_mismatch' : 'missing'
+  reason === 'identity-mismatch' ? 'identity_mismatch' : reason === 'newer-format' ? 'newer_format' : 'missing'
 
+/** A stored value this build does not know (a newer build's) reads as no reason: the row stays unavailable, and the
+ *  next reconcile rewrites the column from what it finds. */
 const fromStoredReason = (stored: string | null): UnavailableReason | null => {
   if (stored === 'identity_mismatch') return 'identity-mismatch'
+  if (stored === 'newer_format') return 'newer-format'
   if (stored === 'missing') return 'missing'
   return null
+}
+
+/** The per-ask not-searched outcome for an unavailability reason (the same words the reconcile would record). */
+const UNAVAILABLE_OUTCOME: Record<UnavailableReason, KnowledgePackOutcome['reason']> = {
+  missing: 'file-missing',
+  'identity-mismatch': 'identity-mismatch',
+  'newer-format': 'newer-format'
 }
 
 /** The stored capability verdict as the shared type spells it: NULL reads as `'unknown'`
@@ -165,6 +177,12 @@ export type PackResolution =
  * `'identity-mismatch'`, which is a materially different state for the user: the file is
  * there, it is simply not their archive any more.
  *
+ * W-71 (app-update wave, T2.14): a candidate that IS this archive but in a ZIM format newer than
+ * the tools read (header major above 6) is never returned: with no readable candidate the answer
+ * is `'newer-format'`. This is the ONE place that keeps such a file from every tool, since every
+ * consumer takes its path from here (the served set and so the library build, the retrievable
+ * packs, the per-ask classification, the reconcile's availability write).
+ *
  * #429: the recorded path is normalized to the native separator here as well as at
  * registration. `join()` already gives the drive-relative candidate a native path, but a
  * `recorded_path` row written before that fix (or edited by hand) can still carry forward
@@ -182,13 +200,19 @@ export function resolvePack(
   const recorded = row.recorded_path ? nativeArchivePath(row.recorded_path, platform) : ''
   if (recorded && recorded !== candidates[0]) candidates.push(recorded)
   let sawCandidate = false
+  let sawNewerFormat = false
   let unreadable: string | null = null
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
     sawCandidate = true
     try {
-      const { uuid } = readZimHeader(candidate)
-      if (uuid === row.id) return { path: candidate, uuid }
+      const { uuid, major } = readZimHeader(candidate)
+      if (uuid !== row.id) continue
+      if (zimFormatTooNew(major)) {
+        sawNewerFormat = true // this archive, but not one the tools can read: try the next candidate
+        continue
+      }
+      return { path: candidate, uuid }
     } catch (err) {
       unreadable = err instanceof ZimHeaderError ? err.reason : 'unreadable'
     }
@@ -199,7 +223,7 @@ export function resolvePack(
       reason: unreadable
     })
   }
-  return { path: null, reason: sawCandidate ? 'identity-mismatch' : 'missing' }
+  return { path: null, reason: sawNewerFormat ? 'newer-format' : sawCandidate ? 'identity-mismatch' : 'missing' }
 }
 
 const nowIso = (): string => new Date().toISOString()
@@ -300,7 +324,7 @@ const notSearchedOutcome = (
  * a persisted 13-pack selection from older data or a hand-edited setting is trimmed
  * deterministically and TOLD SO, never silently); then, per remaining row, a tombstone is
  * `removed`, `enabled = 0` is `disabled`, an unavailable row is `file-missing` /
- * `identity-mismatch` from its stored reason, and a CONFIRMED `searchable = 'no'` is
+ * `identity-mismatch` / (W-71) `newer-format` from its stored reason, and a CONFIRMED `searchable = 'no'` is
  * `not-searchable` (unknown and `'yes'` are both searched — nothing is filtered out before its
  * capability is established, §2.5 item 4).
  *
@@ -345,9 +369,7 @@ export function classifyPackSelection(
     }
     if (row.unavailable_at !== null) {
       const reason = fromStoredReason(row.unavailable_reason) ?? 'missing'
-      outcomes.push(
-        notSearchedOutcome(row.id, row.title, reason === 'missing' ? 'file-missing' : 'identity-mismatch')
-      )
+      outcomes.push(notSearchedOutcome(row.id, row.title, UNAVAILABLE_OUTCOME[reason]))
       return
     }
     if (toSearchable(row.searchable) === 'no') {
@@ -356,13 +378,7 @@ export function classifyPackSelection(
     }
     const resolved = resolvePack(zimDir, row)
     if (resolved.path === null) {
-      outcomes.push(
-        notSearchedOutcome(
-          row.id,
-          row.title,
-          resolved.reason === 'missing' ? 'file-missing' : 'identity-mismatch'
-        )
-      )
+      outcomes.push(notSearchedOutcome(row.id, row.title, UNAVAILABLE_OUTCOME[resolved.reason]))
       return
     }
     eligible.push({ ...rowToPack(row, true, null), filePath: resolved.path })
@@ -398,9 +414,13 @@ export function servedCandidates(db: Db, zimDir: string): Array<{ id: string; pa
  * kiwix-manage child is ever spawned for it. Only then does the manager produce the metadata —
  * and its `id` must EQUAL the header UUID, or the registration fails: a manager that disagrees
  * with the header is not trusted to name the archive we just identified.
+ * W-71 (app-update wave, T2.14): between the two, an archive in a ZIM format newer than the tools
+ * read (header major above 6) throws `ZimNewerFormatError` (the add's `newer-format`, C05), so
+ * kiwix-manage never sees it either.
  */
 export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Promise<KnowledgePack> {
-  const { uuid } = readZimHeader(zimPath)
+  const { uuid, major } = readZimHeader(zimPath)
+  if (zimFormatTooNew(major)) throw new ZimNewerFormatError(major)
   const book = await readZimMetadata(deps, zimPath)
   if (book.id !== uuid) {
     throw new Error('kiwix-manage reported a different archive identity than the ZIM header')
@@ -490,7 +510,7 @@ export interface ReconcileReport {
   registered: number
   /** Rows whose path/size was healed, or whose availability came back. */
   healed: number
-  /** Rows marked `missing` or `identity_mismatch` by this pass. */
+  /** Rows marked `missing`, `identity_mismatch` or `newer_format` by this pass. */
   unavailable: number
 }
 
@@ -513,7 +533,8 @@ export interface ReconcileOptions {
  *  (ii) every non-tombstoned row is then resolved BY IDENTITY: a match heals `leaf`/
  *       `recorded_path`/`size_bytes` and clears the unavailability stamp; no match sets
  *       `unavailable_at` + `unavailable_reason` (`missing` when no candidate file existed,
- *       `identity_mismatch` when one did but carried another UUID).
+ *       `identity_mismatch` when one did but carried another UUID, W-71's `newer_format` when it
+ *       is this archive in a ZIM format newer than the tools read; half (i) skips such a file).
  *
  * The DRIVE half runs first on purpose: a renamed archive is healed by its UUID before the row
  * half looks at it, so an ordinary rename is ONE write, not a spurious "unavailable" stamp
@@ -548,14 +569,22 @@ export async function reconcile(
   for (const leaf of files) {
     assert()
     const filePath = join(deps.zimDir, leaf)
-    let uuid: string
+    let header: { uuid: string; major: number }
     try {
-      uuid = readZimHeader(filePath).uuid
+      header = readZimHeader(filePath)
     } catch (err) {
       // Never registered, never fatal: one corrupt download must not block the folder.
       log.warn('Knowledge-pack reconcile skipped a file with an unreadable ZIM header', {
         reason: err instanceof ZimHeaderError ? err.reason : 'unreadable'
       })
+      continue
+    }
+    // W-71 (T2.14): a newer ZIM format is never handed to kiwix-manage, so an unknown one gets no row (it can get none
+    // without the manager's metadata), and a known one is not healed onto this file: the row half below resolves it
+    // and records `newer_format`. The major is a number, never a path.
+    const { uuid, major } = header
+    if (zimFormatTooNew(major)) {
+      log.warn('Knowledge-pack reconcile skipped an archive in a newer ZIM format', { major })
       continue
     }
     const known = prepareCached(db, 'SELECT * FROM knowledge_packs WHERE id = ?').get(uuid) as unknown as

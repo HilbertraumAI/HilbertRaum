@@ -78,11 +78,14 @@ const MAX_PLAIN_CONTINUATION_ROWS = 1
 
 /**
  * The deterministic bank-statement extractor version (A9, Phase 31–33 follow-up). Stamped onto every
- * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse: a statement whose stored
- * `extractor_version` is NULL (legacy) or DIFFERS from this is STALE (SKA-26/R9: `!==`, not `<` — a
- * NEWER-version row after a rollback re-extracts too) — the analysis read-back + the categorize doctask
- * re-extract it (replacing the rows) rather than keep serving figures a since-fixed
- * parser bug mis-signed or whose payee it lost.
+ * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse by `run.ts`
+ * `extractorVerdict` (G-34 (a), frozen): a statement whose stored `extractor_version` is NULL (legacy) or
+ * BELOW this is STALE — the analysis read-back, the categorize doctask and the downstream run prefix
+ * re-extract it (replacing the rows) rather than keep serving figures a since-fixed parser bug mis-signed
+ * or whose payee it lost. A statement at a HIGHER number (or with any odd stamp) is a newer version's
+ * reading: served as stored, never replaced or deleted (this reverses SKA-26's `!==`). So from the Kit
+ * tag on this number only ever RISES, a number is never reused for different output, and a rollback of a
+ * bad extractor ships a higher number, never a lower one.
  *
  * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in EITHER the
  * line parser here (`extractTransactions`/`parseLine`/`applySignMarker`) OR the geometry reconstruction

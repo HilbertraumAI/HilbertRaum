@@ -22,6 +22,18 @@ const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlit
 
 export type Db = InstanceType<typeof DatabaseSync>
 
+/**
+ * The one read-write connection this module opens (app-update plan T2.2, Δ-40, Δ-42 row 8): {@link openDatabase} and
+ * {@link checkpointLeftoverWal} both come here. `defensive: true` is explicit because node:sqlite's default depends on
+ * the runtime (spike 7): on in the packaged app (Electron 43 / Node 24.22.1), off under vitest on Node 24.13.0, absent
+ * and silently ignored on Node 22.21.1. Defensive mode refuses `writable_schema`, direct writes to `sqlite_schema`, to
+ * FTS5 shadow tables and to `sqlite_dbpage`, `journal_mode = OFF` and `PRAGMA schema_version =`, none of which the app
+ * uses, so the tests run the database as the app does. The probe's read-only, immutable handle is not one of these.
+ */
+function openReadWriteConnection(path: string): Db {
+  return new DatabaseSync(path, { defensive: true })
+}
+
 /** A compiled, reusable statement — `node:sqlite`'s `StatementSync`. */
 export type Stmt = ReturnType<Db['prepare']>
 
@@ -1140,6 +1152,21 @@ export function sqliteJudgedDamaged(err: unknown): boolean {
   return code === SQLITE_CORRUPT || code === SQLITE_NOTADB
 }
 
+/**
+ * W-68 (app-update wave, T2.14): whether SQLite could not parse the database's SCHEMA. True for a SQLITE_CORRUPT error
+ * whose message starts with SQLite's fixed "malformed database schema": what a schema row this SQLite cannot parse
+ * raises (a newer version's schema text that came without a stamp bump, #985's rule), and what damage inside
+ * `sqlite_schema` raises too. `errstr` cannot tell it apart (it is "database disk image is malformed" for every CORRUPT),
+ * so the message is read, for its prefix only: the rest quotes a schema object's name and its SQL, and is never logged,
+ * stored or sent. The unlock maps it to its own copy instead of "restore from a backup" (`openFailure`,
+ * workspace-vault.ts). {@link sqliteJudgedDamaged} still calls it damage, and its other callers keep their verdicts.
+ */
+export function sqliteSchemaUnreadable(err: unknown): boolean {
+  if (sqlitePrimaryCode(err) !== SQLITE_CORRUPT) return false
+  const message = (err as { message?: unknown }).message
+  return typeof message === 'string' && message.startsWith('malformed database schema')
+}
+
 /** The primary SQLite result code of a `node:sqlite` error (the low byte of its extended `errcode`), else null. */
 function sqlitePrimaryCode(err: unknown): number | null {
   const code = (err as { errcode?: unknown } | null)?.errcode
@@ -1294,15 +1321,18 @@ export type WalCheckpointRetry =
  * afterwards, and the lock goes on. One that still holds commits (a full drive, a second connection reading) stays, and
  * the caller re-checks. `damaged`: SQLite calls the database CORRUPT or NOTADB, so the WAL cannot be replayed into it
  * and does not protect it. `busy`: a reader kept the checkpoint from finishing. Writes only what a checkpoint writes; no
- * migrations, no schema change.
+ * migrations, no schema change, no `last_writer` stamp (T2.2).
  */
 export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
   let db: Db | null = null
   try {
-    db = new DatabaseSync(dbPath)
+    db = openReadWriteConnection(dbPath)
     // #911: the start also runs this before any password, on a file anyone with write access could plant: as in the
     // probe, no function the file's schema names runs with the trust SQLite gives a schema by default.
-    db.exec('PRAGMA trusted_schema = OFF;')
+    // T2.7 security fix round (L-6): and SQLite checks each cell's size against its page as it reads (its own advice for
+    // a database file from an untrusted source); a cell that does not fit is SQLITE_CORRUPT, which the replay already
+    // reads as `damaged`.
+    db.exec('PRAGMA trusted_schema = OFF; PRAGMA cell_size_check = ON;')
     const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
     return { outcome: row.busy ? 'busy' : 'checkpointed', log: row.log, checkpointed: row.checkpointed }
   } catch (err) {
@@ -1385,11 +1415,15 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
   const indexRoots: number[] = []
   let db: Db | null = null
   try {
-    db = new DatabaseSync(immutableUri(path), { readOnly: true })
+    // T2.7 security fix round (L-6): `defensive: true` as well, explicit (node:sqlite's default depends on the runtime, as
+    // for the read-write connection above): the file may be one anyone planted on the drive.
+    db = new DatabaseSync(immutableUri(path), { readOnly: true, defensive: true })
     // The schema read here is whatever the file holds, possibly before any unlock (the init() salvage): no function a
     // view, trigger or generated column in it names runs with the trust SQLite gives a schema by default (ON in
     // node:sqlite's build). The app's own schema needs no such trust (#876 review round 3).
-    db.exec('PRAGMA trusted_schema = OFF;')
+    // T2.7 (L-6): and each cell's size is checked against its page as it is read (`cell_size_check`), SQLite's own advice
+    // for an untrusted database file; a cell that does not fit is SQLITE_CORRUPT, read as `damaged` below.
+    db.exec('PRAGMA trusted_schema = OFF; PRAGMA cell_size_check = ON;')
     const objects = db.prepare('SELECT type, name, rootpage FROM sqlite_schema').all() as Array<{
       type: string
       name: string
@@ -1438,9 +1472,160 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
   return answer('database')
 }
 
-/** Open (or create) the database at `path` and run migrations. */
-export function openDatabase(path: string): Db {
-  const db = new DatabaseSync(path)
+/**
+ * The `schema_meta` table (app-update plan W-9, frozen contract F-10): key–value rows. Frozen for every later version: its
+ * columns, key and constraints never change and no version puts a trigger on it (later versions add tables of their own).
+ * Not in {@link SCHEMA}: it is created inside the stamp's guard ({@link stampLastWriter}), so an object a later or
+ * foreign build left under the name (a view, an index, a table of another shape) never fails the open. One constant, so a
+ * fresh and a migrated database hold the same `CREATE TABLE` text (the all-paths schema test, T10.7).
+ */
+const SCHEMA_META_DDL = 'CREATE TABLE IF NOT EXISTS main.schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+
+/** The one key release 1 writes in `schema_meta` (F-10). Every other key name belongs to later writers (W-49). */
+const LAST_WRITER_KEY = 'last_writer'
+
+/**
+ * The second field of the `last_writer` value `<app version>;<applied_through>` (F-10, Δ-P2-3): a token without `;` whose
+ * meaning the migration framework defines (P10, T10.3, which replaces this value). There is no release before release 1,
+ * so this interim value never ships.
+ */
+export const LAST_WRITER_APPLIED_THROUGH = 'interim'
+
+/** The longest `last_writer` value written or read: a SemVer and a token fit many times over. */
+const LAST_WRITER_MAX_LENGTH = 256
+/** One field of the stamp as this build writes it: printable ASCII without a space or `;`. */
+const STAMP_FIELD = /^[\x21-\x3a\x3c-\x7e]+$/
+/** The rest of a value after its first `;`: printable ASCII without a space (a later writer may use `;` in it). */
+const STAMP_REST = /^[\x21-\x7e]+$/
+/** The failure code of an open that wrote no stamp because no usable app version was set ({@link setStampAppVersion}). A
+ *  retry cannot help such a stamp. */
+export const STAMP_NO_APP_VERSION = 'no-app-version'
+/** The failure code of a stamp SQLite reported as done that did not store the value (a trigger's `RAISE(IGNORE)`). */
+const STAMP_IGNORED = 'stamp-ignored'
+/** The failure code of a stamp asked for on a handle inside a transaction its caller holds: nothing written, the
+ *  caller's transaction left as it was (the stamp's own BEGIN would throw, and its ROLLBACK end the caller's). */
+const STAMP_IN_TRANSACTION = 'stamp-in-transaction'
+
+/** The app version the stamp names ({@link setStampAppVersion}); empty until it is set. */
+let stampAppVersion = ''
+
+/**
+ * Set the app version the `last_writer` stamp names: `app.getVersion()` (the app's `package.json` version, SemVer), set by
+ * `main/index.ts` at the very start of the main process, before any database is opened (the plaintext open runs inside
+ * `workspace.init()`). One module value instead of a parameter on every open (the #847 `setManifestAppVersion` pattern).
+ * Anything but a string (`undefined` from a caller that lost its value, a number) leaves it unset. Until it is set, or
+ * when it is no token the stamp's grammar allows, an open writes no stamp and reports `no-app-version`: never a made-up
+ * version.
+ */
+export function setStampAppVersion(version: unknown): void {
+  stampAppVersion = typeof version === 'string' ? version : ''
+}
+
+/** A `last_writer` value read back ({@link parseLastWriter}): its two fields, or `'unreadable'`. */
+export type LastWriter = { readonly appVersion: string; readonly appliedThrough: string } | 'unreadable'
+
+/**
+ * Read a `last_writer` value (F-10): split at the FIRST `;` (a later writer may put more `;` after it, never in the version).
+ * No value (no table, no row: a file no build since release 1 opened), a value that is not text, has no `;`, is empty on
+ * either side, is longer than 256 characters or holds anything but printable ASCII without spaces answers `'unreadable'`,
+ * never an error: the value comes from the workspace file and another build chose it, and what reads it (the unlock line
+ * of the content-free `update.log`, P3; the migration framework, P10) must be able to use whatever it gets.
+ */
+export function parseLastWriter(value: unknown): LastWriter {
+  if (typeof value !== 'string' || value.length > LAST_WRITER_MAX_LENGTH) return 'unreadable'
+  const cut = value.indexOf(';')
+  if (cut < 0) return 'unreadable'
+  const appVersion = value.slice(0, cut)
+  const appliedThrough = value.slice(cut + 1)
+  if (!STAMP_FIELD.test(appVersion) || !STAMP_REST.test(appliedThrough)) return 'unreadable'
+  return { appVersion, appliedThrough }
+}
+
+/** The stored `last_writer` value, or null: no table, no row, an object there that cannot be read, a value that is not
+ *  text. Never throws. */
+function storedLastWriter(db: Db): string | null {
+  try {
+    const row = db.prepare('SELECT value FROM main.schema_meta WHERE key = ?').get(LAST_WRITER_KEY) as { value?: unknown } | undefined
+    return typeof row?.value === 'string' ? row.value : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What an open did with the `last_writer` stamp: written, or not (with a content-free code: SQLite's result code and fixed
+ * description, a Node error code, `no-app-version`, `stamp-ignored` or `stamp-in-transaction`). `previous` is the value found BEFORE the overwrite (null when
+ * there was none), for the unlock line (P3) and the migration framework (P10): after the open the stored value is always
+ * this build's own.
+ */
+export type LastWriterStamp =
+  | { readonly written: true; readonly previous: string | null }
+  | { readonly written: false; readonly previous: string | null; readonly code: string }
+
+/**
+ * The `last_writer` stamp (W-9, F-10): create `schema_meta` if absent and upsert its one key, overwritten whole on every
+ * open (never "only when the value differs"), as `<app version>;<LAST_WRITER_APPLIED_THROUGH>`. It touches no other key
+ * and no other table, deletes nothing, and never sets `application_id`. Best effort: one transaction of its own after
+ * the refusal check and the migrations; whatever stops it (a later shape change, a foreign object under the name, a full
+ * or read-only drive) is rolled back, reported through `onStampFailed`, and the open goes on with the handle outside any
+ * transaction. The value is read back before the commit: a write a trigger skipped (`RAISE(IGNORE)`, which SQLite reports
+ * as done) is `stamp-ignored`, not a stamp. Never throws. Also the lock's one retry of a stamp the open could not write
+ * (`WorkspaceController`, T2.2 fix round), on the session's open handle.
+ */
+export function stampLastWriter(db: Db, options: OpenDatabaseOptions = {}): LastWriterStamp {
+  const previous = storedLastWriter(db)
+  const failed = (code: string): LastWriterStamp => {
+    try {
+      options.onStampFailed?.(code)
+    } catch {
+      /* a note that throws must not fail the open either */
+    }
+    return { written: false, previous, code }
+  }
+  const value = `${stampAppVersion};${LAST_WRITER_APPLIED_THROUGH}`
+  if (!STAMP_FIELD.test(stampAppVersion) || value.length > LAST_WRITER_MAX_LENGTH) return failed(STAMP_NO_APP_VERSION)
+  // The lock's retry runs on the session's live handle: never inside a transaction someone else holds on it.
+  if (db.isTransaction) return failed(STAMP_IN_TRANSACTION)
+  let ignored = false
+  try {
+    db.exec('BEGIN')
+    db.exec(SCHEMA_META_DDL)
+    db.prepare('INSERT INTO main.schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+      LAST_WRITER_KEY,
+      value
+    )
+    if (storedLastWriter(db) !== value) {
+      ignored = true
+      throw new Error(STAMP_IGNORED)
+    }
+    db.exec('COMMIT')
+    return { written: true, previous }
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* no transaction is left open: the failed statement ended it, or BEGIN itself failed */
+    }
+    return failed(ignored ? STAMP_IGNORED : failureCode(err))
+  }
+}
+
+/** Options of {@link openDatabase}. */
+export interface OpenDatabaseOptions {
+  /** Told, with a content-free code, when the `last_writer` stamp was not written (W-9: best effort; the open goes on).
+   *  `db.ts` cannot log (logging imports the vault, which imports this module): the caller does. */
+  readonly onStampFailed?: (code: string) => void
+}
+
+/** {@link openDatabaseWithStamp}'s answer: the open database and what the open did with the stamp. */
+export interface OpenedDatabase {
+  readonly db: Db
+  readonly stamp: LastWriterStamp
+}
+
+/** Open (or create) the database at `path` and run migrations, then stamp it; also say what the stamp found and did. */
+export function openDatabaseWithStamp(path: string, options: OpenDatabaseOptions = {}): OpenedDatabase {
+  const db = openReadWriteConnection(path)
   // #208: everything below the constructor can throw (the very first PRAGMA does, with
   // "file is not a database", when the file's bytes are not SQLite — the destroyed-vault
   // unlock path). Without the close, the native handle LEAKED open: on Windows that open
@@ -1456,7 +1641,13 @@ export function openDatabase(path: string): Db {
     }
     throw err
   }
-  return db
+  // T2.2 (F-10): only now, after the refusal check (a refused file is never stamped) and the migrations.
+  return { db, stamp: stampLastWriter(db, options) }
+}
+
+/** Open (or create) the database at `path`, run migrations and write the `last_writer` stamp (best effort). */
+export function openDatabase(path: string, options: OpenDatabaseOptions = {}): Db {
+  return openDatabaseWithStamp(path, options).db
 }
 
 /** The PRAGMA + additive-migration body of {@link openDatabase}. Throws on a file whose
@@ -1758,7 +1949,7 @@ function applyPragmasAndMigrations(db: Db): void {
   ensureFtsRowidSync(db)
   seedCollections(db)
   db.exec(CORPUS_GENERATION)
-  // #247: stamp AFTER the migrations, and only when moving up — a same-version open writes
-  // nothing here, so a second open is a no-op.
+  // #247: stamp AFTER the migrations, and only when moving up: a same-version open skips this
+  // write. (Not a no-op open any more: the `last_writer` stamp follows on every open, T2.2.)
   if (found < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
 }

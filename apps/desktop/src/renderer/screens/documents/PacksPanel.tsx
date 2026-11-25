@@ -61,6 +61,9 @@ function addFailedKey(reason: KnowledgePackAddFailureReason | null): MessageKey 
       return 'packs.addFailed.manager'
     case 'path-unsupported':
       return 'packs.addFailed.pathUnsupported'
+    // W-71 (T2.14): an archive in a ZIM format newer than the tools read (copy deck C05).
+    case 'newer-format':
+      return 'packs.addFailed.newerFormat'
     default:
       return 'packs.addFailed.other'
   }
@@ -405,7 +408,9 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
             const reasonText = !p.available
               ? p.unavailableReason === 'identity-mismatch'
                 ? t('packs.state.identityMismatchTitle')
-                : t('packs.state.missingTitle')
+                : p.unavailableReason === 'newer-format'
+                  ? t('packs.state.newerFormatTitle')
+                  : t('packs.state.missingTitle')
               : notSearchable
                 ? t('packs.state.notSearchableTitle')
                 : null
@@ -432,6 +437,11 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
                     (p.unavailableReason === 'identity-mismatch' ? (
                       <Badge tone="warning" icon="⚠" title={t('packs.state.identityMismatchTitle')}>
                         {t('packs.state.identityMismatch')}
+                      </Badge>
+                    ) : p.unavailableReason === 'newer-format' ? (
+                      // W-71 (T2.14): the archive is there, in a ZIM format newer than the tools read (C03, C04).
+                      <Badge tone="warning" icon="⚠" title={t('packs.state.newerFormatTitle')}>
+                        {t('packs.state.newerFormat')}
                       </Badge>
                     ) : (
                       <Badge tone="warning" icon="⚠" title={t('packs.state.missingTitle')}>

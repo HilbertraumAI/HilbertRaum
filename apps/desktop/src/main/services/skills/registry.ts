@@ -18,13 +18,21 @@ import { join } from 'node:path'
 import type { Db } from '../db'
 import { log } from '../logging'
 import {
+  SKILL_ANALYSIS_MODES,
   SKILL_ID_RE,
+  SKILL_V1_PERMISSION_CEILING,
+  failedSkillNeedsNewerApp,
   parseSemverCore,
   skillNeedsNewerApp,
+  type SkillCompatibility,
   type SkillKind,
+  type SkillLocalizedText,
   type SkillManifest,
-  type SkillTrustedLevel
+  type SkillPermissions,
+  type SkillTrustedLevel,
+  type SkillTriggers
 } from '../../../shared/skill-manifest'
+import type { SkillUnavailableReason } from '../../../shared/types'
 import { parseSkillManifestFromDir } from './manifest'
 import { resolveSkillLimits, type SkillLimits } from './limits'
 
@@ -77,8 +85,10 @@ export interface DiscoveredSkill {
  * failed folder. The parallel human-readable `errors` strings may carry a (SKILL_ID_RE-validated)
  * folder path and the parser's fixed structural messages; they are for tests/debugging in-process
  * and must never be logged or sent to the renderer (§22-M1).
+ * `needsNewerApp` (W-65, app-update wave T2.14): a SKILL.md this version cannot accept that declares a well-formed
+ * minimum above this app (`failedSkillNeedsNewerApp`): made for a newer version, counted apart from the unreadable ones.
  */
-export type SkillDiscoveryErrorCode = 'invalidFolderName' | 'unreadable' | 'invalidManifest' | 'duplicateId'
+export type SkillDiscoveryErrorCode = 'invalidFolderName' | 'unreadable' | 'invalidManifest' | 'duplicateId' | 'needsNewerApp'
 
 export interface DiscoveryResult {
   skills: DiscoveredSkill[]
@@ -86,6 +96,9 @@ export interface DiscoveryResult {
   errors: string[]
   /** Structural reason codes parallel to `errors` (SKA-32) — safe to log/surface as counts+codes. */
   errorCodes: SkillDiscoveryErrorCode[]
+  /** W-65 (T2.14 fix round 2): the names of the folders filed `needsNewerApp` (always valid skill ids), so the
+   *  reconcile can tell which unavailable row's folder holds a skill made for a newer version. */
+  needsNewerAppFolders: string[]
 }
 
 export interface ReconcileResult {
@@ -99,6 +112,13 @@ export interface ReconcileResult {
   errors: string[]
   /** Structural reason codes parallel to `errors` (SKA-32) — safe to log/surface as counts+codes. */
   errorCodes: SkillDiscoveryErrorCode[]
+  /**
+   * W-65 (T2.14 fix round 2, review R2-3): the install ids of the rows this pass left unavailable because their folder
+   * (the row's `path`, in its source) now holds a skill made for a newer version. Derived per pass, never stored: the
+   * row's columns are a vanished folder's (F-25), and the Skills tab reads "Needs newer app" for it instead of "Files
+   * missing" (`SkillInfo.unavailableReason`).
+   */
+  needsNewerAppRows: string[]
 }
 
 export interface ReconcileOptions {
@@ -147,10 +167,97 @@ function rowToRecord(r: SkillRow): SkillRecord {
     enabled: r.enabled === 1,
     warningAck: r.warning_ack === 1,
     trustedLevel: r.trusted_level as SkillTrustedLevel,
-    manifest: JSON.parse(r.manifest_json) as SkillManifest,
+    manifest: storedManifest(r),
     unavailableAt: r.unavailable_at,
     installedAt: r.installed_at,
     updatedAt: r.updated_at
+  }
+}
+
+function isMapping(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
+
+/** The values each permission can hold in a manifest this build wrote (`validateSkillManifest` clamps to them). */
+const STORED_PERMISSION_VALUES: { [K in keyof SkillPermissions]: readonly string[] } = {
+  documents: ['none', 'selected_only'],
+  network: ['denied'],
+  filesystem: ['none', 'skill_resources_only']
+}
+
+/**
+ * App-update T2.7 fix round (R1 MJ-1 = R2 M-1): a row's cached `manifest_json`, read tolerantly. The reconcile rewrites
+ * it only for a folder this build can read, so the rows read as another version wrote them are exactly those whose
+ * folder it cannot read (marked unavailable). One of those whose cache is no JSON, or lacks or mistypes a member this
+ * build reads, used to throw for the whole Skills list, the picker and the suggestion. Each member now falls back to this
+ * build's own default where it is missing or of another shape (the v1 permission ceiling per permission, no minimum, no
+ * triggers, no tools, no per-language texts; the id, title, version and kind from the row's columns), and the row shows
+ * by the states it already has. A manifest this build wrote reads exactly as before.
+ */
+function storedManifest(r: SkillRow): SkillManifest {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(r.manifest_json)
+  } catch {
+    parsed = undefined
+  }
+  const m = isMapping(parsed) ? parsed : {}
+  const text = (v: unknown, fallback: string): string => (typeof v === 'string' ? v : fallback)
+
+  const compat = isMapping(m.compatibility) ? m.compatibility : {}
+  const compatibility: SkillCompatibility = typeof compat.minAppVersion === 'string' ? { minAppVersion: compat.minAppVersion } : {}
+
+  const perms = isMapping(m.permissions) ? m.permissions : {}
+  const permission = <K extends keyof SkillPermissions>(key: K): SkillPermissions[K] => {
+    const v = perms[key]
+    return (typeof v === 'string' && STORED_PERMISSION_VALUES[key].includes(v) ? v : SKILL_V1_PERMISSION_CEILING[key]) as SkillPermissions[K]
+  }
+  const permissions: SkillPermissions = {
+    documents: permission('documents'),
+    network: permission('network'),
+    filesystem: permission('filesystem')
+  }
+
+  let localized: SkillManifest['localized']
+  if (isMapping(m.localized)) {
+    const out: NonNullable<SkillManifest['localized']> = {}
+    for (const [lang, entry] of Object.entries(m.localized)) {
+      if (!isMapping(entry)) continue
+      const kept: SkillLocalizedText = {
+        ...(typeof entry.title === 'string' ? { title: entry.title } : {}),
+        ...(typeof entry.description === 'string' ? { description: entry.description } : {})
+      }
+      if (kept.title !== undefined || kept.description !== undefined) out[lang] = kept
+    }
+    if (Object.keys(out).length > 0) localized = out
+  }
+
+  const trig = isMapping(m.triggers) ? m.triggers : {}
+  const triggers: SkillTriggers = {
+    keywords: isStringList(trig.keywords) ? trig.keywords : [],
+    mimeTypes: isStringList(trig.mimeTypes) ? trig.mimeTypes : [],
+    filenamePatterns: isStringList(trig.filenamePatterns) ? trig.filenamePatterns : [],
+    ...(typeof trig.autoFire === 'boolean' ? { autoFire: trig.autoFire } : {})
+  }
+
+  const analysis = SKILL_ANALYSIS_MODES.find((mode) => mode !== 'none' && mode === m.analysis)
+  return {
+    id: text(m.id, r.id),
+    title: text(m.title, r.title),
+    description: text(m.description, ''),
+    version: text(m.version, r.version),
+    author: text(m.author, ''),
+    language: text(m.language, 'en'),
+    kind: text(m.kind, r.kind) as SkillKind,
+    compatibility,
+    ...(localized ? { localized } : {}),
+    permissions,
+    allowedTools: isStringList(m.allowedTools) ? m.allowedTools : [],
+    ...(typeof m.reservesTools === 'boolean' ? { reservesTools: m.reservesTools } : {}),
+    ...(analysis ? { analysis } : {}),
+    triggers
   }
 }
 
@@ -171,11 +278,13 @@ function rowToRecord(r: SkillRow): SkillRecord {
 export function discoverSkillsInDir(
   dir: string,
   source: SkillSource,
-  opts: { limits?: SkillLimits } = {}
+  /** `appVersion`: the running app's, for W-65's verdict on a failed SKILL.md (absent ⇒ '', which never gives it). */
+  opts: { limits?: SkillLimits; appVersion?: string } = {}
 ): DiscoveryResult {
   const skills: DiscoveredSkill[] = []
   const errors: string[] = []
   const errorCodes: SkillDiscoveryErrorCode[] = []
+  const needsNewerAppFolders: string[] = []
   const limits = opts.limits ?? resolveSkillLimits()
 
   // §22-M1 + the SKA-32 content nuance: a folder name may ride the human-readable line ONLY when
@@ -194,7 +303,7 @@ export function discoverSkillsInDir(
       .map((e) => e.name)
       .sort()
   } catch {
-    return { skills, errors, errorCodes } // absent/unreadable dir → no skills (not an error)
+    return { skills, errors, errorCodes, needsNewerAppFolders } // absent/unreadable dir → no skills (not an error)
   }
 
   const seenIds = new Map<string, string>() // declared id → folder it was first claimed by
@@ -228,6 +337,14 @@ export function discoverSkillsInDir(
       continue
     }
     if (!parsed.ok || !parsed.manifest) {
+      // W-65 (F-25's typed case): made for a newer version, not broken. Its own code, so Settings → Skills counts it on
+      // its own line (C06/C07) instead of sending the user to look for a typo. Fail-open like the gate: on an app
+      // version it cannot read, the folder stays `invalidManifest`.
+      if (failedSkillNeedsNewerApp(parsed, opts.appVersion ?? '')) {
+        pushError('needsNewerApp', folderName, 'the skill needs a newer app version (skipped)')
+        needsNewerAppFolders.push(folderName)
+        continue
+      }
       // The parser's errors are fixed structural strings (content-free by SKA-31/§22-M1).
       pushError('invalidManifest', folderName, parsed.errors.join('; '))
       continue
@@ -241,7 +358,7 @@ export function discoverSkillsInDir(
     seenIds.set(id, folderName)
     skills.push({ source, folderName, manifest: parsed.manifest })
   }
-  return { skills, errors, errorCodes }
+  return { skills, errors, errorCodes, needsNewerAppFolders }
 }
 
 /**
@@ -272,11 +389,16 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   // excluded from discovery, so they otherwise accumulate invisibly on the portable drive forever).
   sweepStaleSkillTempDirs(opts.userSkillsDir, now)
 
-  const app = discoverSkillsInDir(opts.appSkillsDir, 'app', { limits })
-  const user = discoverSkillsInDir(opts.userSkillsDir, 'user', { limits })
+  const app = discoverSkillsInDir(opts.appSkillsDir, 'app', { limits, appVersion: opts.appVersion })
+  const user = discoverSkillsInDir(opts.userSkillsDir, 'user', { limits, appVersion: opts.appVersion })
   const discovered = [...app.skills, ...user.skills]
   const errors = [...app.errors, ...user.errors]
   const errorCodes = [...app.errorCodes, ...user.errorCodes]
+  // W-65 (T2.14 fix round 2): the folders made for a newer version, keyed like a row's (source, path).
+  const newerFolders = new Set<string>([
+    ...app.needsNewerAppFolders.map((f) => folderKey('app', f)),
+    ...user.needsNewerAppFolders.map((f) => folderKey('user', f))
+  ])
 
   const present = new Set<string>()
   let inserted = 0
@@ -376,11 +498,19 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   }
 
   // Anything in the DB that disk no longer has → mark unavailable (never delete).
+  // W-65 (T2.14 fix round 2, review R2-3): a row whose folder is still there but now holds a skill made for a newer
+  // version is marked the same way (its columns are a vanished folder's, F-25) and named in `needsNewerAppRows`.
   let markedUnavailable = 0
-  const rows = db.prepare('SELECT install_id FROM skills').all() as Array<{ install_id: string }>
-  for (const { install_id } of rows) {
+  const needsNewerAppRows: string[] = []
+  const rows = db.prepare('SELECT install_id, source, path FROM skills').all() as Array<{
+    install_id: string
+    source: string
+    path: string
+  }>
+  for (const { install_id, source, path } of rows) {
     if (present.has(install_id)) continue
     if (markSkillUnavailable(db, install_id, now)) markedUnavailable++
+    if (newerFolders.has(folderKey(source, path))) needsNewerAppRows.push(install_id)
   }
 
   // Safety net for the one-active-per-id invariant (DS12). The enable IPC + import already enforce
@@ -394,7 +524,12 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
     log.info('Skills re-enabled: this app now meets their minimum version', { count: reenabled })
   }
 
-  return { inserted, updated, markedUnavailable, reenabled, present: present.size, errors, errorCodes }
+  return { inserted, updated, markedUnavailable, reenabled, present: present.size, errors, errorCodes, needsNewerAppRows }
+}
+
+/** A skill folder's key, as a row's `source` and `path` (the folder name, a valid skill id: no `/`) name it. */
+function folderKey(source: string, folder: string): string {
+  return `${source}/${folder}`
 }
 
 /**
@@ -565,10 +700,13 @@ export function setSkillEnabled(
 
 /** Structural summary of the LAST reconcile's discovery errors (SKA-32) — counts+codes only. */
 export interface SkillReconcileStatus {
-  /** Skill folders that exist but could not be read/validated on the last reconcile. */
+  /** Skill folders that exist but could not be read/validated on the last reconcile (W-65: not those made for a newer
+   *  version, which `needsNewerAppCount` counts). */
   errorCount: number
-  /** Structural reason codes (deduplicated) — never folder names or package content (§22-M1). */
+  /** Structural reason codes (deduplicated) of the `errorCount` folders — never folder names or package content (§22-M1). */
   errorCodes: SkillDiscoveryErrorCode[]
+  /** W-65 (T2.14): skill folders made for a newer version (`needsNewerApp`). Absent when there are none. */
+  needsNewerAppCount?: number
 }
 
 /** The registry object carried on `AppContext.skills` — bundles the resolved dirs + a DB getter. */
@@ -583,6 +721,9 @@ export interface SkillRegistry {
   setEnabled(installId: string, enabled: boolean): boolean
   /** SKA-32: counts+codes of the last reconcile's discovery errors (zeros before the first one). */
   reconcileStatus(): SkillReconcileStatus
+  /** W-65 (T2.14 fix round 2, review R2-3): why the last reconcile left this row unavailable, when it knows more than
+   *  "the folder is gone": `needsNewerApp` (its folder now holds a skill made for a newer version). null otherwise. */
+  unavailableReason(installId: string): SkillUnavailableReason | null
 }
 
 export interface SkillRegistryDeps {
@@ -612,10 +753,21 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   // SKA-32: the last reconcile's structural error summary, for the Settings → Skills surfacing.
   // Counts + deduplicated codes only — the human-readable strings never leave the process (§22-M1).
   let lastStatus: SkillReconcileStatus = { errorCount: 0, errorCodes: [] }
+  // W-65 (R2-3): the rows the last reconcile left unavailable because their folder holds a newer version's skill.
+  let newerRows: ReadonlySet<string> = new Set()
   const doReconcile = (): ReconcileResult => {
     const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits, appVersion })
     reconciledThisSession = true
-    lastStatus = { errorCount: result.errors.length, errorCodes: [...new Set(result.errorCodes)] }
+    newerRows = new Set(result.needsNewerAppRows)
+    // W-65: the folders made for a newer version are counted on their own; the "could not be read" count and its codes
+    // are the rest. `errorCodes` is parallel to `errors`, so the codes alone give both counts.
+    const unreadable = result.errorCodes.filter((code) => code !== 'needsNewerApp')
+    const newer = result.errorCodes.length - unreadable.length
+    lastStatus = {
+      errorCount: unreadable.length,
+      errorCodes: [...new Set(unreadable)],
+      ...(newer > 0 ? { needsNewerAppCount: newer } : {})
+    }
     return result
   }
   const ensureReconciled = (): void => {
@@ -641,6 +793,7 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
       return getSkill(getDb(), installId)
     },
     setEnabled: (installId, enabled) => setSkillEnabled(getDb(), installId, enabled),
-    reconcileStatus: () => lastStatus
+    reconcileStatus: () => lastStatus,
+    unavailableReason: (installId) => (newerRows.has(installId) ? 'needsNewerApp' : null)
   }
 }

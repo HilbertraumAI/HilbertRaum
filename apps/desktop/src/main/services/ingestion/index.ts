@@ -33,7 +33,7 @@ import { sha256File } from '../models'
 import { perfMark, perfMs } from '../perf'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
-import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
+import { ENCRYPTED_DOC_SUFFIX, shredFile, storeHoldsFile, type DocumentCipher } from '../workspace-vault'
 import { purgeSkillDataForDocument } from '../skills/run'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
@@ -50,7 +50,7 @@ import {
   type ParseContext,
   type ParsedDocument
 } from './parsers'
-import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
+import { persistedMessageKey } from '../../../shared/persisted-messages'
 import { ocrMetaOf, parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import {
@@ -63,7 +63,7 @@ import {
 import type { PlaintextOpsRegistry } from './plaintext-ops'
 import { failureRowMessage } from './engine-failure'
 import { locateOriginal, locateStoredCopy, resolveStoredCopy, warnOriginalChanged } from './stored-copy'
-import { canonicalLeafFor } from './stored-copy-leaf'
+import { canonicalLeafFor, storedCopyLeaf } from './stored-copy-leaf'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
@@ -426,9 +426,10 @@ function rowToInfo(
     staleEmbeddings,
     summary: parseSummary(row.summary_json),
     origin: parseOrigin(row.origin_json),
-    // DERIVED scan marker: failed with the exact scan notice. The OCR task targets
-    // exactly these rows (plus already-OCR'd PDFs for a re-run).
-    scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
+    // DERIVED scan marker: failed with the scan notice, read by its key (the English the PDF
+    // parser stores, an alias, or a newer version's code: F-26). The OCR task targets exactly
+    // these rows (plus already-OCR'd PDFs for a re-run).
+    scanDetected: row.status === 'failed' && persistedMessageKey(row.error_message) === 'main.ingest.pdfScanDetected',
     ocr: ocrInfoForRow(row),
     scannedPages: scannedPagesInfo(row.scanned_pages_json),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
@@ -765,6 +766,13 @@ export async function prepareDocument(
   const op = deps.plaintextOps?.register(deps.plaintextOpKind ?? 'import-prepare', deps.signal)
   try {
     setStatus(db, documentId, 'extracting')
+    // T2.7 security re-check 2 (N-3): every file below is named after the row's id (`<store>/<id><ext>[.enc]`,
+    // `<store>/<id>.parse<ext>`). An id that is no bare name (a separator, `.` or `..`: the rule `canonicalLeafFor`
+    // applies to a stored copy's leaf) leads out of the store, so the row fails as its source missing, with nothing
+    // written. Every id the app writes is a UUID.
+    if (storedCopyLeaf(documentId) !== documentId || documentId === '' || documentId === '.' || documentId === '..') {
+      throw new Error(t('en', 'main.ingest.sourceMissing'))
+    }
     // Perf marks identify a document only by its random UUID (perf.ts content rules).
     perfMark('ingest_start', { docId: documentId, bytes: row.size_bytes ?? null })
 
@@ -790,6 +798,14 @@ export async function prepareDocument(
     // original gone too, straight to `failed`).
     const located = resolveStoredCopy(db, storeDir, row)
     let storedPath = located?.path ?? null
+    // T2.7 security follow-on (S-b): the legacy migration below writes `<copy>.enc` beside a plaintext copy, points the
+    // row at it and shreds the copy. The resolver's fallback to the recorded `stored_path` can name any file, so a plaintext
+    // copy outside the store folder (`storeHoldsFile`) is no stored copy in an encrypted workspace: the re-index takes
+    // the path for a missing one (the original re-imported into the store, or "source missing"), and nothing outside the
+    // store is written or shredded.
+    if (storedPath && cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX) && !storeHoldsFile(storeDir, storedPath)) {
+      storedPath = null
+    }
     /** The plaintext file the parser reads. */
     let parseSource: string
 
@@ -851,6 +867,7 @@ export async function prepareDocument(
         documentId
       )
       parseSource = storedPath
+      // T2.7 (F-3, S-b): a copy that gets here lies inside the store folder (checked where it was located, above).
       transients.push(storedPath)
       op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
       storedPath = encPath
@@ -2065,7 +2082,10 @@ export function deleteDocument(db: Db, storeDir: string, id: string): void {
   // half-deleted, undeletable document). Shredding AFTER the commit closes the DATA-1 window where
   // the file was destroyed before a failing delete left a row with no chunks and no stored file.
   // #188 changed only WHICH path is shredded, never WHEN.
-  if (doomed) {
+  // T2.7 security fix round (F-3; FU-P2-6 in P2): and only a file inside the store folder (`storeHoldsFile`). With no copy
+  // under the row's own name, the resolver falls back to the recorded `stored_path` verbatim, which a later version, a
+  // cloned drive or a database the app did not make can point at any file: that file is left, and only the row goes.
+  if (doomed && storeHoldsFile(storeDir, doomed.path)) {
     shredFile(doomed.path)
   }
   // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: this doc's vectors were

@@ -908,6 +908,9 @@ export const en = {
   'analysis.wholeDocBeginningOnly':
     '**Heads-up:** this document was too long to read in full, so this answer covers only its ' +
     'beginning. To check something later in the document, ask about that detail directly.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises
@@ -1240,7 +1243,8 @@ export const en = {
   'models.newerApp.heading': 'Needs a newer HilbertRaum',
   'models.newerApp.badge': 'Needs newer app',
   'models.newerApp.hint':
-    'This model is for a newer version of HilbertRaum. Update the app on this computer to use it.',
+    'This model needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   'models.library.memory': 'Minimum memory: {size}',
   'models.library.clear': 'Clear filters',
   'models.library.showVariants': 'Show all variants ({count})',
@@ -1698,6 +1702,12 @@ export const en = {
     '{count} skill folder could not be read and is skipped. Its SKILL.md is missing, invalid, or unreadable.',
   'skills.reconcile.folderErrors.other':
     '{count} skill folders could not be read and are skipped. Each folder needs a valid SKILL.md.',
+  'skills.reconcile.needsNewerApp.one':
+    '{count} skill on this drive was made for a newer version of HilbertRaum and is skipped. To use ' +
+    'it, install the update in Settings → Updates.',
+  'skills.reconcile.needsNewerApp.other':
+    '{count} skills on this drive were made for a newer version of HilbertRaum and are skipped. To ' +
+    'use them, install the update in Settings → Updates.',
   'skills.empty.title': 'No skills yet',
   'skills.empty.line': 'Skills teach the assistant how to do a specific task. Add one to get started.',
   // Trust chip (icon + word, never colour-only — guidelines §9).
@@ -1719,7 +1729,9 @@ export const en = {
   'skills.unavailable.chip': 'Files missing',
   'skills.unavailable.title': 'This skill’s files are no longer on the drive.',
   'skills.incompatible.chip': 'Needs newer app',
-  'skills.incompatible.title': 'This skill needs a newer version of the app; update to enable it.',
+  'skills.incompatible.title':
+    'This skill needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   // DS7 — review chip + the calm acknowledge banner in the detail view.
   'skills.review.chip': 'Review',
   'skills.warn.title': 'Review what this skill can do',
@@ -1746,7 +1758,8 @@ export const en = {
   'skills.kind.instruction': 'Guidance',
   'skills.kind.tool': 'Uses tools',
   // §13/§22-D1 — a tool-reserved skill adds guidance only in v1.
-  'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
+  'skills.tool.note':
+    'This skill adds guidance only. This version of HilbertRaum doesn’t run the tools it describes.',
   // S11c — a kind:'tool' skill names its real, app-orchestrated tools. Honest about auto-run (U5 /
   // ux-16): read-only tools may run automatically to answer a question; writes/exports always confirm.
   'skills.tool.note.active':
@@ -1813,7 +1826,9 @@ export const en = {
   'skills.import.note.listItemsTooLong': 'Some entries in "{field}" are too long and are ignored.',
   'skills.import.note.listTruncated': '"{field}" has more entries than allowed; only the first {max} are kept.',
   'skills.import.note.languageInvalid': 'The "language" field is not a valid language tag; "en" is used.',
-  'skills.import.note.allowedToolsIgnored': 'The declared tools are ignored for an instruction skill (tools come with a later version).',
+  'skills.import.note.allowedToolsIgnored':
+    'The declared tools are ignored for an instruction skill (this version of HilbertRaum doesn’t ' +
+    'run them).',
   'skills.import.note.analysisInvalid': 'The "analysis" field has an unknown value and is ignored.',
   'skills.import.note.analysisIgnoredForTool': 'The "analysis" field is ignored for a tool skill (the app decides its whole-document behaviour).',
   'skills.import.note.triggersInvalid': 'The "triggers" block is invalid and is ignored.',
@@ -2456,6 +2471,8 @@ export const en = {
   'common.apply': 'Apply',
   'common.labelValue': '{label}: {value}',
   'common.percent': '{pct}%',
+  'common.newerVersionText':
+    'This text comes from a newer version of HilbertRaum, and this version can’t show it.',
   'indicator.offline': 'Local · Offline',
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',
@@ -2742,6 +2759,12 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  'main.workspace.schemaUnreadable':
+    'Your password is correct, but this version of HilbertRaum can’t read the workspace. It was ' +
+    'probably last used with a newer version. Your workspace is unchanged. To open it, install the ' +
+    'newer version: choose Install update from a file… If you don’t have an update file for it, you ' +
+    'can download one from {address}/from/{version}. If no newer version was ever used on this ' +
+    'drive, keep the files as they are and see the troubleshooting guide in the drive’s docs folder.',
   // #911: the password verified, but `.enc` is missing and no copy was left to restore it from. A new workspace would
   // replace the data key the stored documents need, so the copy warns against it.
   'main.workspace.vaultMissing':
@@ -2778,8 +2801,10 @@ export const en = {
     'a file window on the workspace folder), wait a moment, then try again. Nothing is lost.',
   // #247: the database was written by a newer build (its schema stamp is above this build's).
   'main.workspace.newer':
-    'This workspace was written by a newer HilbertRaum — update the app to open it. Nothing ' +
-    'was changed.',
+    'This workspace was last used with a newer version of HilbertRaum, so this version can’t open ' +
+    'it. Your workspace is unchanged. To open it, install the newer version: choose Install update ' +
+    'from a file… If you don’t have an update file for it, you can download one from ' +
+    '{address}/from/{version}.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   // #807: create's two refusals, each its own `reason`. A workspace appeared on the drive after the lock screen read it
@@ -3195,7 +3220,9 @@ export const en = {
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
   'main.skills.notPicked': 'Choose the skill package with the file picker first.',
-  'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',
+  'main.skills.incompatible':
+    'This skill needs a newer version of HilbertRaum. To use it, install the update in Settings → ' +
+    'Updates.',
   // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",
   'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',
@@ -3334,6 +3361,7 @@ export const en = {
   'chat.packs.outcome.disabled': 'not searched: pack disabled',
   'chat.packs.outcome.file-missing': 'not searched: file missing',
   'chat.packs.outcome.identity-mismatch': 'not searched: different archive at this location',
+  'chat.packs.outcome.newer-format': 'not searched: newer ZIM format',
   'chat.packs.outcome.not-served': 'not searched: name collision with another pack',
   'chat.packs.outcome.not-searchable': 'not searched: no full-text index',
   'chat.packs.outcome.tools-missing': 'not searched: kiwix-tools not installed',
@@ -3425,6 +3453,9 @@ export const en = {
   // one exists from its own folder, so what is left is the file name, or a folder outside the
   // app's own. Names the cause and the workaround — never the raw path.
   'packs.addFailed.pathUnsupported': 'On Windows, kiwix-manage cannot read this archive because its file name or folder contains an umlaut, an accent or another non-ASCII character. Copy the file into the drive’s zim/ folder under a name without such characters and add it again.',
+  'packs.addFailed.newerFormat':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it wasn’t ' +
+    'added. A newer version of HilbertRaum may be able to add it.',
   'packs.addFailed.other': 'The archive could not be added.',
   'packs.removedToast': 'Knowledge pack removed',
   'packs.articleCount.one': '{count} article',
@@ -3435,6 +3466,10 @@ export const en = {
   'packs.state.missingTitle': 'The archive file could not be found — is the drive plugged in?',
   'packs.state.identityMismatch': 'Different archive',
   'packs.state.identityMismatchTitle': 'The file at this pack’s location is a different archive — remove this pack and add the file again',
+  'packs.state.newerFormat': 'Newer format',
+  'packs.state.newerFormatTitle':
+    'This archive uses a newer ZIM format than this version of HilbertRaum can read, so it isn’t ' +
+    'used. A newer version of HilbertRaum may be able to use it.',
   // #301 P6 (plan §9.23 (a) row 5, (c)5): confirmed by the `/suggest` probe at a reconcile's
   // end (P4 M7) — the pack stays enabled/readable, just skipped by the ask.
   'packs.state.notSearchable': 'No full-text index',

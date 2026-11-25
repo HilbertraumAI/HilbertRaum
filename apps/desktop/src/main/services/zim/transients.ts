@@ -2,14 +2,13 @@ import {
   existsSync,
   lstatSync,
   readdirSync,
-  realpathSync,
   rmdirSync,
   unlinkSync,
   type Dirent
 } from 'node:fs'
-import { join, sep } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { log } from '../logging'
-import { shredFile } from '../workspace-vault'
+import { folderContainment, shredFile } from '../workspace-vault'
 
 // The knowledge-pack transient directory and its dedicated cleanup (#301, findings L3 / M4;
 // residual R-7).
@@ -33,8 +32,9 @@ import { shredFile } from '../workspace-vault'
 // vaults only while this cleanup must also run in plaintext_dev.
 //
 // Containment comes FIRST and the walk never follows a link: the directory must be a real
-// directory (never a symlink or a Windows junction) whose resolved path is exactly
-// `<realpath(workspacePath)>/zim-transient`. Anything else is REFUSED with one warning and a
+// directory (never a symlink or a Windows junction, of any target form) whose resolved path is exactly
+// `<realpath(workspacePath)>/zim-transient`, resolved by the OS (T2.16: the vault start's own
+// `folderContainment`, so the three answers mean the same here). Anything else is REFUSED with one warning and a
 // report that says so — a recursive remover pointed at a redirected path is the failure mode
 // worth refusing over. Only the two known name shapes are ever removed; any other entry is
 // left in place and counted, so an unexpected file can never be deleted silently and can never
@@ -275,14 +275,21 @@ export function cleanupZimTransients(
     log.warn('ZIM transient cleanup refused: the transient path is not a real directory')
     return emptyReport(false)
   }
-  try {
-    const resolved = realpathSync(transientDir)
-    const expected = join(realpathSync(workspacePath), ZIM_TRANSIENT_DIR_NAME)
-    if (!samePath(resolved, expected, opts.platform)) {
-      log.warn('ZIM transient cleanup refused: the transient directory resolves outside the workspace')
-      return emptyReport(false)
-    }
-  } catch {
+  // T2.16 fix round 2 (S-6, review 1's B-1 for this sweep): a Windows junction whose target is a volume GUID path or a
+  // `\\?\GLOBALROOT\Device\HarddiskVolumeN\…` path reads as a plain directory to the `lstat` above, and the JS
+  // `realpathSync` resolved nothing through it, so its "resolved path" was the expected one and the walk below emptied
+  // the folder the junction reaches. The containment is now the vault start's own test ({@link folderContainment}: the
+  // OS's resolution must be the workspace's, with `zim-transient` below it), after a text check that the directory is
+  // the workspace's own child (the call shape every caller uses). Its `unknown` (a stat that proves nothing) is refused
+  // here, as a directory that could not be resolved always was.
+  const where = samePath(resolve(transientDir), resolve(zimTransientDir(workspacePath)), opts.platform)
+    ? folderContainment(workspacePath, transientDir)
+    : 'outside'
+  if (where === 'outside') {
+    log.warn('ZIM transient cleanup refused: the transient directory resolves outside the workspace')
+    return emptyReport(false)
+  }
+  if (where === 'unknown') {
     log.warn('ZIM transient cleanup refused: the transient directory could not be resolved')
     return emptyReport(false)
   }

@@ -195,7 +195,7 @@ export class WhisperCliTranscriber implements Transcriber {
    * #869: calls that copy their original into the documents folder, from before the copy until their
    * child exists (the copy, the spawn gate, the binary hash), mapped to a promise that resolves once
    * the copy is gone from disk. suspend()/stop() abort each and await that, as they kill and await a
-   * child: an engine update suspends without aborting the import's own signal (`registerEngineIpc`).
+   * child: an engine update suspends without aborting the signal of the import itself (`registerEngineIpc`).
    */
   private readonly copying = new Map<AbortController, Promise<void>>()
   /** #913: the start checks in progress (one per call, before its child exists); suspend()/stop() abort them. */

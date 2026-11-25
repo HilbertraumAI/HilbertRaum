@@ -26,6 +26,8 @@ import { createGunzip } from 'node:zlib'
 interface ArchiveListing {
   bytes: number
   members: string[]
+  /** #1045: each regular member's size in bytes, by its name as written (a later member of a name replaces it). */
+  sizes: Map<string, number>
   /** False when a member name is not plain ASCII (the listing is then not used, `archiveMembers`). */
   plainNames: boolean
 }
@@ -46,6 +48,17 @@ export async function extractedArchiveBytes(path: string, clusterBytes: number):
 export async function archiveMembers(path: string): Promise<string[] | null> {
   const listing = await readArchive(path, 4096)
   return listing && listing.plainNames ? listing.members : null
+}
+
+/**
+ * #1045 round 2: each regular member's size in bytes, by the name `archiveMembers` lists it under: a tar.gz's files
+ * (ustar types `0` and `7`, a pax `size` taking precedence), a zip's every member that is not a folder (its central
+ * directory names no kind). Links, hard links and folders have none; macOS metadata is left out as there. Null exactly
+ * when `archiveMembers` is: the engine install's mend of a failed tar (`runtime-download.ts`) then does not run.
+ */
+export async function archiveMemberSizes(path: string): Promise<Map<string, number> | null> {
+  const listing = await readArchive(path, 4096)
+  return listing && listing.plainNames ? listing.sizes : null
 }
 
 async function readArchive(path: string, unit: number): Promise<ArchiveListing | null> {
@@ -70,10 +83,11 @@ export function isMacMetadataName(path: string): boolean {
   return parts.some((p) => p === '__MACOSX' || p.startsWith('._')) || parts[parts.length - 1] === '.DS_Store'
 }
 
-/** The listing of `names` (files and links), with the room `bytes` they take. */
-function listing(bytes: number, names: string[]): ArchiveListing {
+/** The listing of `names` (files and links), with the room `bytes` they take and the regular members' `sizes`. */
+function listing(bytes: number, names: string[], sizes: Map<string, number>): ArchiveListing {
   const members = names.filter((n) => !isMacMetadataName(n))
-  return { bytes, members, plainNames: members.every((n) => PLAIN_NAME.test(n)) }
+  for (const name of sizes.keys()) if (isMacMetadataName(name)) sizes.delete(name)
+  return { bytes, members, sizes, plainNames: members.every((n) => PLAIN_NAME.test(n)) }
 }
 
 const roundUp = (bytes: number, unit: number): number => Math.ceil(bytes / unit) * unit
@@ -145,6 +159,7 @@ async function zipListing(path: string, unit: number): Promise<ArchiveListing | 
     let total = 0
     const names: string[] = []
     const dirs: string[] = []
+    const sizes = new Map<string, number>()
     for (let n = 0; n < entries; n++) {
       if (at + 46 > cd.length || cd.readUInt32LE(at) !== CENTRAL_SIG) return null
       const uncompressed = cd.readUInt32LE(at + 24)
@@ -157,11 +172,12 @@ async function zipListing(path: string, unit: number): Promise<ArchiveListing | 
       if (name.endsWith('/')) dirs.push(name)
       else {
         names.push(name)
+        sizes.set(name, uncompressed)
         total += roundUp(uncompressed, unit)
       }
       at += 46 + nameLen + extraLen + commentLen
     }
-    return listing(total + folderCount(names, dirs) * unit, names)
+    return listing(total + folderCount(names, dirs) * unit, names, sizes)
   } catch {
     return null
   } finally {
@@ -192,6 +208,8 @@ function tarGzListing(path: string, unit: number): Promise<ArchiveListing | null
     const dirs: string[] = []
     /** #998: links and hard links: members of their own, taking no room. */
     const links: string[] = []
+    /** #1045: the regular members' sizes. */
+    const sizes = new Map<string, number>()
     let pending: Buffer = Buffer.alloc(0)
     /** Data bytes (block-padded) still to pass over. */
     let skip = 0
@@ -211,7 +229,7 @@ function tarGzListing(path: string, unit: number): Promise<ArchiveListing | null
       gunzip.destroy()
       resolvePromise(value)
     }
-    const sum = (): ArchiveListing => listing(total + folderCount(names, dirs) * unit, [...names, ...links])
+    const sum = (): ArchiveListing => listing(total + folderCount(names, dirs) * unit, [...names, ...links], sizes)
 
     const takeHeader = (h: Buffer): void => {
       if (h.every((b) => b === 0)) {
@@ -231,6 +249,7 @@ function tarGzListing(path: string, unit: number): Promise<ArchiveListing | null
       const name = next.name ?? (prefix ? `${prefix}/${base}` : base)
       if (type === '0' || type === '7') {
         names.push(name)
+        sizes.set(name, size)
         total += roundUp(size, unit)
       } else if (type === '5') {
         dirs.push(name)

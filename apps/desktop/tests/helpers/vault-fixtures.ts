@@ -349,6 +349,28 @@ export function newerVault<T extends VaultPaths>(vp: T, password: string): T {
 }
 
 /**
+ * W-68 (T2.14): the existing vault at `vp` (created under `password`) re-encrypted around a database whose schema this
+ * SQLite cannot parse, under THIS build's own stamp (`writeNewerSchema` with `userVersion: SCHEMA_VERSION`): every schema
+ * read fails with SQLITE_CORRUPT "malformed database schema", which is what a newer version's schema text does when it
+ * did not bump the stamp, and what damage inside `sqlite_schema` does too. The plaintext is shredded again; the vault is
+ * left locked.
+ */
+export function schemaUnreadableVault<T extends VaultPaths>(vp: T, password: string): T {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    writeNewerSchema(vp.dbPath, { userVersion: SCHEMA_VERSION })
+    encryptFile(vp.dbPath, vp.encPath, key)
+  } finally {
+    key.fill(0)
+    shredFile(vp.dbPath)
+    cleanSidecars(vp.dbPath)
+  }
+  return vp
+}
+
+/**
  * What `run` threw: its name and the newer-format fields of #845's `VaultNewerError` (`what`, `found`), or
  * `{ name: '(no error)' }`. Rows assert the NAME, never the class: on code without the class an import of it is
  * `undefined`, and `toThrowError(undefined)` passes for any error (#844's trap), which would make a control run green.

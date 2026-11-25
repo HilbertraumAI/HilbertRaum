@@ -152,6 +152,27 @@ export function resolveWorkerScriptPath(resolved: string): string {
   return resolved.replace(/\bapp\.asar([\\/])/, 'app.asar.unpacked$1')
 }
 
+/**
+ * Put every 'message' listener on `raw` behind a try/catch that hands a throw to `onThrow` (guard (d) of `spawnNow`).
+ * tesseract.js 7.0.0's worker answers a failed `initialize` twice, `reject('initialization failed')` and then
+ * `resolve()` (worker-script/index.js:305-312), and its message handler then reads the settled job's entry again
+ * (createWorker.js:208): a TypeError thrown from the Worker's 'message' event, so an uncaughtException that ended the app
+ * at start-up (a damaged language file; measured on the packaged 0.1.64 and 0.1.66). The caller's `onThrow` fails the
+ * start; once the start has settled, failing it changes nothing and the stray message is dropped.
+ */
+function guardMessageListeners(raw: Worker, onThrow: (err: Error) => void): void {
+  for (const listener of raw.listeners('message') as Array<(value: unknown) => void>) {
+    raw.off('message', listener)
+    raw.on('message', (value: unknown) => {
+      try {
+        listener.call(raw, value)
+      } catch (err) {
+        onThrow(toError(err, 'OCR worker failed while starting'))
+      }
+    })
+  }
+}
+
 async function loadRealTesseract(): Promise<TesseractModule> {
   // Lazy import: the package only loads when a recognition
   // actually happens. `tesseract.js` is CJS; the dynamic import interops fine.
@@ -261,12 +282,15 @@ export class TesseractOcrEngine implements OcrEngine {
   /**
    * One bounded worker start (#232). tesseract.js sets the browser-only `worker.onerror` on its
    * Node Worker (inert) and never settles `createWorker()` on a load failure, so a worker that
-   * dies while loading used to surface as `uncaughtException` and kill the app. Three guards:
+   * dies while loading used to surface as `uncaughtException` and kill the app. Four guards:
    *   (a) `process.on('worker')` captures the raw Worker as tesseract spawns it, so `'error'` /
    *       `'exit'` reject the start;
    *   (b) a start timeout, so a hung load rejects instead of blocking every later page;
    *   (c) tesseract's `errorHandler` option, so a `status: 'reject'` never throws from its
-   *       message handler.
+   *       message handler;
+   *   (d) its message handler runs guarded (`guardMessageListeners`): a throw while starting fails
+   *       the start, so a language file that is not language data leaves the recognizer
+   *       `'unavailable'` instead of ending the app (P2 exit).
    * Resolves with the worker and its OWN raw thread(s), start listeners detached — the caller
    * attaches the live-death handling. A failure reaps whatever was spawned and rejects.
    */
@@ -278,11 +302,12 @@ export class TesseractOcrEngine implements OcrEngine {
     const tesseract = await (this.opts.loadTesseract ?? loadRealTesseract)()
     let workerPath: string | undefined
     try {
-      workerPath = resolveWorkerScriptPath(
-        require.resolve(TESSERACT_WORKER_ENTRY)
-      )
+      // Our own `createRequire`, never the bare `require`: in the ESM main bundle that exists only through electron-vite's
+      // CommonJS shim, and in 0.1.66 the shim landed inside a comment, so the resolve threw and the worker was started from
+      // inside app.asar (P2 exit).
+      workerPath = resolveWorkerScriptPath(createRequire(import.meta.url).resolve(TESSERACT_WORKER_ENTRY))
     } catch {
-      workerPath = undefined // fake module in tests / exotic layout: use its default
+      workerPath = undefined // exotic layout without the package: use tesseract's default
     }
 
     const raws: Worker[] = []
@@ -311,7 +336,8 @@ export class TesseractOcrEngine implements OcrEngine {
         gzip: true,
         cacheMethod: 'none',
         // (c) A no-op is enough: a load reject already rejects createWorker(), a job reject
-        // rejects that job, and a loadLanguage/initialize reject is settled by the start timeout.
+        // rejects that job, a loadLanguage reject is settled by the start timeout, and a failed
+        // initialize by guard (d), through the stray resolve that follows it.
         // The handler only replaces the `throw` tesseract would otherwise do.
         errorHandler: (): void => undefined,
         ...extra,
@@ -322,6 +348,8 @@ export class TesseractOcrEngine implements OcrEngine {
     // later — wait one macrotask so the capture window closes with the set complete.
     await new Promise<void>((resolve) => setImmediate(resolve))
     process.off('worker', onWorker)
+    // (d) By now tesseract's own 'message' listener is on each thread, and nothing has arrived yet.
+    for (const raw of raws) guardMessageListeners(raw, (err) => rejectStart(err))
 
     let timer: ReturnType<typeof setTimeout> | undefined
     try {

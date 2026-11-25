@@ -41,13 +41,16 @@ import type { Db } from '../db'
 import {
   SKILL_ID_RE,
   SKILL_SEMVER_RE,
+  failedSkillNeedsNewerApp,
   skillNeedsNewerApp,
   summarizeSkillPermissions,
   type SkillManifest,
   type SkillNoteRef
 } from '../../../shared/skill-manifest'
+import { t } from '../../../shared/i18n'
 import type { SkillInfo, SkillPreview } from '../../../shared/types'
-import { parseSkillManifestFromDir } from './manifest'
+import { folderContainment } from '../workspace-vault'
+import { parseSkillManifestFromDir, parseSkillManifestSource } from './manifest'
 import { resolveSkillLimits, type SkillLimits } from './limits'
 import {
   getSkill,
@@ -81,6 +84,11 @@ export const SKILL_IMPORT_ERRORS = {
   nestedArchive: 'The package contains an embedded archive, which is not allowed.',
   noSkillMd: 'The package does not contain a SKILL.md file.',
   invalidManifest: 'The skill manifest is invalid.',
+  // W-65 (T2.14, decision 6): a SKILL.md this version cannot accept that declares a minimum above this app. The renderer
+  // shows the incompatible-skill text (`skills.incompatible.title`, copy deck X03) for it, never `invalidManifest`'s, so
+  // the structural English is that key's English value, read from the catalog: the SKA-33 matcher finds a wrapped import
+  // error by the catalog's EN text (skillImportI18n.ts), and X03's final value (T2.6) then needs no second edit here.
+  needsNewerApp: t('en', 'skills.incompatible.title'),
   idMismatch: 'The skill id is not a valid name.',
   downgradeBlocked:
     'A newer version of this skill is already installed. Turn on developer mode to install an older version.',
@@ -476,6 +484,65 @@ function stageSource(source: string, limits: SkillLimits): { kind: 'zip' | 'fold
   throw new SkillImportError(SKILL_IMPORT_ERRORS.notZipOrFolder)
 }
 
+/**
+ * App-update T2.7 fix round (R1 MJ-2): {@link stageSource}, with W-65's verdict ahead of the file-type and depth checks.
+ * Dropped into user-skills/, a skill made for a newer version is `needsNewerApp` whatever else its folder holds (the
+ * reconcile reads SKILL.md only); the import refused the same package first for a `.js`, a `.png` or a tree deeper than
+ * the cap, the files a new kind most likely brings. When one of those two checks fails, the package's SKILL.md is read
+ * and a minimum it declares above this app answers `needsNewerApp` instead. The package is refused either way and
+ * nothing is placed: a skill that would install still passes both checks. Every other structural failure keeps its own
+ * reason, and an app version the gate cannot read keeps the structural one (fail-open, as W-65).
+ */
+function stagePackage(source: string, limits: SkillLimits, appVersion: string): { kind: 'zip' | 'folder'; files: StagedFile[] } {
+  try {
+    return stageSource(source, limits)
+  } catch (e) {
+    const typeOrDepth = e instanceof SkillImportError && (e.message === SKILL_IMPORT_ERRORS.badExtension || e.message === SKILL_IMPORT_ERRORS.tooDeep)
+    if (typeOrDepth && skillNeedsNewerApp(declaredMinimum(source, limits), appVersion)) {
+      throw new SkillImportError(SKILL_IMPORT_ERRORS.needsNewerApp)
+    }
+    throw e
+  }
+}
+
+/**
+ * The `compatibility.minAppVersion` a package's SKILL.md declares (well formed: a SKILL.md that fails this version's
+ * checks keeps it too, W-65), read without staging the package: the SKILL.md the staging would place at the package root,
+ * under the same caps (a regular file, no link, at most `maxFileBytes`, a zip member stored or deflated). undefined when
+ * there is none, it cannot be read, or it declares no minimum. Never throws and never writes.
+ */
+function declaredMinimum(source: string, limits: SkillLimits): string | undefined {
+  try {
+    const text = lstatSync(source).isDirectory() ? folderSkillMd(source, limits) : zipSkillMd(source, limits)
+    if (text === null) return undefined
+    const parsed = parseSkillManifestSource(text, { limits })
+    return parsed.manifest?.compatibility.minAppVersion ?? parsed.declaredMinAppVersion
+  } catch {
+    return undefined
+  }
+}
+
+function folderSkillMd(folder: string, limits: SkillLimits): string | null {
+  const path = join(folder, 'SKILL.md')
+  const st = lstatSync(path)
+  return st.isFile() && st.size <= limits.maxFileBytes ? readFileSync(path, 'utf8') : null
+}
+
+/** The zip's root SKILL.md as `stageZip` places it: after the one shared top folder is stripped, dot-named members aside. */
+function zipSkillMd(zipPath: string, limits: SkillLimits): string | null {
+  if (statSync(zipPath).size > limits.maxTotalBytes) return null
+  const buf = readFileSync(zipPath)
+  const members = readCentralDirectory(buf)
+    .filter((e) => !e.isDir)
+    .map((e) => ({ e, parts: e.name.replace(/\\/g, '/').split('/').filter((s) => s !== '') }))
+    .filter((m) => m.parts.length > 0 && !m.parts.some((s) => s.startsWith('.')))
+  const first = members[0]?.parts[0]
+  const strip = members.length > 0 && members.every((m) => m.parts.length > 1 && m.parts[0] === first) ? 1 : 0
+  const found = members.filter((m) => m.parts.slice(strip).join('/') === 'SKILL.md')
+  if (found.length !== 1 || isSymlinkEntry(found[0].e)) return null
+  return inflateEntry(buf, found[0].e, limits.maxFileBytes).toString('utf8')
+}
+
 /** Write a validated tree into a fresh dir, re-asserting traversal containment per file. */
 function writeStaged(files: StagedFile[], destDir: string): void {
   const root = destDir.endsWith(sep) ? destDir : destDir + sep
@@ -604,7 +671,7 @@ export function previewSkillPackage(
 
   let staged: { kind: 'zip' | 'folder'; files: StagedFile[] }
   try {
-    staged = stageSource(source, limits)
+    staged = stagePackage(source, limits, deps.appVersion ?? '')
   } catch (e) {
     return fail(e instanceof SkillImportError ? e.message : SKILL_IMPORT_ERRORS.unreadableZip)
   }
@@ -617,7 +684,11 @@ export function previewSkillPackage(
     if (!existsSync(join(tmp, 'SKILL.md'))) return fail(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(tmp, { limits })
     if (!parsed.ok || !parsed.manifest) {
-      return fail(SKILL_IMPORT_ERRORS.invalidManifest, parsed.notes, parsed.noteCodes)
+      // W-65: a package made for a newer version says so (X03), not "The skill manifest is invalid".
+      const reason = failedSkillNeedsNewerApp(parsed, deps.appVersion ?? '')
+        ? SKILL_IMPORT_ERRORS.needsNewerApp
+        : SKILL_IMPORT_ERRORS.invalidManifest
+      return fail(reason, parsed.notes, parsed.noteCodes)
     }
     const m = parsed.manifest
     if (!SKILL_ID_RE.test(m.id) || !SKILL_SEMVER_RE.test(m.version)) {
@@ -696,8 +767,8 @@ export function importSkill(
   const limits = deps.limits ?? resolveSkillLimits()
   const now = deps.now ?? (() => new Date().toISOString())
 
-  // 1) Validate the whole source into memory (throws structurally on any problem).
-  const staged = stageSource(source, limits)
+  // 1) Validate the whole source into memory (throws structurally on any problem; W-65's verdict first, T2.7).
+  const staged = stagePackage(source, limits, deps.appVersion ?? '')
 
   // 2) Materialize + validate the manifest in a staging dir under user-skills/ (same filesystem
   //    as the final destination), then place it at user-skills/<id>/ (folder name == id).
@@ -709,7 +780,14 @@ export function importSkill(
     assertNoSymlinks(stagingDir)
     if (!existsSync(join(stagingDir, 'SKILL.md'))) throw new SkillImportError(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(stagingDir, { limits })
-    if (!parsed.ok || !parsed.manifest) throw new SkillImportError(SKILL_IMPORT_ERRORS.invalidManifest)
+    if (!parsed.ok || !parsed.manifest) {
+      // W-65: the same verdict as the preview's.
+      throw new SkillImportError(
+        failedSkillNeedsNewerApp(parsed, deps.appVersion ?? '')
+          ? SKILL_IMPORT_ERRORS.needsNewerApp
+          : SKILL_IMPORT_ERRORS.invalidManifest
+      )
+    }
     const manifest: SkillManifest = parsed.manifest
     if (!SKILL_ID_RE.test(manifest.id) || !SKILL_SEMVER_RE.test(manifest.version)) {
       throw new SkillImportError(SKILL_IMPORT_ERRORS.idMismatch)
@@ -979,7 +1057,7 @@ export function deleteSkill(db: Db, installId: string, deps: SkillInstallerDeps)
   if (!record) return { deleted: false }
   if (record.source === 'app') throw new SkillImportError(SKILL_IMPORT_ERRORS.appReadOnly)
 
-  const folder = join(deps.userSkillsDir, record.path)
+  const folder = ownFolderToDelete(record, deps.userSkillsDir)
 
   db.exec('BEGIN')
   try {
@@ -992,10 +1070,30 @@ export function deleteSkill(db: Db, installId: string, deps: SkillInstallerDeps)
   }
 
   // The DB no longer references the skill; remove its plain folder (best-effort cleanup).
-  try {
-    rmSync(folder, { recursive: true, force: true })
-  } catch {
-    /* a transiently-locked file leaves an orphan folder; reconcile re-discovers it (disabled). */
+  if (folder !== null) {
+    try {
+      rmSync(folder, { recursive: true, force: true })
+    } catch {
+      /* a transiently-locked file leaves an orphan folder; reconcile re-discovers it (disabled). */
+    }
   }
   return { deleted: true }
+}
+
+/**
+ * App-update T2.7 fix round (R2 M-2): the folder a delete may remove, or null to remove the row only and leave every file.
+ * This build writes a row's `path` as a folder name and its `source` as `app` or `user`; a row another version wrote is
+ * read as stored, and the delete used to remove `join(user-skills, path)` whatever that named: an empty path or `.` all of
+ * `user-skills/`, a `..` or a separator a folder outside it or someone else's, a new `source` the user's own same-named
+ * skill. Files go only for a user row whose `path` is a bare folder name (non-empty, no separator, not `.` or `..`) that
+ * is, on the disk, a folder inside `user-skills/` (`folderContainment`: no link on the way, resolving where its path says;
+ * a missing folder answers `inside`, and there is nothing to remove). Anything else, a stat that proves nothing included,
+ * leaves the files.
+ */
+function ownFolderToDelete(record: SkillRecord, userSkillsDir: string): string | null {
+  if (record.source !== 'user') return null
+  const name = record.path
+  if (name === '' || name === '.' || name.includes('..') || /[\\/]/.test(name)) return null
+  const folder = join(userSkillsDir, name)
+  return folderContainment(userSkillsDir, folder) === 'inside' ? folder : null
 }

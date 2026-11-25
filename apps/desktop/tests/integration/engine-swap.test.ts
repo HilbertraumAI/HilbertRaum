@@ -74,11 +74,11 @@ import { runtimeMarkerPath, writeRuntimeMarker, type FetchFn } from '../../src/m
 import { tMain } from '../../src/main/services/i18n'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
-import { runToEnd } from '../helpers/download-fixtures'
+import { hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
 import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
-import { verifierInert } from '../helpers/binary-fixtures'
+import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixtures'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 afterEach(() => {
@@ -204,6 +204,21 @@ function archivesUnder(root: string): string[] {
 async function recover(root: string, manifestsDir: string): Promise<void> {
   recoverEngineSwaps(root, manifestsDir)
   await engineFolderDeletesSettled()
+}
+
+/**
+ * T8.5c: every entry under `dir` by its path relative to it (`/`), each file by the SHA-256 of its bytes, each
+ * folder as `dir`; `{}` when `dir` is not there. Two equal answers mean the tree is byte-identical.
+ */
+function contentDigest(dir: string): Record<string, string> {
+  if (!existsSync(dir)) return {}
+  const out: Record<string, string> = {}
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const full = join(entry.parentPath, entry.name)
+    const rel = full.slice(dir.length + 1).split(/[\\/]/).join('/')
+    out[rel] = entry.isDirectory() ? 'dir' : sha256(readFileSync(full))
+  }
+  return out
 }
 
 // ---- The start recovery: one disk layout per place a kill can land -------------------------------
@@ -482,6 +497,236 @@ describe('recoverEngineSwaps: the start finishes or rolls back an interrupted sw
   })
 })
 
+// T8.5c (R2 M-1 = R1 F-5): a marker the start cannot read just now (an antivirus holding it, a denied read) is no
+// verdict, as at the pre-spawn check (#1012 round 6): the family's folders stay exactly as they are for this start,
+// and the next start decides. It read as "no marker", so the start deleted the only whole copy, rolled an update
+// back or replaced a whole `cpu/` net on it. The hold is real (`denyReading`: a deny-read ACL on Windows, mode 000
+// elsewhere); `stat` still answers, the read fails.
+interface HeldLayout {
+  name: string
+  build: (root: string) => void
+  /** The copy whose marker is held. */
+  held: (root: string) => string
+  /** `recoverEngineSwaps`' label for it, relative to the family folder. */
+  label: string
+  /** What the next start, with the marker readable again, makes of the layout. */
+  healed: Record<string, string>
+}
+const HELD_LAYOUTS: HeldLayout[] = [
+  {
+    name: 'a first install killed between its renames: the only whole copy is in .new',
+    build: (root) => {
+      mkdirSync(`${liveDir(root)}.old`, { recursive: true })
+      copy(`${liveDir(root)}.new`, 'b200')
+    },
+    held: (root) => `${liveDir(root)}.new`,
+    label: `${HOST_OS}.new`,
+    healed: { live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT }
+  },
+  {
+    name: 'an update killed between its renames whose new program was taken since: the only whole copy is in .old',
+    build: (root) => {
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+      copy(`${liveDir(root)}.new`, 'b200', { exe: false })
+    },
+    held: (root) => `${liveDir(root)}.old`,
+    label: `${HOST_OS}.old`,
+    healed: { live: 'engine b150|b150', net: 'net b150|b150', ...NOTHING_LEFT }
+  },
+  {
+    name: 'an update killed before its cleanup: the new install beside a whole .old',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(netDir(root), 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    held: (root) => liveDir(root),
+    label: HOST_OS,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  },
+  {
+    name: 'the same layout with the install’s own cpu/ net held: the net in .old would replace it',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(netDir(root), 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    held: (root) => netDir(root),
+    label: `${HOST_OS}/cpu`,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  },
+  {
+    name: 'the cpu/ net’s own swap killed between its renames, the new net in cpu.new',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(join(liveDir(root), 'cpu.old'), 'b150')
+      net(join(liveDir(root), 'cpu.new'), 'b200')
+    },
+    held: (root) => join(liveDir(root), 'cpu.new'),
+    label: `${HOST_OS}/cpu.new`,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  }
+]
+
+describe('recoverEngineSwaps: a marker it cannot read just now leaves the layout as it is (T8.5c)', () => {
+  it.each(HELD_LAYOUTS)('$name', async ({ build, held, label, healed }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    build(rootPath)
+    const runtime = join(rootPath, 'runtime')
+    const before = contentDigest(runtime)
+    const marker = runtimeMarkerPath(held(rootPath))
+    const warn: Array<[string, unknown]> = []
+    const info: string[] = []
+    denyReading(marker)
+    try {
+      recoverEngineSwaps(rootPath, manifestsDir, { log: (m) => info.push(m), warn: (m, meta) => warn.push([m, meta]) })
+      await engineFolderDeletesSettled()
+    } finally {
+      allowReading(marker)
+    }
+    expect(contentDigest(runtime)).toEqual(before)
+    expect(info).toEqual([])
+    // Content-free: the family, the copy's folder by its layout name, the error's code; never a path or a message.
+    expect(warn).toEqual([
+      [
+        'Engine swap recovery: a marker could not be read just now; this family is left as it is',
+        { family: 'llama_cpp', marker: label, code: expect.stringMatching(/^(EPERM|EACCES)$/) }
+      ]
+    ])
+    // Readable again, the next start decides as it always did.
+    await recover(rootPath, manifestsDir)
+    expect(layout(rootPath)).toEqual(healed)
+  })
+
+  // T8.5c round 3 (R1 N-1): an engine the user asks for reads such a marker again for about a second. One that stays
+  // unreadable is a lasting fault (a bad sector, a deny-read ACL), and the copy it should vouch for cannot be vouched
+  // for: it counts as damaged, in the job's own recovery before the download, and the job goes on as with a damaged
+  // marker. Round 1 refused such a job as files in use, for good: an update killed between its renames over a failing
+  // block never got its chat engine back.
+  it.each([
+    { name: 'a plain install', request: {} },
+    { name: 'a reinstall', request: { families: ['llama_cpp' as const], reinstall: true as const } }
+  ])('a lasting unreadable marker beside a leftover, no install folder: $name succeeds and the engine is whole', async ({ request }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(`${liveDir(rootPath)}.new`, 'b200', { label: 'staged' })
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    const marker = runtimeMarkerPath(`${liveDir(rootPath)}.new`)
+    const logs: Array<[string, unknown]> = []
+    const mgr = manager({ log: (m, meta) => logs.push([m, meta]) })
+    denyReading(marker)
+    let job: EngineDownloadJob
+    try {
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...request })
+      job = await settle(mgr, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(job.status, job.error ?? '').toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+    expect(logs).toContainEqual([
+      'Engine job: a marker still cannot be read; it counts as damaged and the job goes on',
+      { family: 'llama_cpp', marker: `${HOST_OS}.new`, code: expect.stringMatching(/^(EPERM|EACCES)$/) }
+    ])
+  })
+
+  // …and a hold that clears while the job reads again is read as it is: the install's own whole net is kept. Read as
+  // damaged, the update would have been rolled back to `.old` and its net with it.
+  it('a hold that clears within the job’s retry is read normally', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200', { label: 'installed' })
+    net(netDir(rootPath), 'b200')
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    net(join(`${liveDir(rootPath)}.old`, 'cpu'), 'b150')
+    const marker = runtimeMarkerPath(liveDir(rootPath))
+    const logs: string[] = []
+    // The hold ends when the job says it reads again: no timer, the job's own word.
+    const mgr = manager({
+      log: (m) => {
+        logs.push(m)
+        if (m === 'Engine job: a marker could not be read just now; it is read again') allowReading(marker)
+      }
+    })
+    denyReading(marker)
+    let job: EngineDownloadJob
+    try {
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], reinstall: true })
+      job = await settle(mgr, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(job.status, job.error ?? '').toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+    expect(logs).toContain('Engine job: a marker could not be read just now; it is read again')
+    expect(logs.filter((m) => m.startsWith('Engine job: a marker still cannot be read'))).toEqual([])
+  })
+
+  /** A download that fails at once (the server has no such archive): nothing is fetched, the job fails. */
+  const failingFetch = (async () => new Response('no such archive', { status: 404 })) as unknown as FetchFn
+
+  // T8.5c round 4 (R1 N-6): what judging before the download rests on. A copy whose marker reads is removed only when
+  // another whole copy takes the install's place: here the recovery rolls `.old`'s b150 in before anything is fetched,
+  // so a download that fails, or a cancel during it, still leaves that engine whole where the resolvers read it.
+  it.each([
+    { name: 'a download that fails', fetchImpl: failingFetch, cancel: false, end: 'failed' },
+    { name: 'a cancel during the download', fetchImpl: hangingFetch('engine-archive'), cancel: true, end: 'cancelled' }
+  ])('a lasting unreadable .new beside a whole .old, no install folder: $name leaves .old’s engine whole', async ({ fetchImpl, cancel, end }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(`${liveDir(rootPath)}.new`, 'b200', { label: 'staged' })
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    const old = contentDigest(`${liveDir(rootPath)}.old`)
+    const marker = runtimeMarkerPath(`${liveDir(rootPath)}.new`)
+    const mgr = manager({ fetchImpl })
+    denyReading(marker)
+    let job: EngineDownloadJob
+    try {
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+      // The cancel lands once the download has bytes: gated on the job's own counter, no timer.
+      if (cancel) {
+        await vi.waitFor(() => expect(mgr.get(started.jobId).receivedBytes).toBeGreaterThan(0), { timeout: hangBudgetMs(5000) })
+        mgr.cancel(started.jobId)
+      }
+      job = await settle(mgr, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(job.status).toBe(end)
+    expect(contentDigest(liveDir(rootPath))).toEqual(old)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // T8.5c round 4 (R1 N-5, kept as built): with no install folder and the only whole copy in `.new`, its marker held
+  // past the retry, the job's recovery counts the copy as damaged and deletes it before the download. A download that
+  // then fails leaves no engine, where a later start could have moved the copy in had the hold cleared by then. Kept:
+  // refusing in this layout reopens the lasting-fault dead end (R1 N-1): a hold that never clears would block every job
+  // for good. What it costs is a re-download once the download works, never data.
+  it('the only whole copy in .new, held for good, no install folder: a failed download leaves no engine, the next install restores one', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    mkdirSync(`${liveDir(rootPath)}.old`, { recursive: true })
+    copy(`${liveDir(rootPath)}.new`, 'b200', { label: 'staged' })
+    const marker = runtimeMarkerPath(`${liveDir(rootPath)}.new`)
+    const failing = manager({ fetchImpl: failingFetch })
+    denyReading(marker)
+    let first: EngineDownloadJob
+    try {
+      const started = await failing.start({ rootPath, manifestsDir, gates: ALLOW })
+      first = await settle(failing, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(first.status).toBe('failed')
+    // Exactly what is left: both leftovers gone, and the install folder the download made, empty (no engine).
+    expect(layout(rootPath)).toEqual({ live: '-|-', net: 'absent', ...NOTHING_LEFT })
+    expect(readdirSync(liveDir(rootPath))).toEqual([])
+    const working = manager()
+    const again = await working.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect((await settle(working, again.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
+})
+
 // ---- The swap inside a job ----------------------------------------------------------------------
 
 /** An extractor that writes the new program into the folder it is given (the net's: `<os>/cpu.new`). */
@@ -490,15 +735,26 @@ const newEngine: ExtractFn = async (_archive, destDir) => {
 }
 
 /** A manager whose download serves `archive`; `extract: 'os-tar'` runs the real `extractWithTar`. */
-function manager(opts: { extract?: ExtractFn | 'os-tar'; archive?: Buffer } = {}): EngineDownloadManager {
+function manager(
+  opts: {
+    extract?: ExtractFn | 'os-tar'
+    archive?: Buffer
+    log?: (msg: string, meta?: unknown) => void
+    /** The download, when the row's is not the archive's: one that fails, one that hangs. */
+    fetchImpl?: FetchFn
+  } = {}
+): EngineDownloadManager {
   const archive = opts.archive ?? BODY
-  const fetchImpl = (async () =>
-    new Response(new Uint8Array(archive), {
-      status: 200,
-      headers: { 'content-length': String(archive.length) }
-    })) as unknown as FetchFn
-  if (opts.extract === 'os-tar') return new EngineDownloadManager({ fetchImpl })
-  return new EngineDownloadManager({ fetchImpl, extractImpl: opts.extract ?? newEngine })
+  const fetchImpl =
+    opts.fetchImpl ??
+    ((async () =>
+      new Response(new Uint8Array(archive), {
+        status: 200,
+        headers: { 'content-length': String(archive.length) }
+      })) as unknown as FetchFn)
+  const log = opts.log ? { log: opts.log } : {}
+  if (opts.extract === 'os-tar') return new EngineDownloadManager({ fetchImpl, ...log })
+  return new EngineDownloadManager({ fetchImpl, extractImpl: opts.extract ?? newEngine, ...log })
 }
 
 /** The job's end once its run, and the background deletes it queued, have settled. */
@@ -1184,6 +1440,74 @@ describe('the staged swap in an engine job (#986)', () => {
     expect({ extracted, paused }).toEqual({ extracted: 0, paused: 0 })
     expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
     expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+})
+
+// T8.5c (R1 F-2): F-24 promises that this release never touches a later version's engine folders: its install lives
+// beside this one as `<os>@<pin>/` (built in `<os>@<pin>.new/`), and an update file's engine archives wait in
+// `updates/engines/<version>/`. The start's row above holds the start to it; these hold every kind of engine job:
+// each such folder is byte-identical after the job and after the deletes it queued.
+describe('an engine job leaves a later version’s engine folders as they are (T8.5c)', () => {
+  /** The folders a later version owns, filled as it fills them: a marked pin folder with its net, a half-built one. */
+  function laterVersion(root: string): string[] {
+    const pin = `${liveDir(root)}@b300`
+    copy(pin, 'b300', { records: ['ggml.dll'] })
+    net(join(pin, 'cpu'), 'b300')
+    copy(`${pin}.new`, 'b300', { marker: false })
+    const engines = join(root, 'updates', 'engines', '0.2.0')
+    mkdirSync(engines, { recursive: true })
+    writeFileSync(join(engines, `llama-b300-bin-${HOST_OS}-vulkan-${HOST_ARCH}.zip`), 'a staged engine archive')
+    return [pin, `${pin}.new`, join(root, 'updates', 'engines')]
+  }
+
+  /** An extractor that cancels its own job, then writes the copy: the stage meets the cancel after the unpack. */
+  const cancelling = (box: { mgr?: EngineDownloadManager; jobId?: string }): ExtractFn => async (archive, destDir, signal) => {
+    box.mgr!.cancel(box.jobId!)
+    await newEngine(archive, destDir, signal)
+  }
+  const failing: ExtractFn = async () => {
+    throw new Error('tar exited with code 2')
+  }
+  const reinstallNet = {
+    families: ['llama_cpp' as const],
+    reinstall: true as const,
+    reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+  }
+
+  it.each([
+    { name: 'a first install', setup: () => undefined, request: {}, extract: 'new', end: 'done' },
+    { name: 'an update', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'new', end: 'done' },
+    {
+      name: 'a reinstall of the main build',
+      setup: (r: string) => copy(liveDir(r), 'b200'),
+      request: { families: ['llama_cpp' as const], reinstall: true as const },
+      extract: 'new',
+      end: 'done'
+    },
+    {
+      name: 'a reinstall of the cpu/ net alone',
+      setup: (r: string) => {
+        copy(liveDir(r), 'b200')
+        net(netDir(r), 'b150')
+      },
+      request: reinstallNet,
+      extract: 'new',
+      end: 'done'
+    },
+    { name: 'an update whose unpack fails', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'fail', end: 'failed' },
+    { name: 'a cancelled update', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'cancel', end: 'cancelled' }
+  ])('$name', async ({ setup, request, extract, end }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    setup(rootPath)
+    const later = laterVersion(rootPath)
+    const before = later.map(contentDigest)
+    const box: { mgr?: EngineDownloadManager; jobId?: string } = {}
+    box.mgr = manager({ extract: extract === 'fail' ? failing : extract === 'cancel' ? cancelling(box) : newEngine })
+    const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...request })
+    box.jobId = started.jobId
+    expect((await settle(box.mgr, started.jobId)).status).toBe(end)
+    expect(later.map(contentDigest)).toEqual(before)
+    expect(before.every((d) => Object.keys(d).length > 0)).toBe(true)
   })
 })
 

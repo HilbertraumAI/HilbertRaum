@@ -1,8 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
+import { gzipSync } from 'node:zlib'
 import { PdfParser, PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import {
   ImageParser,
@@ -24,18 +26,19 @@ import {
   DEFAULT_OCR_REPROBE_DELAY_MS,
   DEFAULT_OCR_WORKER_START_TIMEOUT_MS,
   resolveWorkerScriptPath,
+  TESSERACT_WORKER_ENTRY,
   type TesseractModule
 } from '../../src/main/services/ocr/tesseract'
 import { imageOrientation } from '../../src/main/services/ocr/orientation'
 import { log } from '../../src/main/services/logging'
 import { makeMixedPdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
-import { hangBudgetMs, until, within } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 import { fakeOcrEngine } from '../helpers/ocr-fixtures'
 
 // Phase 38 — scanned-PDF detection (step 0), the OCR engine seam + offline wiring
 // (R-O2), the factory's availability rule (D14/D9: null, never a mock), and the no-CDN
-// sentinel. CI posture: zero network, zero models — the real tesseract.js module is never
-// loaded here.
+// sentinel. CI posture: zero network, zero models — the real tesseract.js module is loaded by
+// one row only (a placeholder language file in a temp folder, its WASM core from node_modules).
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-ocr-'))
@@ -262,6 +265,10 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     expect(starts[0].options.langPath).toBe('X:/drive/ocr')
     expect(starts[0].options.gzip).toBe(true)
     expect(starts[0].options.cacheMethod).toBe('none')
+    // The worker script by an explicit path, resolved from the app's own packages: never tesseract's default (P2 exit:
+    // in 0.1.66 the resolve threw, so the worker was started from inside app.asar). The asar → asar.unpacked rewrite
+    // of that path is the "rewrites app.asar worker paths" row below.
+    expect(starts[0].options.workerPath).toBe(createRequire(import.meta.url).resolve(TESSERACT_WORKER_ENTRY))
   })
 
   it('reuses one worker across recognitions and terminates on stop()', async () => {
@@ -984,6 +991,48 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     expect(await within(probed, 'the hung start timing out')).toBe(false)
     expect(timedOut.availability()).toBe('unavailable')
   })
+
+  // P2 exit (owner call 2026-11-25): a language file that gunzips but is not language data. tesseract.js 7.0.0's worker
+  // answers the failed `initialize` twice, `reject('initialization failed')` and then `resolve()`
+  // (worker-script/index.js:305-312), and its message handler then reads the settled job's entry again
+  // (createWorker.js:208): a TypeError thrown from the Worker's 'message' event, the uncaughtException that ended the
+  // packaged 0.1.64 and 0.1.66 at start-up (their startup probe). The REAL tesseract.js here, the one row in this file
+  // that loads it: its WASM core from node_modules, the language file from a temp folder, no network. The start timer is
+  // faked, so the probe can only settle through the failure itself, never through the 30 s bound.
+  it('a language file that is not language data ends the start unavailable, and nothing escapes as an uncaught exception', async () => {
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await withUncaughtCapture(async (captured) => {
+      const langDir = tmp()
+      const junk = Buffer.from('placeholder - not tesseract language data\n'.repeat(64))
+      writeFileSync(join(langDir, 'eng.traineddata.gz'), gzipSync(junk))
+      // Every thread the start spawns, so the row ends only once each has exited (nothing can land after the capture).
+      const exits: Promise<void>[] = []
+      const onWorker = (raw: Worker): void => {
+        exits.push(new Promise<void>((resolve) => raw.once('exit', () => resolve())))
+      }
+      process.on('worker', onWorker)
+      try {
+        const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], probeRequired: true })
+        let proved: boolean | undefined
+        void engine.probe().then((ok) => {
+          proved = ok
+        })
+        // Pre-fix the probe never settles (the failed initialize leaves createWorker pending) while the stray resolve
+        // reaches the process: stop at whichever comes first.
+        await until(() => proved !== undefined || captured.length > 0, 'the probe settling, or an uncaught exception', 10_000)
+        expect(captured.map((e) => e.message)).toEqual([])
+        expect(proved).toBe(false)
+        expect(engine.availability()).toBe('unavailable')
+        await engine.stop()
+        expect(exits.length).toBeGreaterThan(0)
+        await within(Promise.all(exits), 'the failed start’s worker exiting', 10_000)
+        expect(captured.map((e) => e.message)).toEqual([])
+      } finally {
+        process.off('worker', onWorker)
+      }
+    })
+  }, testBudgetMs(30_000))
 
   it('passes tesseract.js’s errorHandler option (a status:reject must never throw from its message handler) and a dev engine needs no probe', async () => {
     const healthy = fakeTesseract()

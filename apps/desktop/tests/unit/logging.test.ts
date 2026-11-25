@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, statSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, statSync, writeFileSync, readFileSync, linkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -146,6 +146,28 @@ describe('logging service (L17)', () => {
       const text = decrypt(key, deserializeBlob(raw)).toString('utf8')
       expect(text).toContain('before unlock')
       expect(text).toContain('something failed')
+    })
+
+    // T2.7 security fix round (F-2): the encrypted log is written to `app.log.enc.tmp` and renamed into place. A link at
+    // that name (a drive formatted NTFS, APFS or ext4 can carry one) had the file it reaches truncated and overwritten.
+    it('never writes through a hard link at app.log.enc.tmp: the file it reaches stays (T2.7, F-2)', () => {
+      const key = randomBytes(32)
+      const outside = mkdtempSync(join(tmpdir(), 'hilbertraum-log-outside-'))
+      try {
+        const victim = join(outside, 'notes.txt')
+        writeFileSync(victim, 'USER FILE: notes')
+        initLogging(dir)
+        linkSync(victim, join(dir, 'app.log.enc.tmp'))
+        attachVaultKey(key)
+        log.error('something failed')
+        expect(readFileSync(victim, 'utf8')).toBe('USER FILE: notes')
+        const encPath = join(dir, 'app.log.enc')
+        expect(lstatSync(encPath).nlink).toBe(1)
+        expect(decrypt(key, deserializeBlob(readFileSync(encPath))).toString('utf8')).toContain('something failed')
+      } finally {
+        detachVaultKey()
+        rmSync(outside, { recursive: true, force: true })
+      }
     })
 
     it('readLogTail reads the in-memory buffer (not the encrypted file) while unlocked', () => {
