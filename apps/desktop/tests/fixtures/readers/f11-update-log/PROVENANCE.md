@@ -30,4 +30,14 @@ Who reads which part: `tests/unit/update-log.test.ts` runs `emit` against the wr
 through a reading written from the record's text in that file; `tests/integration/update-log-drive.test.ts` and
 `tests/integration/backend-start-failure.test.ts` check lines the real writer appends on a scratch drive against
 `emit`, and that a trim keeps `accept`'s cmd bytes byte for byte. Locked by `../../golden-fixtures.sha256`. The unlock
-line (T3.10) adds its own `vectors-unlock.json` beside this file; this one is never rewritten.
+line (T3.10) adds its own `vectors-unlock.json` beside this file; no `line` or `bytes_b64` here is ever rewritten.
+
+T3.2 fix round 1 (2026-11-25, after review 1 of `9c35e175`; plan F-11 as edited by Δ-66), by hand, additions only to
+the vectors: `s46` (m-1: the true worst startup line, `drive_format=unreadable` with every other field at its F-11 cap,
+252 bytes; the line is `s45`'s with its 6-byte `drive_format` value replaced by the 10-byte sentinel) and `f15` (m-6:
+libuv's `UNKNOWN`, which the gate shows no code for, kept as `err=UNKNOWN`). Texts corrected, no line changed:
+`tokens.value` (the value rule alone does not stop a one-word file, host or account name), `tokens.E` (`UNKNOWN`), the
+new `tokens.registered` (the app's lines are content-free by each event's typed fields: only registered events, each
+field by its key's rule), `emit.how` and `generic.sources` (`generic` is the frame alone), `start_failed.sources` (where
+`err=UNKNOWN` comes from) and `s45`'s `why` (248 bytes, not the worst case). The byte lengths were counted with a scratch
+script over the hand-written lines, which also checked that every earlier vector is unchanged byte for byte.

@@ -12,18 +12,24 @@ import { parseSemver } from './version'
 
 // `<drive>/updates/update.log`: the plaintext support log on the drive (app-update plan W-14, W-68; F-11, frozen;
 // docs/app-updates.md 8.2 and 5.3 table B.2). Release 1's app, its start files, the apply scripts and every later version
-// append to this one file for ever, and support reads it before any unlock, so it is content-free by its grammar: a
-// line is `r1-app <os> <event> <key>=<value> ... t=<UTC time>`, every value 1 to 64 bytes of [0-9A-Za-z._+-], so no
-// path, host, user name, message or free text can pass. An error is logged only by its code and its bare system call
-// (P3 entry decision 3), never by a message. The golden: tests/fixtures/readers/f11-update-log/.
+// append to this one file for ever, and support reads it before any unlock, so the app's lines are content-free by each
+// event's typed fields (Δ-66): a line is `r1-app <os> <event> <key>=<value> ... t=<UTC time>`, and the appender writes
+// only the events registered in `UPDATE_LOG_EVENTS`, each field only when its key is in the event's schema and its value
+// passes the one rule that key names (a version, a pin, an integer, the SQLite version, an error code, a system call, or
+// a closed list of words). The frame's own value rule (1 to 64 bytes of [0-9A-Za-z._+-]) stops paths, spaces, quotes and
+// non-ASCII text, but not a one-word file, host or account name, so no key takes a free value: most rules refuse such a
+// word, and a key whose rule is word-shaped (a pin P admits `Steuer_2026.xlsx`, a system call C admits `peter`) is
+// filled only from its own source (the app's bundled yaml; a thrown error's `syscall`), never from data. Registering an
+// event is where that is reviewed. An error is logged only by its code and its bare system call (P3 entry decision 3),
+// never by a message. The golden: tests/fixtures/readers/f11-update-log/.
 //
 // What this module writes (P3 entry decision 9 (c)):
 // - `startup`, once per start of a prepared drive (main/index.ts `initBackend`): the app version, the engine pins of the
 //   app's own bundled runtime-sources.yaml, the drive-release record's state (T3.3a's reader, F-13: this line is where
 //   its "is logged" happens), config/drive.json's drive_format_version and the SQLite version (W-68);
 // - `start-failed`, in the start runner's catch (main/backend-start.ts): the failure's cause, code and system call;
-// - any later event (the unlock line of T3.10, P6's and P7's events) through `appendUpdateLogLine`, which checks every
-//   key and value again.
+// - a later event (the unlock line of T3.10, P6's and P7's events) only once it is registered in `UPDATE_LOG_EVENTS`,
+//   in this module, as data: its keys in their order and the rule of each; `appendUpdateLogLine` then writes it.
 //
 // Where and how (decision 9 (a), (b)): only on a prepared drive (`config/drive.json` there); never through a link
 // (`updates` must be a real folder at its name, `update.log` absent or a regular file with one name, opened once and
@@ -68,12 +74,17 @@ const DIGIT = /[0-9]/
 const INTEGER = /^[0-9]{1,6}$/
 /** The SQLite version (S). */
 const SQLITE_VERSION = /^[0-9]{1,3}(\.[0-9]{1,3}){2,3}$/
-/** An error code (E): an errno code, a Node code, or SQLite's result code as the start failure spells it. */
-const ERROR_CODE = /^(?:E[A-Z0-9]{1,30}|ERR_[A-Z0-9_]{1,36}|SQLITE_[0-9]{1,5})$/
+/** An error code (E): an errno code, a Node code, SQLite's result code as the start failure spells it, or libuv's
+ *  `UNKNOWN`, its code for a Windows error it does not map (seen on failing USB media; T3.2 review 1, m-6). */
+const ERROR_CODE = /^(?:E[A-Z0-9]{1,30}|ERR_[A-Z0-9_]{1,36}|SQLITE_[0-9]{1,5}|UNKNOWN)$/
 const ERROR_CODE_MAX_BYTES = 40
+/** libuv's code for an unmapped error: the start gate shows no such code (start-failure.ts), the line keeps it. */
+const LIBUV_UNKNOWN = 'UNKNOWN'
 /** A bare system call (C), at most 16 bytes. */
 const SYSCALL_MAX_BYTES = 16
-const CAUSES: ReadonlySet<string> = new Set(['drive_not_writable', 'drive_full', 'other'])
+/** The failed-start line's causes: the gate's three (`StartFailureCause`). */
+const CAUSE_WORDS = ['drive_not_writable', 'drive_full', 'other'] as const
+const CAUSES: ReadonlySet<string> = new Set(CAUSE_WORDS)
 
 /** The engine families whose pins the startup line carries, with their keys (`ocr` is no engine). */
 const PIN_FIELDS: ReadonlyArray<readonly [RuntimeFamily, string]> = [
@@ -108,7 +119,8 @@ export interface StartFailedFacts {
   appVersion: unknown
   /** What the runner hands the gate (`startFailureFrom`): its cause and code. */
   failure: BackendStartFailure
-  /** What the start threw: only its bare system call is read, and under `try`. */
+  /** What the start threw: only its bare system call, and its code when that is libuv's `UNKNOWN`, are read, under
+   *  `try`. */
   thrown: unknown
 }
 
@@ -116,7 +128,14 @@ export interface StartFailedFacts {
 export type UpdateLogPaths = Pick<ResolvedPaths, 'rootPath' | 'isPreparedDrive'>
 
 /** Why a line was not written (app.log only; not part of F-11). */
-type SkipReason = 'link' | 'not-a-folder' | 'not-a-file' | 'folder-unknown' | 'write-failed' | 'invalid-line'
+type SkipReason =
+  | 'link'
+  | 'not-a-folder'
+  | 'not-a-file'
+  | 'folder-unknown'
+  | 'write-failed'
+  | 'invalid-line'
+  | 'unregistered-event'
 
 /** A refusal or a failure of one append: its reason, and the error behind it (read only for its code). */
 class Skip extends Error {
@@ -132,11 +151,16 @@ class Skip extends Error {
 let skipped = 0
 let trimsFailed = 0
 
+/** E: an error code of at most 40 bytes. */
+function isErrorCode(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= ERROR_CODE_MAX_BYTES && ERROR_CODE.test(value)
+}
+
 /** The code of a failed call, when it passes E: never the message, which names the path. Never throws. */
 function errorCode(err: unknown): string | null {
   try {
     const code = (err as { code?: unknown } | null)?.code
-    return typeof code === 'string' && code.length <= ERROR_CODE_MAX_BYTES && ERROR_CODE.test(code) ? code : null
+    return isErrorCode(code) ? code : null
   } catch {
     return null
   }
@@ -156,7 +180,7 @@ function reportSkip(event: string, reason: SkipReason, err?: unknown): void {
   skipped++
   try {
     log.warn('Update log: line skipped', {
-      event: EVENT.test(event) ? event : null,
+      event: typeof event === 'string' && EVENT.test(event) ? event : null,
       reason,
       code: errorCode(err),
       syscall: systemCall(err),
@@ -191,9 +215,11 @@ function timeToken(now: Date): string | null {
 }
 
 /**
- * The one formatter every app line goes through: `r1-app <os> <event> <fields> t=<time>`. Every key and value is checked
+ * The frame every app line goes through last: `r1-app <os> <event> <fields> t=<time>`. Every key and value is checked
  * again (a field that fails is dropped, as is a second field of one key and a caller's `t`); the time is omitted when it
  * fails its rule. Null, no line at all, for an event that fails its rule or a line that would still exceed 256 bytes.
+ * The frame alone does not make a line content-free (a one-word file name passes it), and it writes nothing: the
+ * appender writes only a registered event's typed fields ({@link formatRegisteredLine}).
  */
 export function formatUpdateLogLine(
   event: string,
@@ -218,6 +244,104 @@ export function formatUpdateLogLine(
 /** V: a SemVer 2.0.0 string of at most 24 bytes (parseSemver takes ASCII only). */
 function isLogVersion(value: unknown): value is string {
   return typeof value === 'string' && value.length <= VERSION_MAX_BYTES && parseSemver(value) !== null
+}
+
+// ---- the registered events (F-11, Δ-66: content-free by each event's typed fields)
+
+/** The token rules of F-11 a registered key may name: version, pin, integer, SQLite version, error code, system call. */
+export type UpdateLogTokenRule = 'V' | 'P' | 'I' | 'S' | 'E' | 'C'
+/** The sentinels of F-11: fixed words that hold no digit, so never a value any rule admits. */
+export type UpdateLogSentinel = 'unknown' | 'absent' | 'unreadable' | 'none'
+
+/** One key of a registered event and the one rule its value passes: a token rule (with the sentinels this key admits,
+ *  and no other), or a closed list of literal words. */
+export type UpdateLogFieldSpec =
+  | { readonly key: string; readonly rule: UpdateLogTokenRule; readonly sentinels?: readonly UpdateLogSentinel[] }
+  | { readonly key: string; readonly oneOf: readonly string[] }
+
+/** What each token rule admits (F-11; the golden's `tokens`). */
+const TOKEN_RULES: Readonly<Record<UpdateLogTokenRule, (value: string) => boolean>> = {
+  V: isLogVersion,
+  P: (value) => PIN.test(value) && DIGIT.test(value),
+  I: (value) => INTEGER.test(value),
+  S: (value) => SQLITE_VERSION.test(value),
+  E: isErrorCode,
+  C: (value) => value.length <= SYSCALL_MAX_BYTES && bareSyscall(value) !== null
+}
+
+/** A pin's sentinels: no file or no block (`absent`), a file that could not be read or a pin that fails P. */
+const PIN_SENTINELS = ['absent', 'unreadable'] as const
+
+const EVENTS = {
+  /** W-14, W-68: what the drive was started with. */
+  startup: [
+    { key: 'version', rule: 'V', sentinels: ['unknown'] },
+    { key: 'llama', rule: 'P', sentinels: PIN_SENTINELS },
+    { key: 'whisper', rule: 'P', sentinels: PIN_SENTINELS },
+    { key: 'kiwix', rule: 'P', sentinels: PIN_SENTINELS },
+    { key: 'release', rule: 'V', sentinels: ['absent', 'unreadable'] },
+    { key: 'release_format', rule: 'I' },
+    { key: 'drive_format', rule: 'I', sentinels: ['absent', 'unreadable'] },
+    { key: 'sqlite', rule: 'S', sentinels: ['unknown'] }
+  ],
+  /** W-14, W-82: a start that threw (P3 entry decision 3: the code and the bare system call only). */
+  'start-failed': [
+    { key: 'version', rule: 'V', sentinels: ['unknown'] },
+    { key: 'cause', oneOf: CAUSE_WORDS },
+    { key: 'err', rule: 'E' },
+    { key: 'syscall', rule: 'C' }
+  ]
+} as const satisfies Readonly<Record<string, readonly UpdateLogFieldSpec[]>>
+
+/** A registered event's name: the only events the appender writes. */
+export type UpdateLogEvent = keyof typeof EVENTS
+
+/**
+ * The registered events (F-11, Δ-66), each with its keys in their fixed order and the one rule each names: the only
+ * lines the app writes to update.log. A later event (T3.10's `unlock`, P6's and P7's events) joins this table, in this
+ * module, as data: its keys and their rules, never a free value. Frozen, so nothing changes it at run time.
+ */
+export const UPDATE_LOG_EVENTS: Readonly<Record<UpdateLogEvent, readonly UpdateLogFieldSpec[]>> = frozenTable(EVENTS)
+
+function frozenTable<T extends Readonly<Record<string, readonly UpdateLogFieldSpec[]>>>(table: T): T {
+  for (const schema of Object.values(table)) {
+    for (const spec of schema) {
+      Object.freeze('oneOf' in spec ? spec.oneOf : spec.sentinels)
+      Object.freeze(spec)
+    }
+    Object.freeze(schema)
+  }
+  return Object.freeze(table)
+}
+
+/** Is `event` registered? Looked up by the table's own keys only (never `constructor` or `toString`). */
+function isRegistered(event: unknown): event is UpdateLogEvent {
+  return typeof event === 'string' && Object.hasOwn(UPDATE_LOG_EVENTS, event)
+}
+
+function admits(spec: UpdateLogFieldSpec, value: string): boolean {
+  if ('oneOf' in spec) return spec.oneOf.includes(value)
+  return (spec.sentinels as readonly string[] | undefined)?.includes(value) === true || TOKEN_RULES[spec.rule](value)
+}
+
+/**
+ * The line of a registered event (F-11, Δ-66): for each key of its schema, in order, the first value of that key the
+ * key's rule admits; every other field (a key the schema does not name, a value its rule refuses, a later value of a key
+ * already taken) dropped; then the frame ({@link formatUpdateLogLine}). Null, no line at all, for an event nobody
+ * registered or a line the frame refuses. Writes nothing: {@link appendUpdateLogLine} does.
+ */
+export function formatRegisteredLine(
+  event: UpdateLogEvent,
+  fields: readonly UpdateLogField[],
+  ctx: { platform: string; now: Date }
+): string | null {
+  if (!isRegistered(event)) return null
+  const typed: UpdateLogField[] = []
+  for (const spec of UPDATE_LOG_EVENTS[event]) {
+    const found = fields.find(([key, value]) => key === spec.key && typeof value === 'string' && admits(spec, value))
+    if (found !== undefined) typed.push([spec.key, found[1]])
+  }
+  return formatUpdateLogLine(event, typed, ctx)
 }
 
 /** The three pins from the bundled yaml, or the sentinel each gets. */
@@ -281,14 +405,17 @@ export function startupFields(facts: StartupFacts): UpdateLogField[] {
   ]
 }
 
-/** The failed-start line's fields, in their fixed order (F-11; decision 3: the code and the bare system call only). */
+/** The failed-start line's fields, in their fixed order (F-11; decision 3: the code and the bare system call only).
+ *  `err` is the gate's code when it passes E; libuv's `UNKNOWN`, which the gate does not show, is taken from what the
+ *  start threw (m-6). */
 export function startFailedFields(facts: StartFailedFacts): UpdateLogField[] {
   const fields: UpdateLogField[] = [
     ['version', isLogVersion(facts.appVersion) ? facts.appVersion : 'unknown'],
     ['cause', CAUSES.has(facts.failure.cause) ? facts.failure.cause : 'other']
   ]
   const code = facts.failure.code
-  if (typeof code === 'string' && code.length <= ERROR_CODE_MAX_BYTES && ERROR_CODE.test(code)) fields.push(['err', code])
+  if (isErrorCode(code)) fields.push(['err', code])
+  else if (errorCode(facts.thrown) === LIBUV_UNKNOWN) fields.push(['err', LIBUV_UNKNOWN])
   const call = systemCall(facts.thrown)
   if (call !== null) fields.push(['syscall', call])
   return fields
@@ -453,14 +580,19 @@ function appendLine(rootPath: string, line: string): void {
 }
 
 /**
- * Append one `r1-app` event to the drive's `updates/update.log` (the generic appender: the startup and failed-start
- * lines, and later T3.10's unlock line and P6's and P7's events). Only on a prepared drive; a refusal or a failure is
- * counted and reported in app.log. Never throws.
+ * Append one registered `r1-app` event to the drive's `updates/update.log` (the startup and failed-start lines, and,
+ * once registered in {@link UPDATE_LOG_EVENTS}, T3.10's unlock line and P6's and P7's events), its fields typed by the
+ * event's schema ({@link formatRegisteredLine}). An event nobody registered is no line, counted and reported in app.log
+ * on any root. Only on a prepared drive; a refusal or a failure is counted and reported in app.log. Never throws.
  */
-export function appendUpdateLogLine(paths: UpdateLogPaths, event: string, fields: readonly UpdateLogField[]): void {
+export function appendUpdateLogLine(paths: UpdateLogPaths, event: UpdateLogEvent, fields: readonly UpdateLogField[]): void {
   try {
+    if (!isRegistered(event)) {
+      reportSkip(event, 'unregistered-event')
+      return
+    }
     if (!paths.isPreparedDrive) return
-    const line = formatUpdateLogLine(event, fields, { platform: process.platform, now: new Date() })
+    const line = formatRegisteredLine(event, fields, { platform: process.platform, now: new Date() })
     if (line === null) {
       reportSkip(event, 'invalid-line')
       return

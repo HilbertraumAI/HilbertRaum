@@ -7,9 +7,11 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmdirSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,12 +23,26 @@ import { basename, join } from 'node:path'
 // tests/unit/update-log.test.ts. Every refusal is the same for support: no line, nothing written anywhere else, the start
 // goes on, and app.log says why by a fixed reason and the error's code, never a path.
 //
-// Rows only macOS and Linux run (CI): the directory and file symbolic links (Windows: a junction needs no privilege,
-// a file symlink does), `chmod` denials (skipped as root), O_NOFOLLOW and the named pipe. Windows only: icacls.
+// Rows only some systems run (check CI's skip counts):
+// - macOS and Linux only: the name swapped for a named pipe or a symbolic link between the writer's lstat and its open
+//   (update.log: the descriptor's kind check and O_NOFOLLOW; config/drive.json: the reader's O_NOFOLLOW and O_NONBLOCK).
+//   Windows has neither flag, and a symbolic link planted there in that window is followed (a recorded residual);
+// - Windows only: updates/ as a junction Node's lstat reads as a plain folder (a volume GUID or \Device path: only the
+//   containment check refuses it); icacls in I6 and I7, which use `chmod` elsewhere (skipped as root);
+// - everywhere, but a symbolic link to a file needs the privilege on Windows (I4): skipped without it. I3 is a junction
+//   on Windows and a symbolic link to a folder elsewhere.
+// A stat that proves nothing, a short write and a name swapped between the lstat and the open are injected through the
+// `node:fs` wrapper below, which calls straight through except for the one call a row arms.
 
-// Counts the bytes the trim reads (I12): a regression that reads the whole file reads megabytes. The wrappers call
-// straight through; nothing else changes.
+// Counts the bytes the trim reads (I12): a regression that reads the whole file reads megabytes. Arms one fault for
+// one path: an lstat that fails, or one whose answer goes stale (`swap` runs after the real call: the name changes
+// before the writer's next call); a resolution that fails; the next app frame written only in part (a full drive).
 const reads = vi.hoisted(() => ({ counting: false, bytes: 0 }))
+const faults = vi.hoisted(() => ({
+  lstat: null as null | { path: string; error?: Error; swap?: () => void },
+  realpath: null as null | { path: string; error: Error },
+  shortWrite: false
+}))
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   const readSync = ((...args: Parameters<typeof actual.readSync>) => {
@@ -39,12 +55,42 @@ vi.mock('node:fs', async (importOriginal) => {
     if (reads.counting) reads.bytes += out.length
     return out
   }) as typeof actual.readFileSync
-  return { ...actual, default: { ...actual, readSync, readFileSync }, readSync, readFileSync }
+  const lstatSync = ((...args: Parameters<typeof actual.lstatSync>) => {
+    const fault = faults.lstat
+    if (fault === null || String(args[0]) !== fault.path) return actual.lstatSync(...args)
+    faults.lstat = null
+    if (fault.error !== undefined) throw fault.error
+    try {
+      return actual.lstatSync(...args)
+    } finally {
+      fault.swap?.()
+    }
+  }) as typeof actual.lstatSync
+  const native = ((...args: Parameters<typeof actual.realpathSync.native>) => {
+    const fault = faults.realpath
+    if (fault === null || String(args[0]) !== fault.path) return actual.realpathSync.native(...args)
+    faults.realpath = null
+    throw fault.error
+  }) as typeof actual.realpathSync.native
+  const realpathSync = Object.assign(
+    ((...args: Parameters<typeof actual.realpathSync>) => actual.realpathSync(...args)) as typeof actual.realpathSync,
+    { native }
+  )
+  const writeSync = ((fd: number, data: unknown, ...rest: unknown[]) => {
+    if (faults.shortWrite && Buffer.isBuffer(data) && data.subarray(0, 8).toString('latin1') === '\nr1-app ') {
+      faults.shortWrite = false
+      return actual.writeSync(fd, data, 0, Math.floor(data.length / 2)) // the bytes the drive took
+    }
+    return (actual.writeSync as (...a: unknown[]) => number)(fd, data, ...rest)
+  }) as typeof actual.writeSync
+  const mocked = { ...actual, readSync, readFileSync, lstatSync, realpathSync, writeSync }
+  return { ...mocked, default: mocked }
 })
 
-import { appendUpdateLogLine, writeStartupLine } from '../../src/main/services/updates/update-log'
+import { appendUpdateLogLine, writeStartupLine, type UpdateLogEvent, type UpdateLogField } from '../../src/main/services/updates/update-log'
 import { initLogging, readLogTail } from '../../src/main/services/logging'
 import { resolvePaths, type ResolvedPaths } from '../../src/main/services/workspace'
+import { UNSEEN_JUNCTIONS, unlinkFolder } from '../helpers/folder-links'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { denyNewFolders } from '../helpers/unreadable-dir'
 
@@ -53,6 +99,7 @@ interface Golden {
   cap: { line_max_bytes: number; max_bytes: number; keep_bytes: number }
   emit: {
     startup: { yaml: Record<string, string>; vectors: Array<{ name: string; line: string }> }
+    start_failed: { vectors: Array<{ name: string; line: string }> }
     generic: { vectors: Array<{ name: string; event: string; fields: Array<[string, string]>; line: string | null }> }
   }
 }
@@ -84,8 +131,9 @@ function expectSameBytes(actual: Buffer, expected: Buffer): void {
   expect.fail(`bytes differ: ${actual.length} bytes, expected ${expected.length}; first difference at ${at}: ${around(actual)} vs ${around(expected)}`)
 }
 
-const NOTICE = generic('g01')
-const NOTICE_BYTES = framed(onThisOs(NOTICE.line!))
+/** The line most rows append: golden f01's failed-start line, a registered event (its fields by hand). */
+const FAILED_START: UpdateLogField[] = [['version', '0.1.66'], ['cause', 'other'], ['err', 'EEXIST'], ['syscall', 'mkdir']]
+const FAILED_START_BYTES = framed(onThisOs(GOLDEN.emit.start_failed.vectors.find((v) => v.name === 'f01')!.line))
 
 const scratch = (label: string): string => mkdtempSync(join(tmpdir(), `hr-update-log-${label}-`))
 /** A prepared drive root (config/drive.json = {}), resolved as the start resolves it. */
@@ -97,7 +145,7 @@ function preparedRoot(label: string): ResolvedPaths {
 }
 const updatesDir = (p: ResolvedPaths): string => join(p.rootPath, 'updates')
 const logFile = (p: ResolvedPaths): string => join(updatesDir(p), 'update.log')
-const appendNotice = (p: ResolvedPaths): void => appendUpdateLogLine(p, NOTICE.event, NOTICE.fields)
+const appendFailedStart = (p: ResolvedPaths): void => appendUpdateLogLine(p, 'start-failed', FAILED_START)
 
 /** The app.log lines the writer left for support: its fields, parsed. */
 function writerLines(message: string): Array<Record<string, unknown>> {
@@ -164,6 +212,20 @@ function trimmed(bytes: Buffer): Buffer {
   return lf < 0 ? Buffer.alloc(0) : window.subarray(lf + 1)
 }
 
+/** A failed call as Node reports one: its message names the path, which no line may carry. */
+function fsError(code: string, errno: number, syscall: string, path: string): Error {
+  return Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, errno, syscall, path })
+}
+/** Arm the next lstat of `path`: it answers what is there now, then `swap` changes the name before the writer's next call. */
+function swapAfterLstat(path: string, swap: () => void): void {
+  faults.lstat = { path, swap }
+}
+/** A named pipe at `path` (macOS and Linux). */
+function mkfifo(path: string): void {
+  const r = spawnSync('mkfifo', [path], { encoding: 'utf8' })
+  if (r.status !== 0) throw new Error(`mkfifo failed: ${r.stdout ?? ''}${r.stderr ?? ''}`)
+}
+
 beforeEach(() => {
   initLogging(join(scratch('logs'), 'logs')) // a fresh, empty in-memory buffer
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -173,27 +235,30 @@ afterEach(() => {
   vi.useRealTimers()
   reads.counting = false
   reads.bytes = 0
+  faults.lstat = null
+  faults.realpath = null
+  faults.shortWrite = false
 })
 
 describe('update.log on a prepared drive: where the line lands (F-11, W-14)', () => {
   it('I1: a missing updates/ is made, the line is framed LF line LF, and the next append keeps every earlier byte', () => {
     const p = preparedRoot('frame')
-    appendNotice(p)
-    expectSameBytes(readFileSync(logFile(p)), NOTICE_BYTES)
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), FAILED_START_BYTES)
     expect(skips()).toEqual([])
     // Another writer's line is already there: cmd's CR LF and its code-page bytes stay byte for byte.
     const q = preparedRoot('after-cmd')
     mkdirSync(updatesDir(q))
     writeFileSync(logFile(q), accept('a4'))
-    appendNotice(q)
-    expectSameBytes(readFileSync(logFile(q)), Buffer.concat([accept('a4'), NOTICE_BYTES]))
+    appendFailedStart(q)
+    expectSameBytes(readFileSync(logFile(q)), Buffer.concat([accept('a4'), FAILED_START_BYTES]))
   })
 
   it('I2: a root that is no prepared drive (the standalone fallback) gets nothing, and nothing is counted', () => {
     const root = scratch('fallback')
     const p = resolvePaths({ envRoot: undefined, fallbackRoot: root })
     expect(p.isPreparedDrive).toBe(false)
-    appendNotice(p)
+    appendFailedStart(p)
     writeStartupLine(p, { appVersion: '0.1.66', bundledManifestsDir: null })
     expect(existsSync(updatesDir(p))).toBe(false)
     expect(skips()).toEqual([])
@@ -203,13 +268,28 @@ describe('update.log on a prepared drive: where the line lands (F-11, W-14)', ()
     const empty = preparedRoot('zero-bytes')
     mkdirSync(updatesDir(empty))
     writeFileSync(logFile(empty), '')
-    appendNotice(empty)
-    expectSameBytes(readFileSync(logFile(empty)), NOTICE_BYTES)
+    appendFailedStart(empty)
+    expectSameBytes(readFileSync(logFile(empty)), FAILED_START_BYTES)
     const torn = preparedRoot('torn')
     mkdirSync(updatesDir(torn))
     writeFileSync(logFile(torn), accept('a9'))
-    appendNotice(torn)
-    expectSameBytes(readFileSync(logFile(torn)), Buffer.concat([accept('a9'), NOTICE_BYTES]))
+    appendFailedStart(torn)
+    expectSameBytes(readFileSync(logFile(torn)), Buffer.concat([accept('a9'), FAILED_START_BYTES]))
+  })
+})
+
+describe('only registered events reach the drive (Δ-66: content-free by each event’s typed fields)', () => {
+  it('an event nobody registered (golden g10, which the frame takes): no line, no updates/; a foreign key never lands', () => {
+    const p = preparedRoot('unregistered')
+    const g10 = generic('g10')
+    expect(g10.line).not.toBeNull()
+    appendUpdateLogLine(p, g10.event as UpdateLogEvent, g10.fields)
+    expect(existsSync(updatesDir(p))).toBe(false)
+    // A registered event: the keys it does not name, and a value its key's rule refuses, are dropped.
+    const foreign: UpdateLogField[] = [['file', 'Steuer_2026.xlsx'], ['host', 'DESKTOPDIT'], ['user', 'peter'], ['err', 'peters-mbp.local']]
+    appendUpdateLogLine(p, 'start-failed', [...foreign, ...FAILED_START])
+    expectSameBytes(readFileSync(logFile(p)), FAILED_START_BYTES)
+    expectOneSkip(p, { event: 'x', reason: 'unregistered-event' })
   })
 })
 
@@ -218,18 +298,100 @@ describe('update.log never goes through a link or into something that is no file
     const p = preparedRoot('updates-link')
     const elsewhere = scratch('elsewhere')
     symlinkSync(elsewhere, updatesDir(p), 'junction') // a folder symlink outside Windows
-    appendNotice(p)
+    appendFailedStart(p)
     expect(existsSync(join(elsewhere, 'update.log'))).toBe(false)
-    expectOneSkip(p, { event: 'notice', reason: 'link' })
-    appendNotice(p)
+    expectOneSkip(p, { event: 'start-failed', reason: 'link' })
+    appendFailedStart(p)
     const [first, second] = skips()
     expect(second!.skipped).toBe((first!.skipped as number) + 1) // the session's count goes on
+  })
+
+  // T3.2 review 1, M-1 (a): the junction the containment check exists for (T2.16 R1 B-1). Node's lstat reads it as a
+  // folder, so only `folderContainment` refuses it.
+  for (const [label, make, can] of UNSEEN_JUNCTIONS) {
+    it.skipIf(!can)(`I3: updates/ ${label}, a plain folder to Node's lstat: containment refuses it, nothing lands behind it`, () => {
+      const p = preparedRoot('updates-unseen')
+      const elsewhere = scratch('elsewhere')
+      make(elsewhere, updatesDir(p))
+      try {
+        const named = lstatSync(updatesDir(p))
+        expect(named.isDirectory() && !named.isSymbolicLink()).toBe(true) // the writer's first check passes it
+        appendFailedStart(p)
+        expect(readdirSync(elsewhere)).toEqual([])
+        expectOneSkip(p, { reason: 'link' })
+      } finally {
+        unlinkFolder(updatesDir(p))
+      }
+    })
+  }
+
+  it('I3: a containment check that proves nothing (resolving updates/ fails: EIO): no line, counted', () => {
+    const p = preparedRoot('updates-unresolved')
+    mkdirSync(updatesDir(p))
+    faults.realpath = { path: updatesDir(p), error: fsError('EIO', -5, 'realpath', updatesDir(p)) }
+    appendFailedStart(p)
+    expect(faults.realpath, 'the containment check resolved the folder').toBeNull()
+    expect(readdirSync(updatesDir(p))).toEqual([])
+    expectOneSkip(p, { reason: 'folder-unknown' })
+  })
+
+  // M-1 (b): the name swapped between the writer's lstat and its open; only the descriptor's own stat can see it.
+  it('I4: update.log replaced by a hard link to a file elsewhere after the lstat: no line, the other file unchanged', () => {
+    const p = preparedRoot('log-swapped')
+    mkdirSync(updatesDir(p))
+    writeFileSync(logFile(p), accept('a4'))
+    const other = join(scratch('other'), 'precious.txt')
+    writeFileSync(other, 'someone else’s file')
+    swapAfterLstat(logFile(p), () => {
+      unlinkSync(logFile(p))
+      linkSync(other, logFile(p))
+    })
+    appendFailedStart(p)
+    expect(faults.lstat, 'the swap ran').toBeNull()
+    expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
+    expectOneSkip(p, { reason: 'link' })
+  })
+
+  it('I4: no update.log at the lstat, a hard link to a file elsewhere there by the open: no line, the other file unchanged', () => {
+    const p = preparedRoot('log-planted')
+    mkdirSync(updatesDir(p))
+    const other = join(scratch('other'), 'precious.txt')
+    writeFileSync(other, 'someone else’s file')
+    swapAfterLstat(logFile(p), () => linkSync(other, logFile(p)))
+    appendFailedStart(p)
+    expect(faults.lstat, 'the swap ran').toBeNull()
+    expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
+    expectOneSkip(p, { reason: 'link' })
+  })
+
+  // M-1 (b), POSIX: a named pipe and a symbolic link planted in the same window. Windows has no such pipe at a file
+  // name, nor O_NOFOLLOW (a symbolic link planted there is followed: the recorded residual).
+  it.skipIf(isWindows)('I4: no update.log at the lstat, a named pipe there by the open: no line, no hang', () => {
+    const p = preparedRoot('log-fifo')
+    mkdirSync(updatesDir(p))
+    swapAfterLstat(logFile(p), () => mkfifo(logFile(p)))
+    appendFailedStart(p)
+    expect(faults.lstat, 'the swap ran').toBeNull()
+    expect(lstatSync(logFile(p)).isFIFO()).toBe(true)
+    expectOneSkip(p, { reason: 'not-a-file' })
+  })
+
+  it.skipIf(isWindows)('I4: no update.log at the lstat, a symbolic link to a file elsewhere there by the open: not followed', () => {
+    const p = preparedRoot('log-symlink-planted')
+    mkdirSync(updatesDir(p))
+    const other = join(scratch('other'), 'precious.txt')
+    writeFileSync(other, 'someone else’s file')
+    swapAfterLstat(logFile(p), () => symlinkSync(other, logFile(p)))
+    appendFailedStart(p)
+    expect(faults.lstat, 'the swap ran').toBeNull()
+    expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
+    expectOneSkip(p, { reason: 'link', code: 'ELOOP', syscall: 'open' })
   })
 
   it('I5: a file at updates: no line, the file unchanged', () => {
     const p = preparedRoot('updates-file')
     writeFileSync(updatesDir(p), 'not a folder')
-    appendNotice(p)
+    appendFailedStart(p)
     expect(readFileSync(updatesDir(p), 'utf8')).toBe('not a folder')
     expectOneSkip(p, { reason: 'not-a-folder' })
   })
@@ -237,7 +399,7 @@ describe('update.log never goes through a link or into something that is no file
   it('I4: a folder at update.log: no line, the folder left as it is', () => {
     const p = preparedRoot('log-folder')
     mkdirSync(logFile(p), { recursive: true })
-    appendNotice(p)
+    appendFailedStart(p)
     expect(lstatSync(logFile(p)).isDirectory()).toBe(true)
     expectOneSkip(p, { reason: 'not-a-file' })
   })
@@ -248,7 +410,7 @@ describe('update.log never goes through a link or into something that is no file
     const other = join(scratch('other'), 'precious.txt')
     writeFileSync(other, 'someone else’s file')
     linkSync(other, logFile(p))
-    appendNotice(p)
+    appendFailedStart(p)
     expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
     expectOneSkip(p, { reason: 'link' })
   })
@@ -259,7 +421,7 @@ describe('update.log never goes through a link or into something that is no file
     const other = join(scratch('other'), 'precious.txt')
     writeFileSync(other, 'someone else’s file')
     symlinkSync(other, logFile(p), 'file')
-    appendNotice(p)
+    appendFailedStart(p)
     expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
     expectOneSkip(p, { reason: 'link' })
   })
@@ -270,7 +432,7 @@ describe('update.log on a drive that refuses the write: the start goes on (W-14:
     const p = preparedRoot('deny-folders')
     const undo = denyNewFolders(p.rootPath)
     try {
-      expect(() => appendNotice(p)).not.toThrow()
+      expect(() => appendFailedStart(p)).not.toThrow()
     } finally {
       undo()
     }
@@ -284,12 +446,36 @@ describe('update.log on a drive that refuses the write: the start goes on (W-14:
     writeFileSync(logFile(p), accept('a4'))
     const undo = denyAppend(logFile(p))
     try {
-      expect(() => appendNotice(p)).not.toThrow()
+      expect(() => appendFailedStart(p)).not.toThrow()
     } finally {
       undo()
     }
     expectSameBytes(readFileSync(logFile(p)), accept('a4'))
     expectOneSkip(p, { reason: 'write-failed', code: isWindows ? 'EPERM' : 'EACCES', syscall: 'open' })
+  })
+
+  // T3.2 review 1, m-6: libuv's code for a Windows error it does not map, seen on failing USB media.
+  it('a stat of updates/ that fails with UNKNOWN: no throw, no line, the skip names the code', () => {
+    const p = preparedRoot('updates-stat-unknown')
+    faults.lstat = { path: updatesDir(p), error: fsError('UNKNOWN', -4094, 'lstat', updatesDir(p)) }
+    expect(() => appendFailedStart(p)).not.toThrow()
+    expect(faults.lstat, 'the writer looked').toBeNull()
+    expect(existsSync(updatesDir(p))).toBe(false)
+    expectOneSkip(p, { reason: 'write-failed', code: 'UNKNOWN', syscall: 'lstat' })
+  })
+
+  // M-1: the drive took part of the append (full). G0: the next append's leading LF ends the torn half.
+  it('a short write: counted; the next append’s leading LF keeps the torn half on a line of its own', () => {
+    const p = preparedRoot('short-write')
+    faults.shortWrite = true
+    appendFailedStart(p)
+    expect(faults.shortWrite, 'the append came').toBe(false)
+    const half = FAILED_START_BYTES.subarray(0, Math.floor(FAILED_START_BYTES.length / 2))
+    expectSameBytes(readFileSync(logFile(p)), half)
+    expectOneSkip(p, { reason: 'write-failed', code: null, syscall: null })
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([half, FAILED_START_BYTES]))
+    expect(skips()).toHaveLength(1)
   })
 })
 
@@ -299,11 +485,11 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
     mkdirSync(updatesDir(p))
     const before = overCap()
     writeFileSync(logFile(p), before)
-    appendNotice(p)
+    appendFailedStart(p)
     const after = readFileSync(logFile(p))
-    expectSameBytes(after, trimmed(Buffer.concat([before, NOTICE_BYTES])))
+    expectSameBytes(after, trimmed(Buffer.concat([before, FAILED_START_BYTES])))
     expect(after.length).toBeLessThanOrEqual(GOLDEN.cap.keep_bytes)
-    expectSameBytes(after.subarray(after.length - NOTICE_BYTES.length), NOTICE_BYTES)
+    expectSameBytes(after.subarray(after.length - FAILED_START_BYTES.length), FAILED_START_BYTES)
     expect(after.includes(accept('a4'))).toBe(true) // cmd's code-page bytes are never decoded
     expect(existsSync(`${logFile(p)}.tmp`)).toBe(false)
     expect(trimFailures()).toEqual([])
@@ -312,10 +498,10 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
   it('I8: at the cap exactly, nothing is trimmed', () => {
     const p = preparedRoot('at-cap')
     mkdirSync(updatesDir(p))
-    const before = Buffer.alloc(GOLDEN.cap.max_bytes - NOTICE_BYTES.length, 0x2e)
+    const before = Buffer.alloc(GOLDEN.cap.max_bytes - FAILED_START_BYTES.length, 0x2e)
     writeFileSync(logFile(p), before)
-    appendNotice(p)
-    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, NOTICE_BYTES]))
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, FAILED_START_BYTES]))
   })
 
   it('I9: while updates/applying/ exists (an apply may be appending), the app never trims', () => {
@@ -323,8 +509,23 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
     mkdirSync(join(updatesDir(p), 'applying'), { recursive: true })
     const before = overCap()
     writeFileSync(logFile(p), before)
-    appendNotice(p)
-    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, NOTICE_BYTES]))
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, FAILED_START_BYTES]))
+  })
+
+  // M-1: only a stat that proves `applying/` absent lets the app trim.
+  it('I9: a stat of updates/applying/ that proves nothing (EIO): no trim either', () => {
+    const p = preparedRoot('applying-unknown')
+    mkdirSync(updatesDir(p))
+    const before = overCap()
+    writeFileSync(logFile(p), before)
+    const applying = join(updatesDir(p), 'applying')
+    faults.lstat = { path: applying, error: fsError('EIO', -5, 'lstat', applying) }
+    appendFailedStart(p)
+    expect(faults.lstat, 'the trim asked').toBeNull()
+    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, FAILED_START_BYTES]))
+    expect(trimFailures()).toEqual([])
+    expect(skips()).toEqual([])
   })
 
   it('I10: a folder at update.log.tmp: the line stays, the trim fails and is counted, and the next append trims', () => {
@@ -332,14 +533,14 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
     mkdirSync(join(updatesDir(p), 'update.log.tmp'), { recursive: true })
     const before = overCap()
     writeFileSync(logFile(p), before)
-    appendNotice(p)
-    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, NOTICE_BYTES]))
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), Buffer.concat([before, FAILED_START_BYTES]))
     expect(lstatSync(`${logFile(p)}.tmp`).isDirectory()).toBe(true)
     expect(trimFailures()).toHaveLength(1)
     expect(skips()).toEqual([])
     rmdirSync(`${logFile(p)}.tmp`)
-    appendNotice(p)
-    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, NOTICE_BYTES, NOTICE_BYTES])))
+    appendFailedStart(p)
+    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, FAILED_START_BYTES, FAILED_START_BYTES])))
   })
 
   it('I10: a hard link at update.log.tmp is removed by its name; the file it shares is untouched', () => {
@@ -350,9 +551,9 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
     linkSync(other, `${logFile(p)}.tmp`)
     const before = overCap()
     writeFileSync(logFile(p), before)
-    appendNotice(p)
+    appendFailedStart(p)
     expect(readFileSync(other, 'utf8')).toBe('someone else’s file')
-    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, NOTICE_BYTES])))
+    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, FAILED_START_BYTES])))
     expect(existsSync(`${logFile(p)}.tmp`)).toBe(false)
   })
 
@@ -363,10 +564,10 @@ describe('the size cap: 65,536 bytes, a trim keeps the newest 32,768 from a line
     const before = Buffer.concat(Array.from({ length: Math.ceil(3_000_000 / line.length) }, () => line))
     writeFileSync(logFile(p), before)
     reads.counting = true
-    appendNotice(p)
+    appendFailedStart(p)
     reads.counting = false
     expect(reads.bytes).toBeLessThanOrEqual(GOLDEN.cap.keep_bytes)
-    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, NOTICE_BYTES])))
+    expectSameBytes(readFileSync(logFile(p)), trimmed(Buffer.concat([before, FAILED_START_BYTES])))
   })
 })
 
@@ -422,5 +623,41 @@ describe('the startup line on a real drive: each source file’s state reaches i
     const expected = onThisOs(startupLine(c.golden)).replace(/ sqlite=\S+/, ` sqlite=${process.versions.sqlite}`)
     expectSameBytes(readFileSync(logFile(p)), framed(expected))
     expect(skips()).toEqual([])
+  })
+
+  // T3.2 review 1, M-1 (b), POSIX: the source reader's open (one lstat, then the open checked on its descriptor) with
+  // the name swapped in between. O_NOFOLLOW keeps a link from being read; O_NONBLOCK keeps a pipe from holding the
+  // start until something writes to it.
+  describe.skipIf(isWindows)('config/drive.json swapped after the reader’s lstat (macOS and Linux)', () => {
+    it.each<[string, (file: string) => void]>([
+      [
+        'a symbolic link to a file elsewhere, not followed',
+        (file) => {
+          const other = join(scratch('other'), 'drive.json')
+          writeFileSync(other, '{"drive_format_version":7}')
+          unlinkSync(file)
+          symlinkSync(other, file)
+        }
+      ],
+      [
+        'a named pipe, opened without waiting for a writer',
+        (file) => {
+          unlinkSync(file)
+          mkfifo(file)
+        }
+      ]
+    ])('%s: drive_format unreadable', (_label, swap) => {
+      const root = scratch('startup-swap')
+      mkdirSync(join(root, 'config'))
+      writeFileSync(join(root, 'config', 'drive.json'), KIT_DRIVE_JSON)
+      writeFileSync(join(root, 'config', 'drive-release.json'), KIT_RECORD)
+      const p = resolvePaths({ envRoot: root, fallbackRoot: root })
+      const file = join(p.configPath, 'drive.json')
+      swapAfterLstat(file, () => swap(file))
+      writeStartupLine(p, { appVersion: '0.1.66', bundledManifestsDir: bundled() })
+      expect(faults.lstat, 'the swap ran').toBeNull()
+      const expected = onThisOs(startupLine('s28')).replace(/ sqlite=\S+/, ` sqlite=${process.versions.sqlite}`)
+      expectSameBytes(readFileSync(logFile(p)), framed(expected))
+    })
   })
 })

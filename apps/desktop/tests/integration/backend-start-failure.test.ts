@@ -297,6 +297,21 @@ describe('a back-end start that throws on a prepared drive leaves its failed-sta
     expect(bytes.every((b) => b < 0x80)).toBe(true)
   })
 
+  // T3.2 review 1, m-6: libuv's code for a Windows error it does not map (seen on failing USB media). The gate shows
+  // no such code (start-failure.ts's rule, unchanged); the line keeps it, as the literal it is.
+  it('a start that throws libuv’s UNKNOWN: the gate shows no code, the line carries err=UNKNOWN (golden f15)', async () => {
+    const root = tempRoot('backend-start-update-log-unknown')
+    const layout = preparedLayout(root)
+    const start = (): void => {
+      const path = join(root, 'workspace')
+      throw Object.assign(new Error(`UNKNOWN: unknown error, read '${path}'`), { code: 'UNKNOWN', errno: -4094, syscall: 'read', path })
+    }
+    const failure = atGoldenTime(() => runBackendStart(start, { ...deps, paths: () => layout }))
+    expect(failure).toEqual({ cause: 'other', code: null })
+    expect((await gateState()).startFailure).toEqual({ cause: 'other', code: null })
+    expect(readFileSync(updateLog(root))).toEqual(Buffer.from(`\n${failedStartLine('f15')}\n`, 'utf8'))
+  })
+
   // POSIX root ignores a folder's mode, so it cannot be refused a folder there (`denyNewFolders` would throw).
   it.skipIf(process.getuid?.() === 0)(
     'a prepared drive that refuses new folders: no line, the skip in app.log, and the gate still answers',

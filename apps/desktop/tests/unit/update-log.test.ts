@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  formatRegisteredLine,
   formatUpdateLogLine,
   startFailedFields,
   startupFields,
-  type TextRead
+  UPDATE_LOG_EVENTS,
+  type TextRead,
+  type UpdateLogEvent,
+  type UpdateLogField
 } from '../../src/main/services/updates/update-log'
 import type { DriveReleaseRead } from '../../src/main/services/updates/drive-release'
 import type { BackendStartFailure } from '../../src/shared/types'
@@ -15,8 +19,9 @@ import { DESKTOP_ROOT } from '../helpers/repo-files'
 // `<drive>/updates/update.log`. Release 1 writes these lines on every Kit for ever, and the start files, the apply
 // scripts and every later version append to the same file, so the rules are frozen. The expected lines are the
 // golden's (tests/fixtures/readers/f11-update-log/), written by hand from the plan, the record and the T3.2 sheet,
-// never from the writer's output. This file holds the pure rules: the fields of each event and the one formatter every
-// line goes through. What the writer does on a real drive (the folder, links, the size cap) is
+// never from the writer's output. This file holds the pure rules: the fields of each event, the registered events and
+// their typed fields (Δ-66: the appender writes only those, each field only by its key's rule), and the frame every
+// line goes through last. What the writer does on a real drive (the folder, links, the size cap) is
 // tests/integration/update-log-drive.test.ts; the failed-start line in the start runner is
 // tests/integration/backend-start-failure.test.ts.
 
@@ -90,7 +95,7 @@ function startupLine(input: StartupInput): string | null {
     driveJson: readOf(input.drive_json),
     sqlite: input.sqlite
   })
-  return formatUpdateLogLine('startup', fields, { platform: input.platform, now: new Date(input.now) })
+  return formatRegisteredLine('startup', fields, { platform: input.platform, now: new Date(input.now) })
 }
 
 /** What the start threw, as the vector describes it: an Error with its own properties, or a getter that throws. */
@@ -162,22 +167,175 @@ describe('F-11 golden: the failed-start line (W-14, W-82; decision row 3: the co
       failure: v.failure,
       thrown: thrownOf(v.thrown)
     })
-    const line = formatUpdateLogLine('start-failed', fields, {
+    const line = formatRegisteredLine('start-failed', fields, {
       platform: v.platform ?? startFailed.base.platform,
       now: new Date(startFailed.base.now)
     })
     expect(line).toBe(v.line)
     expectAsciiFrame(line!)
-    // Content-free by grammar: nothing of the message, the path or the drive root reaches the line.
+    // Content-free by the event's typed fields: nothing of the message, the path or the drive root reaches the line.
     for (const text of v.never) expect(line, text).not.toContain(text)
   })
 })
 
-describe('F-11 golden: the one formatter every app line goes through (the P6 and P7 events reuse it)', () => {
+describe('F-11 golden: the frame every app line goes through last (each later registration must fit it)', () => {
   it.each(generic.vectors)('$name: $why', (v) => {
     const line = formatUpdateLogLine(v.event, v.fields, { platform: generic.base.platform, now: new Date(generic.base.now) })
     expect(line).toBe(v.line)
     if (line !== null) expectAsciiFrame(line)
+  })
+})
+
+// Δ-66 (T3.2 review 1, M-2): the value rule alone lets a one-word file, host or account name through, so the app's
+// lines are content-free by each event's typed fields: the appender writes only registered events (`UPDATE_LOG_EVENTS`,
+// where T3.10 adds `unlock` and P6/P7 their events, as data), and a field only by the rule its key names there. What
+// each rule admits is written here by hand from F-11's token rules (the golden's `tokens`), never read from the table.
+// Every refused value below passes the frame's value rule, so only the typed layer can refuse it.
+describe('F-11 typed events (Δ-66): only registered events are lines, and a field only by its key’s rule', () => {
+  const AT = { platform: 'win32', now: new Date('2026-11-25T10:00:00.123Z') }
+  const T = 't=2026-11-25T10:00:00Z'
+  const goldenLine = (name: string): string =>
+    [...startup.vectors, ...startFailed.vectors].find((v) => v.name === name)!.line
+  /** Golden f01's fields and s01's, by hand. */
+  const F01: UpdateLogField[] = [['version', '0.1.66'], ['cause', 'other'], ['err', 'EEXIST'], ['syscall', 'mkdir']]
+  const S01: UpdateLogField[] = [
+    ['version', '0.1.66'], ['llama', 'b12110'], ['whisper', 'v1.8.6'], ['kiwix', '3.8.1'], ['release', '0.1.66'],
+    ['release_format', '1'], ['drive_format', '1'], ['sqlite', '3.50.4']
+  ]
+  /** The review's probes: a file name, a host name and two account names of one ASCII word each. */
+  const PROBES = ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local']
+
+  // Golden g10's and g05's events, and the one name every object has that the frame takes (the table is looked up by
+  // its own keys only).
+  it.each(['x', 'eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'constructor'])(
+    'an event nobody registered is no line, though the frame takes it: %s',
+    (event) => {
+      expect(formatUpdateLogLine(event, [['code', 'UPD-UPDATED']], AT)).not.toBeNull() // the frame alone would write it
+      expect(formatRegisteredLine(event as UpdateLogEvent, [['code', 'UPD-UPDATED']], AT)).toBeNull()
+    }
+  )
+
+  it('a key the event’s schema does not name never reaches the line, whatever its value', () => {
+    const extras: UpdateLogField[] = [
+      ['file', 'Steuer_2026.xlsx'], ['host', 'DESKTOPDIT'], ['user', 'peter'], ['code', 'UPD-UPDATED'], ['n', '3'],
+      ['t', '2020-01-01T00:00:00Z']
+    ]
+    expect(formatRegisteredLine('start-failed', [...extras, ...F01, ...extras], AT)).toBe(goldenLine('f01'))
+    expect(formatRegisteredLine('startup', [...extras, ...S01, ...extras], AT)).toBe(goldenLine('s01'))
+  })
+
+  // The review's probes against every key of every registered event, so a later registration is probed too. A pin
+  // (P) and a system call (C) are word-shaped: a key naming either takes its value only from its own source (the app's
+  // bundled yaml, a thrown error's syscall), never from data. The keys that admit a probe are named here, by hand.
+  it('the review’s file, host and account names reach no key whose rule refuses them (P and C named)', () => {
+    const admitsAProbe: Record<string, string[]> = {
+      'startup.llama': ['Steuer_2026.xlsx'],
+      'startup.whisper': ['Steuer_2026.xlsx'],
+      'startup.kiwix': ['Steuer_2026.xlsx'],
+      'start-failed.syscall': ['peter']
+    }
+    const admitted: Record<string, string[]> = {}
+    for (const [event, schema] of Object.entries(UPDATE_LOG_EVENTS) as Array<[UpdateLogEvent, ReadonlyArray<{ key: string }>]>) {
+      for (const { key } of schema) {
+        const passing = PROBES.filter((probe) => formatRegisteredLine(event, [[key, probe]], AT)!.includes(`=${probe}`))
+        if (passing.length > 0) admitted[`${event}.${key}`] = passing
+      }
+    }
+    expect(admitted).toEqual(admitsAProbe)
+  })
+
+  // [event, key, value, admitted]: each token rule (F-11) through a key that names it, with the sentinels that key
+  // admits and no other.
+  it.each<[UpdateLogEvent, string, string, boolean]>([
+    // V: SemVer 2.0.0, at most 24 bytes; `version` admits `unknown`, `release` `absent` and `unreadable`
+    ['start-failed', 'version', '100.200.300-rc.123456789', true],
+    ['start-failed', 'version', '1.2.3-aaaaaaaaaaaaaaaaaaa', false],
+    ['start-failed', 'version', 'v0.1.66', false],
+    ['start-failed', 'version', 'unknown', true],
+    ['start-failed', 'version', 'absent', false],
+    ['startup', 'release', 'unreadable', true],
+    ['startup', 'release', 'unknown', false],
+    // P: at most 16 bytes, holding a digit; a pin admits `absent` and `unreadable`
+    ['startup', 'llama', 'b123456789012345', true],
+    ['startup', 'llama', 'b1234567890123456', false],
+    ['startup', 'whisper', 'none', false],
+    ['startup', 'kiwix', 'absent', true],
+    ['startup', 'kiwix', 'unknown', false],
+    // I: at most six digits; `release_format` admits no sentinel, `drive_format` `absent` and `unreadable`
+    ['startup', 'release_format', '999999', true],
+    ['startup', 'release_format', '1000000', false],
+    ['startup', 'release_format', '-1', false],
+    ['startup', 'release_format', 'absent', false],
+    ['startup', 'drive_format', 'unreadable', true],
+    ['startup', 'drive_format', 'none', false],
+    // S: three or four parts of at most three digits; `sqlite` admits `unknown`
+    ['startup', 'sqlite', '3.50.4.1', true],
+    ['startup', 'sqlite', '3.50', false],
+    ['startup', 'sqlite', '1234.1.1', false],
+    ['startup', 'sqlite', 'unknown', true],
+    // E: an errno, Node or SQLite code of at most 40 bytes, or libuv's literal UNKNOWN (m-6); no sentinel
+    ['start-failed', 'err', 'EPERM', true],
+    ['start-failed', 'err', 'UNKNOWN', true],
+    ['start-failed', 'err', 'ERR_SQLITE_ERROR', true],
+    ['start-failed', 'err', 'SQLITE_26', true],
+    ['start-failed', 'err', 'EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', false],
+    ['start-failed', 'err', 'UNKNOWN2', false],
+    ['start-failed', 'err', 'unknown', false],
+    // C: a bare system call of at most 16 bytes
+    ['start-failed', 'syscall', 'abcdefghijklmnop', true],
+    ['start-failed', 'syscall', 'abcdefghijklmnopq', false],
+    ['start-failed', 'syscall', 'Mkdir', false],
+    // the closed list of causes
+    ['start-failed', 'cause', 'drive_full', true],
+    ['start-failed', 'cause', 'drive_on_fire', false],
+    ['start-failed', 'cause', 'unknown', false]
+  ])('%s %s=%s admitted: %s', (event, key, value, admitted) => {
+    expect(formatUpdateLogLine(event, [[key, value]], AT)).toBe(`r1-app win32 ${event} ${key}=${value} ${T}`) // the frame takes it
+    expect(formatRegisteredLine(event, [[key, value]], AT)).toBe(
+      admitted ? `r1-app win32 ${event} ${key}=${value} ${T}` : `r1-app win32 ${event} ${T}`
+    )
+  })
+
+  it('the fields follow the schema’s order, and of one key the first value its rule admits is kept', () => {
+    const shuffled: UpdateLogField[] = [['syscall', 'mkdir'], ['err', 'eexist'], ['err', 'EEXIST'], ['err', 'EIO'], ['cause', 'other'], ['version', '0.1.66']]
+    expect(formatRegisteredLine('start-failed', shuffled, AT)).toBe(goldenLine('f01'))
+  })
+
+  // The table is data a later task extends (T3.10's unlock, P6's and P7's events): every name the frame can write, the
+  // longest line it allows within the 256-byte cap, and no change at run time. The longest value of each rule is its
+  // cap in F-11 (V 24, P 16, I 6, S 15, E 40, C 16 bytes), so the longest startup and failed-start lines are the
+  // golden's worst cases, s46 and f14 (T3.2 review 1, m-1).
+  it('the table: names the frame can write, a longest line within 256 bytes (the golden’s s46 and f14), frozen', () => {
+    const LONGEST = { V: 24, P: 16, I: 6, S: 15, E: 40, C: 16 } as const
+    const SENTINELS = ['unknown', 'absent', 'unreadable', 'none']
+    const longestLine: Record<string, number> = {}
+    for (const [event, schema] of Object.entries(UPDATE_LOG_EVENTS)) {
+      expect(event).toMatch(/^[a-z][a-z0-9-]{0,31}$/)
+      const keys = schema.map((spec) => spec.key)
+      expect(new Set(keys).size, event).toBe(keys.length)
+      let bytes = 'r1-app abcdefgh '.length + event.length + ` ${T}`.length
+      for (const spec of schema) {
+        expect(spec.key).toMatch(/^[a-z][a-z0-9_]{0,31}$/)
+        expect(spec.key).not.toBe('t')
+        const words: readonly string[] = 'oneOf' in spec ? spec.oneOf : (spec.sentinels ?? [])
+        for (const word of words) expect(word).toMatch(/^[0-9A-Za-z._+-]{1,64}$/)
+        if (!('oneOf' in spec)) for (const word of words) expect(SENTINELS).toContain(word)
+        bytes += 1 + spec.key.length + 1 + Math.max(...words.map((w) => w.length), 'oneOf' in spec ? 0 : LONGEST[spec.rule])
+      }
+      expect(bytes, event).toBeLessThanOrEqual(256)
+      longestLine[event] = bytes
+    }
+    expect(longestLine.startup).toBe(goldenLine('s46').length)
+    expect(longestLine['start-failed']).toBe(goldenLine('f14').length)
+    expect(Object.isFrozen(UPDATE_LOG_EVENTS)).toBe(true)
+    for (const schema of Object.values(UPDATE_LOG_EVENTS)) {
+      expect(Object.isFrozen(schema)).toBe(true)
+      for (const spec of schema) {
+        expect(Object.isFrozen(spec)).toBe(true)
+        if ('oneOf' in spec) expect(Object.isFrozen(spec.oneOf)).toBe(true)
+        else if (spec.sentinels !== undefined) expect(Object.isFrozen(spec.sentinels)).toBe(true)
+      }
+    }
   })
 })
 
