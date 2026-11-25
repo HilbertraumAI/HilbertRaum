@@ -912,6 +912,9 @@ export const ru: UiCatalog<'ru'> = {
     '**Обратите внимание:** этот документ оказался слишком длинным, чтобы прочитать его целиком, ' +
     'поэтому ответ охватывает только его начало. Чтобы проверить что-то из дальнейшей части ' +
     'документа, спросите напрямую об этой детали.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Прочитано транзакций по всей выписке: **{count}**.',
   'skills.bankAnalysis.countPartial':

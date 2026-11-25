@@ -929,6 +929,9 @@ export const uk: UiCatalog<'uk'> = {
     '**Зауважте:** цей документ виявився задовгим, щоб прочитати його повністю, тому ця відповідь ' +
     'охоплює лише його початок. Щоб перевірити щось із подальшої частини документа, запитайте ' +
     'безпосередньо про цю деталь.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Прочитано транзакцій у всій виписці: **{count}**.',
   'skills.bankAnalysis.countPartial':

@@ -5,7 +5,7 @@ import {
   INVOICE_INSTALL_ID,
   invoiceAnalysisHandler
 } from '../../src/main/services/skills/analysis/invoice'
-import { validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
+import { INVOICE_EXTRACTOR_VERSION, validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { applyUiLanguageSetting, tMain } from '../../src/main/services/i18n'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
@@ -876,5 +876,114 @@ describe('invoice analysis — Stop mid-run is a calm cancel, not a swallowed an
     }
     const res = await invoiceAnalysisHandler.run!(ctx)
     expect(res.answer).toBe(tr('skills.invoiceAnalysis.couldNotRead'))
+  })
+})
+
+// G-34 (a) (frozen, owner 2026-11-23): after "Go back" this build serves a newer version's invoice as stored
+// (it never re-reads it, not even through the glyph-soup retry), and every answer that shows those figures
+// ends with C08 (`analysis.newerExtractorNote`) as its last line, after a blank line and after the
+// text-quality caveat (D-3). The unreadable-layout refusal shows no figure and never carries it.
+describe('invoice analysis — a newer version’s invoice is served as stored, C08 its last line (G-34 (a))', () => {
+  const NOTE = tr('analysis.newerExtractorNote')
+  const NEWER_ITEM = 'Widget as the newer version read it'
+
+  /** Every stored invoice row of one document, all columns, for a byte-identical before/after. */
+  const invoiceRowsOf = (db: Db, docId: string): Record<string, unknown[]> => ({
+    invoices: db.prepare('SELECT * FROM invoices WHERE document_id = ? ORDER BY id').all(docId),
+    lineItems: db
+      .prepare('SELECT li.* FROM invoice_line_items li JOIN invoices i ON i.id = li.invoice_id WHERE i.document_id = ? ORDER BY li.id')
+      .all(docId)
+  })
+
+  /** Read `text` once at this build's version; for `newer`, make it a newer version's reading: its stamp
+   *  and a line item it read differently, which a re-extract would put back to "Widget". */
+  async function seedInvoice(db: Db, text: string, newer: boolean): Promise<{ id: string; invoiceId: string }> {
+    const id = seedDoc(db, text)
+    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+    const invoiceId = (db.prepare('SELECT id FROM invoices WHERE document_id = ?').get(id) as { id: string }).id
+    if (newer) {
+      db.prepare('UPDATE invoices SET extractor_version = ? WHERE id = ?').run(INVOICE_EXTRACTOR_VERSION + 1, invoiceId)
+      db.prepare("UPDATE invoice_line_items SET description = ? WHERE invoice_id = ? AND description = 'Widget'").run(
+        NEWER_ITEM,
+        invoiceId
+      )
+    }
+    return { id, invoiceId }
+  }
+
+  // The three invoice shapes that show the stored figures (D-3).
+  const SHAPES = [
+    { shape: 'template', question: 'give me a summary of the totals', grounded: false },
+    { shape: 'format (JSON)', question: 'fasse die rechnung als json zusammen', grounded: false },
+    { shape: 'grounded-data', question: 'who is the vendor?', grounded: true }
+  ]
+  it.each(SHAPES.flatMap((s) => [true, false].map((newer) => ({ ...s, newer }))))(
+    '$shape, newer reading = $newer: C08 is the last line only on the newer reading',
+    async ({ question, grounded, newer }) => {
+      const db = freshDb()
+      const { id, invoiceId } = await seedInvoice(db, CLEAN, newer)
+      const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question))
+
+      expect(res.mode).toBe(grounded ? 'grounded-data' : undefined) // the row reaches the shape it names
+      const text = grounded ? res.postscript! : res.answer
+      if (newer) expect(text.endsWith(`\n\n${NOTE}`)).toBe(true)
+      else expect(text).not.toContain(NOTE)
+      // Served as stored: the same invoice, its stamp, and (on the newer reading) its own line item.
+      const rows = db.prepare('SELECT id, extractor_version AS v FROM invoices WHERE document_id = ?').all(id)
+      expect(rows).toEqual([{ id: invoiceId, v: INVOICE_EXTRACTOR_VERSION + (newer ? 1 : 0) }])
+      if (newer) expect(grounded ? res.dataBlock : res.answer).toContain(NEWER_ITEM)
+    }
+  )
+
+  it.each([true, false])('the empty template (nothing read), newer reading = %s: C08 only on the newer one', async (newer) => {
+    const db = freshDb()
+    const { id } = await seedInvoice(db, 'Just a short note. No line items, no totals, nothing to reconcile.', newer)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'who is the vendor?'))
+    const empty = tr('skills.invoiceAnalysis.empty')
+    expect(res.answer).toBe(newer ? `${empty}\n\n${NOTE}` : empty)
+  })
+
+  it('the glyph-soup retry never runs on a newer reading: rows byte-identical, no geometry read, C08 after the caveat', async () => {
+    const db = freshDb()
+    const { id, invoiceId } = await seedInvoice(db, CLEAN, true)
+    // The newer version's stored verdict says the text layer looked scrambled: today that alone fires the
+    // replacing geometry re-read and may promote the flag to 'suspect-confirmed'.
+    db.prepare("UPDATE invoices SET text_quality = 'suspect' WHERE id = ?").run(invoiceId)
+    const before = invoiceRowsOf(db, id)
+    const runsBefore = (db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }).n
+    const reads: Array<boolean | undefined> = []
+    const ctx = {
+      ...ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'),
+      readDocumentSegments: async (_id: string, opts?: { layout?: boolean }) => {
+        reads.push(opts?.layout)
+        return toSegments(CLEAN)
+      }
+    }
+    const res = await invoiceAnalysisHandler.run!(ctx)
+
+    expect(reads).toEqual([]) // no extraction of any kind
+    expect(invoiceRowsOf(db, id)).toEqual(before) // every column, text_quality 'suspect' included
+    // The answer's runs (the validate seam) all ended done on the stored invoice.
+    const runs = db.prepare('SELECT status, result_ref AS ref FROM skill_runs ORDER BY rowid').all().slice(runsBefore)
+    expect(runs.length).toBeGreaterThan(0)
+    expect(runs.every((r) => (r as { status: string; ref: string }).status === 'done' && (r as { ref: string }).ref === invoiceId)).toBe(true)
+    // The reconciled-but-scrambled hedge stays, and C08 comes last, after it.
+    expect(res.answer.endsWith(`\n\n${tr('skills.invoiceAnalysis.textQualityCaveat')}\n\n${NOTE}`)).toBe(true)
+  })
+
+  it('the unreadable-layout refusal on a newer reading carries no C08', async () => {
+    const db = freshDb()
+    // The P3 incident shape (the glyph-soup describe above): scrambled figures that cannot corroborate.
+    const SOUP = [
+      'I n v o i c e',
+      '1   0 % 3   Article — Stablecoin Yield Farming 167,70',
+      '$ 9 1 4 = $ 915,92',
+      '( 1 U S D T = $ 0,99',
+      'Netto 4 $',
+      'Total 914 $'
+    ].join('\n')
+    const { id } = await seedInvoice(db, SOUP, true)
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'))
+    expect(res.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
   })
 })

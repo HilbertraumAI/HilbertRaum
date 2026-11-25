@@ -908,6 +908,9 @@ export const en = {
   'analysis.wholeDocBeginningOnly':
     '**Heads-up:** this document was too long to read in full, so this answer covers only its ' +
     'beginning. To check something later in the document, ask about that detail directly.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises

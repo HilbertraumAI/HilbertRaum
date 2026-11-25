@@ -297,7 +297,9 @@ export function buildToolRunner(
           // (`doctasks/handlers/categorize.ts`), which both re-extract with `replaceExisting`. Without it
           // repeated clicks accumulated duplicate `bank_statements` rows, and `latestBankStatementId`
           // (newest wins) then served whichever extraction was last — so a chat answer and the button
-          // could disagree on the row count for the same document.
+          // could disagree on the row count for the same document. On a document holding a NEWER
+          // version's statement the click replaces nothing (G-34 (a)): the engine's guard ends the run
+          // `done` with the stored statement and its stored row count.
           replaceExisting: true
         })
         // U-2 (audit 2026-06-26): a read-only "Extract transactions" click does NOT start the LLM
@@ -392,7 +394,8 @@ export function buildToolRunner(
           // prior invoice rather than accumulating duplicate `invoices` rows that `latestInvoiceId`
           // would then pick between. (No layout flag on THIS run-bar path: the one invoice geometry
           // read is the analysis handler's P3 suspect retry, §42 — the run-bar extract stays
-          // reading-order, D58 as amended.)
+          // reading-order, D58 as amended.) On a document holding a NEWER version's invoice the click
+          // replaces nothing (G-34 (a)): the engine's guard ends the run `done` with the stored invoice.
           replaceExisting: true
         })
         return {

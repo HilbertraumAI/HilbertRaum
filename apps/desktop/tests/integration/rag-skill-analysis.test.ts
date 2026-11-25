@@ -403,6 +403,29 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
   })
 })
 
+// G-34 (a) (frozen, owner 2026-11-23): C08 is not only displayed but STORED. A template answer is written to
+// `messages.content` as built, and the grounded-data postscript is folded into the stored content under
+// the model's answer, so the note is saved in the language of that moment and travels with the message
+// (export, copy, search). Its place is the last line of the stored text.
+describe('askDocuments — a newer version’s statement: the stored answer ends with C08 (G-34 (a))', () => {
+  it.each([
+    { shape: 'template', question: 'summarize the transactions', modelCalls: 0 },
+    { shape: 'grounded-data', question: 'what was my largest transaction?', modelCalls: 1 }
+  ])('$shape: the stored message content ends with the note', async ({ question, modelCalls }) => {
+    const h = await makeHarness({ fullyChunked: true })
+    // This build reads the statement once, then a newer version's stamp is put on it.
+    await invoke(handlers, IPC.askDocuments, h.conversationId, 'summarize the transactions', BANK_INSTALL_ID)
+    h.db.prepare('UPDATE bank_statements SET extractor_version = extractor_version + 1').run()
+    const callsBefore = h.runtime.calls
+
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, BANK_INSTALL_ID)
+    const msg = result as Message
+    expect(h.runtime.calls - callsBefore).toBe(modelCalls) // the row reaches the shape it names
+    const stored = listMessages(h.db, h.conversationId).find((m) => m.id === msg.id)!
+    expect(stored.content.endsWith(`\n\n${t('en', 'analysis.newerExtractorNote')}`)).toBe(true)
+  })
+})
+
 // #301 P4 / #715 / #734: an answer that reads the documents and never queries a pack tells each ticked pack so
 // (`skipped / mode`); without it the answer reads as "the pack found nothing". Owner call (#734): the replies that make
 // no document claim (the D45 refusal, the W2 routing answer, a routing handler's button pointer) record no outcome. `coverage` and

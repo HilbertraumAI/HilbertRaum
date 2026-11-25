@@ -4,6 +4,7 @@ import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../..
 import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
+  isBankExtractionNewer,
   isBankStatementStale,
   latestBankStatementId,
   persistCategorization,
@@ -869,10 +870,12 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
       // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate AND preserves
       // any persisted categories from a prior `categorize` doctask). Re-extract only when NONE exists yet,
-      // OR when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): a since-fixed
-      // parser bug must not keep serving mis-signed / lost-payee rows. A re-extract REPLACES the stale
-      // statement (`replaceExisting`) — the old per-row categories go with it (the rows changed; the
-      // breakdown's deterministic pass / the next categorize run recomputes them honestly).
+      // OR when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`: NULL or a
+      // lower version): a since-fixed parser bug must not keep serving mis-signed / lost-payee rows. A
+      // re-extract REPLACES the stale statement (`replaceExisting`) — the old per-row categories go with it
+      // (the rows changed; the breakdown's deterministic pass / the next categorize run recomputes them
+      // honestly). A NEWER version's statement is never re-extracted (G-34 (a)): it is not stale, and the
+      // engine's guard stops the re-extract of a document that holds one anywhere (it returns the stored).
       let statementId = latestBankStatementId(db, target.id)
       if (!statementId || isBankStatementStale(db, statementId)) {
         const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
@@ -885,6 +888,14 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         }
         statementId = extraction.statementId
       }
+
+      // G-34 (a) (frozen): when the stored figures are a newer version's reading, every answer below that
+      // shows them ends with C08 as its LAST line, after a blank line, built with `ctx.tr` like the answer's
+      // other lines (T2.13 D-3): the derived-column CSV, the format answer, the template (the empty one
+      // included: its "I read" is about the newer version's reading) and the grounded-data postscript. The
+      // custom-category refusals and the fall-through show no stored figure and never carry it.
+      const newerNote = isBankExtractionNewer(db, target.id) ? ctx.tr('analysis.newerExtractorNote') : null
+      const withNewerNote = (answer: string): string => (newerNote ? `${answer}\n\n${newerNote}` : answer)
 
       // Load the rows + persisted categories ONCE (the single `bank_transactions` read — audit P-1), then
       // hand the SAME rows to the downstream seams as `preloaded` so they don't each re-query. The seams
@@ -1051,13 +1062,13 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
               )
             }
             const answer = `${ctx.tr('skills.bankAnalysis.formatIntroCsv')}\n\n\`\`\`csv\n${tableToCsv(table)}\n\`\`\`\n\n${notes.join('\n')}`
-            return { answer, citations, coverage, table }
+            return { answer: withNewerNote(answer), citations, coverage, table }
           }
         }
 
         const snap: StatementSnapshot = { rows: snapRows, summary: summarizeCashflow(rows), ...balances }
         return {
-          answer: buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined),
+          answer: withNewerNote(buildFormatAnswer(ctx.tr, format, snap, categoryShaped ? { modelAssisted } : undefined)),
           citations,
           coverage,
           // Phase 2 (result-tables §4): the structured rows behind this answer, persisted with the
@@ -1113,7 +1124,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
           dateOrderInferred,
           droppedRowCount
         })
-        return { answer, citations, coverage }
+        return { answer: withNewerNote(answer), citations, coverage }
       }
 
       // The grounded-data postscript is the deterministic in/out/net echo (§8.1) PLUS the R5 honest date
@@ -1129,6 +1140,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       const cashflowEcho = buildCashflowPostscript(ctx.tr, summary, status, droppedRowCount)
       if (cashflowEcho) postscriptParts.push(cashflowEcho)
       if (dateOrderInferred === 'default') postscriptParts.push(ctx.tr('skills.bankAnalysis.dateOrderCaveat'))
+      if (newerNote) postscriptParts.push(newerNote) // G-34 (a): C08 is the last part, so the last line
       return {
         answer: '',
         mode: 'grounded-data',

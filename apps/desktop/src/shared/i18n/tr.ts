@@ -805,6 +805,9 @@ export const tr: UiCatalog<'tr'> = {
   'analysis.wholeDocBeginningOnly':
     '**Not:** bu belge tamamı okunamayacak kadar uzundu; bu yüzden bu yanıt yalnızca belgenin başını ' +
     'kapsıyor. Belgenin ilerleyen kısmındaki bir şeyi kontrol etmek için doğrudan o ayrıntıyı sorun.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Hesap özetinin tamamında **{count}** işlem okudum.',
   'skills.bankAnalysis.countPartial':

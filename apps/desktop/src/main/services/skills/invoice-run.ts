@@ -5,6 +5,8 @@ import {
   buildReadDocumentChunks,
   deleteInvoicesForDocument,
   domainPersistFailure,
+  extractorVerdict,
+  holdsNewerExtraction,
   prepareDomainRun,
   runDomainExtractionInner,
   runDomainFileExport,
@@ -58,10 +60,11 @@ export interface InvoiceRunDeps {
   /**
    * Re-extraction (F5 — mirrors the bank `replaceExisting`): when set, DELETE every prior `invoices`
    * row (and its line items) for the document inside the persist transaction BEFORE inserting the fresh
-   * one. The reuse path passes it when the latest invoice is STALE (`isInvoiceStale`) so a since-fixed
-   * parser bug's rows are replaced — and so re-extraction never accumulates duplicate invoices. The
-   * persisted `totals_reconciled` flag on the old row is intentionally NOT carried over (the rows
-   * changed; the validate seam recomputes it). Unset (the default) = the additive behaviour.
+   * one. The reuse path passes it when the latest invoice is STALE (`isInvoiceStale`: NULL or a lower
+   * version) so a since-fixed parser bug's rows are replaced — and so re-extraction never accumulates
+   * duplicate invoices. The persisted `totals_reconciled` flag on the old row is intentionally NOT carried
+   * over (the rows changed; the validate seam recomputes it). Unset (the default) = the additive behaviour.
+   * Neither ever reaches a document that holds a newer version's invoice (G-34 (a), the engine's guard).
    */
   replaceExisting?: boolean
 }
@@ -116,20 +119,24 @@ export function latestInvoiceId(db: Db, documentId: string): string | null {
 }
 
 /**
- * Whether an invoice was produced by a DIFFERENT extractor than the one running (F5 — mirrors
- * `isBankStatementStale`, incl. the SKA-26 downgrade half). True when its `extractor_version` is NULL
- * (extracted before versioning) or NOT EQUAL to the current `INVOICE_EXTRACTOR_VERSION` — older rows
- * may carry a since-fixed parser bug, and NEWER rows are the rollback case (the roaming-drive
- * rationale + the accepted alternating-installs cost live on the bank twin's doc comment). The reuse
- * path (analysis read-back) re-extracts a stale invoice (with `replaceExisting`) instead of serving
- * its rows. An invoice at the current version is fresh.
+ * Whether an invoice must be RE-EXTRACTED (F5 — mirrors `isBankStatementStale`, through the SAME G-34 (a)
+ * rule, `extractorVerdict` in `run.ts`): its `extractor_version` is NULL (extracted before versioning) or
+ * below the current `INVOICE_EXTRACTOR_VERSION` — older rows may carry a since-fixed parser bug. An invoice
+ * at the current version is fresh; a NEWER version's invoice is not stale either (G-34 (a), frozen): it is
+ * served as stored and never replaced or deleted. The reuse paths (analysis read-back, the downstream run
+ * prefix) re-extract a stale invoice (with `replaceExisting`) instead of serving its rows.
  */
 export function isInvoiceStale(db: Db, invoiceId: string): boolean {
-  const row = db
-    .prepare('SELECT extractor_version AS v FROM invoices WHERE id = ?')
-    .get(invoiceId) as { v: number | null } | undefined
-  if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
-  return row.v == null || row.v !== INVOICE_EXTRACTOR_VERSION
+  return extractorVerdict(db, 'invoices', invoiceId, INVOICE_EXTRACTOR_VERSION) === 'reextract'
+}
+
+/**
+ * Whether the document's stored invoice extraction is a NEWER version's reading (G-34 (a)): any of its
+ * invoices has the `'newer'` verdict. The engine's guard reads it (no extraction ever runs over such a
+ * document, the glyph-soup retry included), and the invoice answer ends with C08 when it is true.
+ */
+export function isInvoiceExtractionNewer(db: Db, documentId: string): boolean {
+  return holdsNewerExtraction(db, 'invoices', documentId, INVOICE_EXTRACTOR_VERSION)
 }
 
 /**
@@ -270,6 +277,9 @@ const INVOICE_RUN_CONFIG: DomainRunConfig<ExtractInvoiceOutput, InvoiceInput> = 
   extractToolName: EXTRACT_TOOL_NAME,
   latestId: latestInvoiceId,
   isStale: isInvoiceStale,
+  holdsNewer: isInvoiceExtractionNewer,
+  storedCountOf: (db, invoiceId) =>
+    (db.prepare('SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id = ?').get(invoiceId) as { n: number }).n,
   // Self-locking re-extraction (re-entrant under a downstream seam's own hold), normalized for the
   // staleness path. Reuses the public `runInvoiceExtraction` so the lock + reshape stay in one place.
   reExtract: async (db, args, deps) => {

@@ -896,6 +896,9 @@ export const it: UiCatalog<'it'> = {
     '**Nota:** questo documento era troppo lungo per essere letto per intero, quindi questa risposta ' +
     'ne copre solo l’inizio. Per verificare qualcosa più avanti nel documento, chiedi direttamente ' +
     'di quel dettaglio.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Transazioni lette nell’intero estratto conto: **{count}**.',
   'skills.bankAnalysis.countPartial':

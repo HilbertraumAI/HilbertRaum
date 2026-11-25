@@ -839,6 +839,9 @@ export const nl: UiCatalog<'nl'> = {
     '**Let op:** dit document was te lang om helemaal te lezen, dus dit antwoord gaat alleen over ' +
     'het begin ervan. Wil je iets controleren dat verderop in het document staat, vraag dan direct ' +
     'naar dat detail.',
+  'analysis.newerExtractorNote':
+    '_These figures were read by a newer version of HilbertRaum and are shown as that version read ' +
+    'them._',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Gelezen transacties in het hele afschrift: **{count}**.',
   'skills.bankAnalysis.countPartial':

@@ -16,7 +16,8 @@ import {
   runInvoiceCsvExport,
   runInvoiceFileExport,
   latestInvoiceId,
-  isInvoiceStale
+  isInvoiceStale,
+  isInvoiceExtractionNewer
 } from '../../src/main/services/skills/invoice-run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { INVOICE_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/invoice'
@@ -441,16 +442,17 @@ describe('R3 — downstream invoice runs re-extract a STALE invoice before servi
     expect(isInvoiceStale(db, freshId)).toBe(false)
   })
 
-  it('SKA-26 (R9): an invoice written by a NEWER extractor is stale too (the downgrade half)', async () => {
-    // Mirror of the bank downgrade pin: after a rollback the newer extractor IS the suspected bug, so
-    // its rows must re-extract rather than be served as fresh (`!==`, not `<`).
+  it('G-34 (a): an invoice written by a NEWER extractor is not stale (served as stored, never re-extracted)', async () => {
+    // Mirror of the bank pin. G-34 (a) (frozen, owner 2026-11-23) reverses SKA-26's downgrade half: after
+    // "Go back" this build must never replace or delete what a newer version read; it serves those rows.
     const db = freshDb()
     const docId = seedDocWithChunks(db, COLLAPSED)
     const res = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: faithfulReader })
     const id = res.invoiceId!
     expect(isInvoiceStale(db, id)).toBe(false)
     db.prepare('UPDATE invoices SET extractor_version = ? WHERE id = ?').run(INVOICE_EXTRACTOR_VERSION + 1, id)
-    expect(isInvoiceStale(db, id)).toBe(true)
+    expect(isInvoiceStale(db, id)).toBe(false)
+    expect(isInvoiceExtractionNewer(db, docId)).toBe(true)
   })
 
   it('a FRESH invoice is NOT re-extracted (same id, no duplicate)', async () => {
@@ -553,6 +555,112 @@ describe('R3 — downstream invoice runs re-extract a STALE invoice before servi
     expect(freshId).not.toBe(staleId) // re-extracted through the dispatch
     const items = (db.prepare('SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id = ?').get(freshId) as { n: number }).n
     expect(items).toBe(2) // faithful segments — the collapsed chunk fallback would give 0
+  })
+})
+
+// G-34 (a) (frozen, owner 2026-11-23): after "Go back" this build never replaces or deletes an invoice a
+// newer version read. The engine's guard is asked per DOCUMENT (the key the replace delete uses), so a newer
+// invoice that is not the latest is protected too, and the additive path cannot add a row in front of it.
+describe('G-34 (a) — no invoice extraction ever runs over a newer version’s invoice', () => {
+  const skillInstallId = 'app:invoice'
+  const SEGMENTS: DocumentChunkRead[] = [{ text: INVOICE_TEXT, page: 1, index: 0 }]
+  const ARGS = (documentId: string): { skillInstallId: string; documentId: string } => ({ skillInstallId, documentId })
+
+  /** Every stored invoice row of one document, all columns, for a byte-identical before/after. */
+  function invoiceRowsOf(db: Db, docId: string): Record<string, unknown[]> {
+    return {
+      invoices: db.prepare('SELECT * FROM invoices WHERE document_id = ? ORDER BY id').all(docId),
+      lineItems: db
+        .prepare(
+          `SELECT li.* FROM invoice_line_items li JOIN invoices i ON i.id = li.invoice_id
+           WHERE i.document_id = ? ORDER BY li.id`
+        )
+        .all(docId)
+    }
+  }
+
+  async function extractAt(db: Db, docId: string, at: string): Promise<string> {
+    const res = await runInvoiceExtraction(db, ARGS(docId), { audit: () => {}, now: () => at, readDocumentSegments: async () => SEGMENTS })
+    expect(res.lineItemCount).toBe(2)
+    return res.invoiceId!
+  }
+
+  /** What a newer version leaves: its own stamp and a figure it read differently (so a re-extract would show). */
+  function markReadByNewerVersion(db: Db, invoiceId: string): void {
+    db.prepare('UPDATE invoices SET extractor_version = ?, gross_total = 391 WHERE id = ?').run(INVOICE_EXTRACTOR_VERSION + 1, invoiceId)
+    db.prepare('UPDATE invoice_line_items SET line_total = 26 WHERE invoice_id = ? AND row_index = 0').run(invoiceId)
+  }
+
+  const countItems = (db: Db, invoiceId: string): number =>
+    (db.prepare('SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id = ?').get(invoiceId) as { n: number }).n
+
+  it.each([
+    { name: 'the newer invoice is the latest, replace', notLatest: false, replaceExisting: true },
+    { name: 'the newer invoice is the latest, additive', notLatest: false, replaceExisting: false },
+    { name: 'a lower-version invoice is the latest, replace', notLatest: true, replaceExisting: true },
+    { name: 'a lower-version invoice is the latest, additive', notLatest: true, replaceExisting: false }
+  ])('$name: nothing is read, deleted or inserted, and the run ends done on the stored rows', async ({ notLatest, replaceExisting }) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const newer = await extractAt(db, docId, '2026-01-01T00:00:00.000Z')
+    const lower = notLatest ? await extractAt(db, docId, '2026-01-02T00:00:00.000Z') : null
+    markReadByNewerVersion(db, newer)
+    if (lower) db.prepare('UPDATE invoices SET extractor_version = 2 WHERE id = ?').run(lower)
+    const latest = lower ?? newer
+    expect(latestInvoiceId(db, docId)).toBe(latest)
+    const before = invoiceRowsOf(db, docId)
+
+    let reads = 0
+    const res = await runInvoiceExtraction(db, ARGS(docId), {
+      audit: () => {},
+      readDocumentSegments: async () => {
+        reads++
+        return SEGMENTS
+      },
+      replaceExisting
+    })
+
+    expect(res).toMatchObject({ ok: true, invoiceId: latest, lineItemCount: countItems(db, latest) })
+    expect(reads).toBe(0) // the extractor never ran
+    expect(invoiceRowsOf(db, docId)).toEqual(before)
+    const run = db.prepare('SELECT status, result_ref AS ref, error FROM skill_runs WHERE id = ?').get(res.runId)
+    expect(run).toEqual({ status: 'done', ref: latest, error: null })
+  })
+
+  // The run-bar tools go through `prepareDomainRun`: a newer invoice is not stale, so they run on the stored
+  // figures (Validate may write `totals_reconciled` on it: D-4).
+  it('Validate and the JSON export run on a newer version’s invoice as stored (no re-extract)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, INVOICE_TEXT)
+    const id = await extractAt(db, docId, '2026-01-01T00:00:00.000Z')
+    markReadByNewerVersion(db, id)
+    const before = invoiceRowsOf(db, docId)
+    const deps = { audit: () => {}, readDocumentSegments: async () => SEGMENTS }
+
+    expect((await runInvoiceTotalsValidation(db, ARGS(docId), deps)).ok).toBe(true)
+    let written = ''
+    const exported = await runInvoiceFileExport(
+      db,
+      ARGS(docId),
+      {
+        ...deps,
+        confirmed: true,
+        saveTextFile: async (_name, content) => {
+          written = content
+          return true
+        }
+      },
+      { toolName: 'export_invoice_json', defaultFileName: 'invoice.json' }
+    )
+    expect(exported.ok).toBe(true)
+
+    const after = invoiceRowsOf(db, docId)
+    expect(after.lineItems).toEqual(before.lineItems)
+    // The same invoice row, still the newer version's stamp and figure (only `totals_reconciled` may move).
+    const strip = (rows: unknown[]): unknown[] => rows.map((r) => ({ ...(r as object), totals_reconciled: null }))
+    expect(strip(after.invoices)).toEqual(strip(before.invoices))
+    const parsed = JSON.parse(written) as { totals: { grossTotal: number } }
+    expect(parsed.totals.grossTotal).toBe(391)
   })
 })
 

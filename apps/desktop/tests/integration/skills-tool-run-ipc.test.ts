@@ -344,6 +344,51 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(txs.n).toBe(2)
   })
 
+  // G-34 (a) (frozen, owner 2026-11-23): after "Go back" the two Extract buttons never replace what a newer
+  // version read (they pass `replaceExisting` with no staleness check; the engine's guard stops them). The
+  // run ends done with the stored count, which is true, and needs no new copy (D-5).
+  it.each([
+    {
+      name: 'Extract transactions on a newer version’s statement',
+      harness: () =>
+        makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'),
+      tool: 'extract_transactions',
+      tables: ['bank_statements', 'bank_transactions', 'bank_corrections'],
+      markNewer: (db: Db) => {
+        db.prepare('UPDATE bank_statements SET extractor_version = extractor_version + 1').run()
+        db.prepare("UPDATE bank_transactions SET amount = -49.9 WHERE description = 'Grocery'").run()
+        db.prepare(
+          `INSERT INTO bank_corrections (id, transaction_id, field, old_value, new_value, created_at)
+           SELECT 'corr-1', id, 'amount', '-45.9', '-49.9', '2026-02-01T00:00:00.000Z' FROM bank_transactions
+           WHERE description = 'Grocery'`
+        ).run()
+      },
+      stored: 2
+    },
+    {
+      name: 'Extract invoice on a newer version’s invoice',
+      harness: () => makeInvoiceHarness(INVOICE_TEXT),
+      tool: 'extract_invoice',
+      tables: ['invoices', 'invoice_line_items'],
+      markNewer: (db: Db) => {
+        db.prepare('UPDATE invoices SET extractor_version = extractor_version + 1, gross_total = 26').run()
+        db.prepare('UPDATE invoice_line_items SET line_total = 26').run()
+      },
+      stored: 1
+    }
+  ])('$name: the run ends done with the stored count, every row as stored', async ({ harness, tool, tables, markNewer, stored }) => {
+    const { db, skillInstallId, conversationId } = harness()
+    expect((await runTool(skillInstallId, conversationId, tool)).state).toBe('done')
+    markNewer(db)
+    const snapshot = (): unknown[][] => tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY id`).all())
+    const before = snapshot()
+
+    const final = await runTool(skillInstallId, conversationId, tool)
+    expect(final.state).toBe('done')
+    expect(final.count).toBe(stored)
+    expect(snapshot()).toEqual(before) // nothing deleted, nothing inserted, nothing changed
+  })
+
   it('a DOWNSTREAM run-bar run re-extracts a STALE statement from faithful segments, not the chunks (R3 / §5.6)', async () => {
     // The production gap behind audit §5.6: after a version bump (figures were mis-read) the Validate/
     // Summarize/Export buttons must re-extract before serving rows — and that re-extraction MUST read the
