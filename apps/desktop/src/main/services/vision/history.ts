@@ -7,6 +7,7 @@ import {
   ENCRYPTED_DOC_SUFFIX,
   IMAGES_DIR_NAME,
   shredFileAsync,
+  storeHoldsFile,
   type DocumentCipher
 } from '../workspace-vault'
 import type {
@@ -286,8 +287,21 @@ export async function deleteImageSession(db: Db, dir: string, id: string): Promi
     }
     throw err
   }
-  const stored = join(dir, row.stored_name)
-  if (existsSync(stored)) await shredFileAsync(stored)
+  const stored = storedImageToShred(dir, row.stored_name)
+  if (stored !== null && existsSync(stored)) await shredFileAsync(stored)
+}
+
+/**
+ * T2.7 security fix round (F-3; FU-P2-6 in P2): the stored image a deleted row names, as a file to shred, or null. Only a
+ * bare file name (no separator, not `.` or `..`) inside the store folder (`storeHoldsFile`): `stored_name` is read from
+ * the database, and a row a later version or a database the app did not make wrote with `..` in it had a file outside
+ * `images/` shredded. Such a file is left, and only the row goes. Every name the app writes is `<id><ext>[.enc]`.
+ */
+function storedImageToShred(dir: string, storedName: unknown): string | null {
+  if (typeof storedName !== 'string' || storedName === '' || storedName === '.' || storedName === '..') return null
+  if (/[\\/]/.test(storedName)) return null
+  const stored = join(dir, storedName)
+  return storeHoldsFile(dir, stored) ? stored : null
 }
 
 /**
@@ -318,8 +332,8 @@ export async function clearImageSessions(db: Db, dir: string): Promise<number> {
     throw err
   }
   for (const row of rows) {
-    const stored = join(dir, row.stored_name)
-    if (existsSync(stored)) await shredFileAsync(stored)
+    const stored = storedImageToShred(dir, row.stored_name) // T2.7 (F-3): a bare name inside the store only
+    if (stored !== null && existsSync(stored)) await shredFileAsync(stored)
   }
   return rows.length
 }

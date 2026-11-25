@@ -71,6 +71,9 @@ describe('deriveKey', () => {
   // stays green with its floor deleted. No row isolates the truthiness checks: the one value they
   // refuse and the floors let through is NaN (a missing param fails earlier), and JSON cannot carry it.
   it.each<[string, KdfParams, RegExp]>([
+    // T2.7 (L-1): the argon2id ceilings are m 1 GiB and t 8 (they were 2 GiB and 64), the first values past them here.
+    ['argon2id m above the 1 GiB ceiling', { ...FAST_ARGON, m: 2 ** 20 + 1 }, /out of bounds/],
+    ['argon2id t above 8', { ...FAST_ARGON, t: 9 }, /out of bounds/],
     ['argon2id m above the 2 GiB ceiling', { ...FAST_ARGON, m: 2_000_000_000 }, /out of bounds/],
     ['argon2id m below the floor of 8', { ...FAST_ARGON, m: 7 }, /out of bounds/],
     ['argon2id t below the floor of 1', { ...FAST_ARGON, t: -1 }, /out of bounds/],

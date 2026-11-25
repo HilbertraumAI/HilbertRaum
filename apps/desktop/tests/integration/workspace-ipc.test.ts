@@ -69,7 +69,7 @@ import {
 import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
-import { setStampAppVersion } from '../../src/main/services/db'
+import { SCHEMA_VERSION, openDatabase, setStampAppVersion } from '../../src/main/services/db'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
@@ -1589,6 +1589,62 @@ describe('the log line of a create that failed for another reason than a file er
   })
 })
 
+// T2.7 security fix round (L-4; W-68's rule): a failure line keeps the message of an error that is no file error, so text
+// read from the drive reached app.log through two messages. The KDF's errors quoted a descriptor value (a crafted `algo`
+// array or `keyLen` string of any length: one line of about 2 MB empties the size-capped log, and the user's history with
+// it), and the create's open of a working file it found quoted that file's schema. The KDF's messages now name the
+// value's type only, and the create's open is wrapped as the unlock's is (`VaultOpenFailedError`: kind and codes only).
+describe('a workspace failure line carries no text read from the drive (T2.7, L-4)', () => {
+  const ATTACKER = 'ATTACKER-TEXT-'
+  const linesAfter = (marker: string): string => {
+    const all = readLogTail(100_000)
+    return all.slice(all.findIndex((l) => l.includes(marker)) + 1).join('\n')
+  }
+
+  it.each<[string, (kdf: Record<string, unknown>) => void]>([
+    ['an `algo` that is an array of text', (kdf) => void (kdf.algo = [ATTACKER.repeat(2000)])],
+    ['a `keyLen` that is text', (kdf) => void (kdf.keyLen = ATTACKER.repeat(2000))]
+  ])('an unlock over a descriptor with %s logs none of it', async (_case, edit) => {
+    const vp = editDescriptor(lockedVault('wsipc', PW), (d) => edit(d.kdf as Record<string, unknown>))
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `L-4 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
+      const lines = linesAfter(marker)
+      expect(lines).toContain('Workspace unlock failed')
+      expect(lines).not.toContain(ATTACKER)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  // Where a plaintext workspace is allowed (a dev build), the create still opens a working file it finds (F-3 keeps that
+  // path); one whose schema this SQLite cannot parse fails the open with SQLITE_CORRUPT, whose message quotes the schema.
+  // The controller is not started: a dev start would open that file as the plaintext workspace itself.
+  it('a create over a working file whose schema cannot be parsed logs SQLite’s codes, not the schema', async () => {
+    const vp = freshVaultPaths('wsipc')
+    openDatabase(vp.dbPath).close() // the app's schema, then an index text `CREATE INDEZ w985_future …` under this
+    writeNewerSchema(vp.dbPath, { userVersion: SCHEMA_VERSION }) // build's own stamp: not newer
+    const ctrl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `L-4 create marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+      expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
+      const lines = linesAfter(marker)
+      expect(lines).toContain('Workspace create failed')
+      expect(lines).toContain('"sqliteCode":11') // SQLITE_CORRUPT, as the open reported it
+      expect(lines).not.toContain('w985_future')
+      expect(lines).not.toContain('INDEZ')
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+})
+
 // #956: the unlock, password-change and lock arms logged `String(err)`, and a Node file error's text names the drive's
 // or the profile's absolute paths, which Diagnostics → Copy and Save log hand out. Each arm now logs `failureForLog`
 // (its rule is failure-for-log.test.ts's): these rows hold the wiring, each with a real file error (a directory where a
@@ -1617,14 +1673,16 @@ describe('a workspace failure line names no path (#956)', () => {
     const vp = lockedVault('wsipc', PW)
     failedLockState(vp, 7171, PW) // a working file newer than `.enc`: the start keeps it, the unlock re-encrypts it
     const ctrl = startedOn(vp)
-    mkdirSync(`${vp.encPath}.tmp`) // encryptFile's temp: EISDIR, Node's error naming the path
+    // encryptFile's temp: Node's error naming the path (EEXIST since T2.7's F-2, which creates the temp with 'wx' and
+    // leaves a folder at its name; EISDIR with 'w')
+    mkdirSync(`${vp.encPath}.tmp`)
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const marker = mark()
     try {
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
       const lines = linesAfter(marker, 'Workspace unlock failed')
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('EISDIR')
+      expect(lines[0]).toContain('EEXIST')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
     } finally {
       ctrl.shutdown()
@@ -1798,7 +1856,7 @@ describe('a workspace failure line names no path (#956)', () => {
   it('a password change whose key file write meets a file error logs its code, not the path', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
-    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EISDIR
+    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EEXIST since T2.7's F-2 ('wx'; EISDIR with 'w')
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const marker = mark()
     try {
@@ -1806,7 +1864,7 @@ describe('a workspace failure line names no path (#956)', () => {
       expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.changeFailed') })
       const lines = linesAfter(marker, 'Workspace password change failed')
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('EISDIR')
+      expect(lines[0]).toContain('EEXIST')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
     } finally {
       ctrl.lock()

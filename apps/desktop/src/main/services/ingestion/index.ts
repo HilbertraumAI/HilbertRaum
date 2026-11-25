@@ -33,7 +33,7 @@ import { sha256File } from '../models'
 import { perfMark, perfMs } from '../perf'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
-import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
+import { ENCRYPTED_DOC_SUFFIX, shredFile, storeHoldsFile, type DocumentCipher } from '../workspace-vault'
 import { purgeSkillDataForDocument } from '../skills/run'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
@@ -852,8 +852,12 @@ export async function prepareDocument(
         documentId
       )
       parseSource = storedPath
-      transients.push(storedPath)
-      op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
+      // T2.7 security fix round (F-3; FU-P2-6 in P2): shredded (and swept, #237) only when it lies inside the store
+      // folder (`storeHoldsFile`). The resolver's fallback to the recorded `stored_path` can name any file, which stays.
+      if (storeHoldsFile(storeDir, storedPath)) {
+        transients.push(storedPath)
+        op?.track(storedPath) // now a derived copy (the `.enc` is the store) — sweepable (#237)
+      }
       storedPath = encPath
     } else if (cipher) {
       // Encrypted stored copy: decrypt to a transient working file for the parser.
@@ -2066,7 +2070,10 @@ export function deleteDocument(db: Db, storeDir: string, id: string): void {
   // half-deleted, undeletable document). Shredding AFTER the commit closes the DATA-1 window where
   // the file was destroyed before a failing delete left a row with no chunks and no stored file.
   // #188 changed only WHICH path is shredded, never WHEN.
-  if (doomed) {
+  // T2.7 security fix round (F-3; FU-P2-6 in P2): and only a file inside the store folder (`storeHoldsFile`). With no copy
+  // under the row's own name, the resolver falls back to the recorded `stored_path` verbatim, which a later version, a
+  // cloned drive or a database the app did not make can point at any file: that file is left, and only the row goes.
+  if (doomed && storeHoldsFile(storeDir, doomed.path)) {
     shredFile(doomed.path)
   }
   // RAG-6 (Wave P4) / PERF-1 (Phase 5) / F12 (post-merge close-out) belt: this doc's vectors were

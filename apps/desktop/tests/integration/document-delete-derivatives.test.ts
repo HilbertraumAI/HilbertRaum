@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -241,6 +241,23 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
     // The skill_runs history (ids/refs only) is intentionally NOT deleted — it has no FK to documents.
     const runs = (db.prepare('SELECT COUNT(*) n FROM skill_runs').get() as { n: number }).n
     expect(runs).toBeGreaterThan(0)
+  })
+
+  // T2.7 security fix round (F-3, FU-P2-6): the delete shreds the copy `locateStoredCopy` finds, which falls back to the
+  // recorded `stored_path` verbatim when the store holds no copy under the row's own name. A row naming a file outside the
+  // store (a later version's, a cloned drive's, or one in a database the app did not make) had that file shredded. Now only
+  // a file inside the store folder is shredded; the row goes, and a file elsewhere stays.
+  it('a row whose stored_path names a file outside the store: the row goes, the file stays byte for byte (F-3)', () => {
+    const db = freshDb()
+    const store = mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-store-'))
+    const victim = join(mkdtempSync(join(tmpdir(), 'hilbertraum-deldoc-outside-')), 'thesis.pdf')
+    writeFileSync(victim, 'USER FILE: the thesis')
+    const { docId } = seedDoc(db, { chunks: ['chunk a'], storedPath: victim })
+
+    expect(() => deleteDocument(db, store, docId)).not.toThrow()
+
+    expect(derivedCounts(db, docId)).toMatchObject({ documents: 0, chunks: 0 })
+    expect(readFileSync(victim, 'utf8')).toBe('USER FILE: the thesis')
   })
 
   it('TEETH: without the ordered cleanup, the un-cascaded FK blocks the delete (the bug DATA-1 closes)', async () => {

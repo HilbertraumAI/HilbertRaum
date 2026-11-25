@@ -605,10 +605,11 @@ export function vaultFormatVerdict(vaultPaths: VaultPaths): VaultFormatVerdict {
 
 /** Persist the descriptor atomically (write temp + fsync + rename). The rename is the
  *  single commit point of the password-change journal, so the temp is fsynced
- *  first — a descriptor must never land half-written after a power cut. */
+ *  first — a descriptor must never land half-written after a power cut.
+ *  T2.7 security fix round (F-2): the temp is opened by {@link openWriteTemp}, never through a link at its name. */
 export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor): void {
   const tmp = `${descriptorPath}.tmp`
-  const fd = openSync(tmp, 'w')
+  const fd = openWriteTemp(tmp)
   try {
     writeSync(fd, Buffer.from(JSON.stringify(d, null, 2), 'utf8'))
     fsyncSync(fd)
@@ -660,8 +661,23 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 export const FILE_CHUNK_BYTES = 8 * 1024 * 1024
 
 /**
+ * T2.7 security fix round (F-1, F-2): open a write temp at a fixed name (`<file>.tmp`, renamed into place once written)
+ * as a new file, never through a link. 'w' followed one: a drive formatted NTFS, APFS or ext4 can carry a hard or
+ * symbolic link at such a name (a Kit's exFAT cannot), and the file it reaches, elsewhere on the drive or on another, was
+ * truncated and given what this write holds (the decrypted database, among others). Whatever is at the name is removed
+ * by its name first ({@link removeTempName}: a link by `unlink`, never followed), and the temp is created anew ('wx'), so
+ * one planted in between fails the write. A folder at the name is left, and the write fails. The pattern of the rekey
+ * journal's and the #875 marker's temps (#1014 round 6, T2.16 R1 B-3); `logging.ts` opens the encrypted log's temp here.
+ */
+export function openWriteTemp(path: string): number {
+  removeTempName(path)
+  return openSync(path, 'wx')
+}
+
+/**
  * Encrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. SYNCHRONOUS —
  * blocks until done; see the section header for when to prefer {@link encryptFileAsync}.
+ * T2.7 (F-2): the temp is opened by {@link openWriteTemp}, never through a link at its name.
  */
 export function encryptFile(srcPath: string, destPath: string, key: Buffer): void {
   const tmp = `${destPath}.tmp`
@@ -670,7 +686,7 @@ export function encryptFile(srcPath: string, destPath: string, key: Buffer): voi
   const src = openSync(srcPath, 'r')
   let out: number | null = null
   try {
-    out = openSync(tmp, 'w')
+    out = openWriteTemp(tmp)
     // Header: MAGIC | iv | tag placeholder. GCM's tag is only known after the whole
     // stream is processed, so reserve its slot and patch it in at the end.
     writeSync(out, BLOB_MAGIC)
@@ -749,6 +765,12 @@ function isFrameAuthError(err: unknown): boolean {
  * is shredded — note that callers verify the password against the descriptor verifier
  * BEFORE decrypting, so a wrong-key decrypt of the DB never happens in normal flow. A frame
  * a newer build wrote throws `VaultNewerError` before the output is opened (#845).
+ * T2.7 security fix round (F-1): the temp is opened by {@link openWriteTemp}, never through a link at its name: the
+ * unlock decrypts the whole database into `hilbertraum.sqlite.tmp`, and a link there put the plaintext into the file it
+ * reached, renamed the link into place for SQLite to write every session through, and left the plaintext there when the
+ * lock's shred unlinked the name. As a belt, before the rename the temp must still be the file this decrypt wrote, a
+ * regular file with one name (`lstat`, never followed, against the open file), or the decrypt fails and its output
+ * never takes `destPath`'s name (the unlock then opens no database).
  */
 export function decryptFile(srcPath: string, destPath: string, key: Buffer): void {
   const tmp = `${destPath}.tmp`
@@ -769,7 +791,7 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
     const decipher = createDecipheriv('aes-256-gcm', key, iv)
     decipher.setAuthTag(tag)
 
-    out = openSync(tmp, 'w')
+    out = openWriteTemp(tmp)
     const buf = Buffer.alloc(FILE_CHUNK_BYTES)
     let bytes: number
     while ((bytes = readSync(src, buf, 0, buf.length, null)) > 0) {
@@ -783,8 +805,14 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
       throw new FrameAuthError(err)
     }
     if (fin.length > 0) writeSync(out, fin)
+    const written = fstatSync(out, { bigint: true })
     closeSync(out)
     out = null
+    // F-1's belt: the name still holds the file written above, and no other name shares it.
+    const named = lstatOrNull(tmp)
+    if (named === null || shredNameOf(named).kind !== 'file' || !sameShreddableFile(named, written)) {
+      throw new Error('The decrypted file is no longer the one this decrypt wrote')
+    }
     renameSync(tmp, destPath)
   } catch (err) {
     if (out !== null) {
@@ -849,6 +877,7 @@ function authenticatesUnder(path: string, key: Buffer): boolean {
  * Writes the byte-IDENTICAL frame (`MAGIC | iv | tag-placeholder | ciphertext`, with the GCM
  * tag patched into its reserved slot at `tagPos` AFTER `final()` via a positional write), so a
  * file written here decrypts via the sync path / in-memory blob path and vice versa.
+ * T2.7 (F-2): the temp is opened as {@link openWriteTemp} opens it (removed by its name first, then 'wx').
  */
 export async function encryptFileAsync(srcPath: string, destPath: string, key: Buffer): Promise<void> {
   const tmp = `${destPath}.tmp`
@@ -857,7 +886,8 @@ export async function encryptFileAsync(srcPath: string, destPath: string, key: B
   const src = await openFileAsync(srcPath, 'r')
   let out: Awaited<ReturnType<typeof openFileAsync>> | null = null
   try {
-    out = await openFileAsync(tmp, 'w')
+    removeTempName(tmp)
+    out = await openFileAsync(tmp, 'wx')
     // Header: MAGIC | iv | tag placeholder. GCM's tag is only known after the whole stream is
     // processed, so reserve its slot and patch it in at the end (same as the sync path).
     await out.write(BLOB_MAGIC, 0, BLOB_MAGIC.length, null)
@@ -903,6 +933,7 @@ export async function encryptFileAsync(srcPath: string, destPath: string, key: B
  * normal flow. Reads the byte-identical frame the sync path writes (and vice versa), and
  * throws `VaultNewerError` on a newer build's frame before the output is opened (#845). Its
  * tag failure stays Node's own error: no caller of this twin tells it apart.
+ * T2.7 (F-1): the temp is opened as {@link openWriteTemp} opens it (removed by its name first, then 'wx').
  */
 export async function decryptFileAsync(srcPath: string, destPath: string, key: Buffer): Promise<void> {
   const tmp = `${destPath}.tmp`
@@ -923,7 +954,8 @@ export async function decryptFileAsync(srcPath: string, destPath: string, key: B
     const decipher = createDecipheriv('aes-256-gcm', key, iv)
     decipher.setAuthTag(tag)
 
-    out = await openFileAsync(tmp, 'w')
+    removeTempName(tmp)
+    out = await openFileAsync(tmp, 'wx')
     const buf = Buffer.alloc(FILE_CHUNK_BYTES)
     for (;;) {
       const { bytesRead } = await src.read(buf, 0, buf.length, null)
@@ -1546,6 +1578,15 @@ function workingCopyLostPath(vaultPaths: VaultPaths): string {
   return join(dirname(vaultPaths.descriptorPath), WORKING_COPY_LOST_MARKER)
 }
 
+/** T2.7 security fix round (L-2): is the marker's folder (`config/`) a link to a folder elsewhere ({@link folderAtItsName})?
+ *  Then the marker is neither written nor removed (the start, the unlock and the create write and remove it before any
+ *  password or right after it): a file of that name was created, replaced or removed in the folder the link reaches, a
+ *  network path included. The notice of this run is kept in memory as before; a stat that proves nothing reads as
+ *  before (#1014's `unknown` rule). The start notes the folder ({@link WorkspaceController.linkedStartFolders}). */
+function configFolderLinked(vaultPaths: VaultPaths): boolean {
+  return folderAtItsName(dirname(vaultPaths.descriptorPath)) === 'outside'
+}
+
 /** The IV of the `HRAUMEN1` frame at `path`, base64, or null (unreadable, cut short, another frame). */
 function frameIvOf(path: string): string | null {
   try {
@@ -1602,6 +1643,7 @@ function writeWorkingCopyLostMarker(
   enc: string | null = frameIvOf(vaultPaths.encPath)
 ): void {
   if (enc === null) return
+  if (configFolderLinked(vaultPaths)) return // T2.7 (L-2)
   const path = workingCopyLostPath(vaultPaths)
   const tmp = `${path}.tmp`
   try {
@@ -1626,8 +1668,10 @@ function writeWorkingCopyLostMarker(
   }
 }
 
-/** Remove this build's marker (best-effort); one of another version stays. */
+/** Remove this build's marker (best-effort); one of another version stays. T2.7 (L-2): so does any marker behind a
+ *  `config/` that is a link ({@link configFolderLinked}). */
 function removeWorkingCopyLostMarker(vaultPaths: VaultPaths): void {
+  if (configFolderLinked(vaultPaths)) return
   if (readWorkingCopyLostMarker(vaultPaths).kind !== 'current') return
   try {
     rmSync(workingCopyLostPath(vaultPaths), { force: true })
@@ -2055,6 +2099,21 @@ function folderAtItsName(dir: string): Containment {
   return folderContainment(dirname(dir), dir)
 }
 
+/**
+ * T2.7 security fix round (F-3; FU-P2-6 in P2): may a delete a database row asks for shred `path` as a file of the store
+ * at `storeDir` (`workspace/documents/`, `workspace/images/`)? Only when it lies inside that folder by its text and the
+ * folder holding it is, on the disk, where its path says ({@link folderContainment}: `inside`; a link on the way, a
+ * folder that resolves elsewhere, or a stat that proves nothing answers no). A row names its file by a recorded path or
+ * name, which a later version, a cloned drive or a database the app did not make can point at any file: such a file is
+ * left as it is, and only the row goes. The app writes every stored copy into its store, so its own always pass.
+ */
+export function storeHoldsFile(storeDir: string, path: string): boolean {
+  const store = resolve(storeDir)
+  const full = resolve(path)
+  if (!isInsideDir(store, full)) return false
+  return folderContainment(store, dirname(full)) === 'inside'
+}
+
 /** #1014 round 3: the staged database's or an in-store stage's entry (`documents/`, `images/`), which the start settles:
  *  never kept in a rewritten journal, except one still staged ({@link settleRekeyJournal}). */
 function isStoreOrDatabaseStage(vaultPaths: VaultPaths, staged: string): boolean {
@@ -2131,7 +2190,10 @@ function planRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | nu
       plan.refused += 1
       continue
     }
-    const where = insideWorkspace(ws, entry, memo)
+    // T2.7 security fix round (L-5): an entry that is no full path on this system resolves against the app's working
+    // folder (the drive root, as the launchers start it), so `workspace/hilbertraum.sqlite.enc.new` vouched. It never
+    // does now: it is judged as an entry outside the workspace ({@link fullPathEntry}).
+    const where = fullPathEntry(entry) ? insideWorkspace(ws, entry, memo) : 'outside'
     if (where === 'inside') plan.staged.push(entry)
     else if (where === 'unknown') plan.unknown.push(entry) // round 4: judged again by the next pass
     else plan.deferred.push(entry) // outside it, or (round 5) inside by its text but through a link
@@ -2141,6 +2203,20 @@ function planRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | nu
     else plan.refused += 1
   }
   return plan
+}
+
+/**
+ * T2.7 security fix round (L-5): is the journal entry a full path on this system, one whose meaning no working folder
+ * changes? On Windows a drive letter with its separator (`E:\…`) or a `\\` share or device path; elsewhere a path from
+ * `/`. Not `isAbsolute` alone: on Windows that admits `\workspace\…`, which resolves on the working folder's drive, the
+ * Kit's own drive when the launcher starts the app at its root. Every journal a release wrote names its entries by full
+ * path (built from the drive root the launcher passes, `%~dp0` or `pwd`). An entry that is not one is judged as an entry
+ * outside the workspace (`deferred`), as before for an entry another system wrote (a Windows journal read on Linux, or
+ * the reverse): it never vouches for a stage, and is acted on only as an out-of-store stage the open database lists.
+ */
+function fullPathEntry(entry: string): boolean {
+  if (!isAbsolute(entry)) return false
+  return process.platform !== 'win32' || /^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(entry)
 }
 
 /** #1014: does a `remove` entry name the rotated log? By its file name alone: `win32.basename` splits at `\` and `/`
@@ -3206,13 +3282,32 @@ export function createEncryptedVaultOnDisk(
   let stagedHere = false
   let committed = false
   try {
+    // T2.7 security fix round (F-2): SQLite opens the three names below and writes through a link at any of them
+    // ({@link createMayOpenDatabase}); with one there the create is refused before anything is written.
+    if (!createMayOpenDatabase(vaultPaths.dbPath)) {
+      throw new Error('A workspace database file is a link or has a second name; nothing was created')
+    }
     // #247: a leftover plaintext file at `dbPath` stamped by a NEWER build makes this open
     // throw (handled: the create IPC reports `workspace_newer`) — the key is zeroed either way.
-    const db = openDatabase(vaultPaths.dbPath, { onStampFailed: opts.onStampFailed })
-    seedSettings(db)
-    updateSettings(db, { workspaceMode: 'encrypted' })
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-    db.close()
+    // T2.7 (L-4): any other failure of the open or of its first writes is thrown as the unlock's open throws one, a
+    // `VaultOpenFailedError` that keeps the kind and codes only: SQLite's message for a working file it found quotes that
+    // file's schema, which W-68 keeps out of the log. The handle is closed on the way out.
+    let db: Db | null = null
+    try {
+      db = openDatabase(vaultPaths.dbPath, { onStampFailed: opts.onStampFailed })
+      seedSettings(db)
+      updateSettings(db, { workspaceMode: 'encrypted' })
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+      db.close()
+      db = null
+    } catch (err) {
+      try {
+        db?.close()
+      } catch {
+        /* the open's own failure is the one reported */
+      }
+      throw isWorkspaceNewerError(err) ? err : new VaultOpenFailedError(err)
+    }
     encrypting = true
     encryptFile(vaultPaths.dbPath, staged, fileKey)
     stagedHere = true
@@ -3246,6 +3341,55 @@ export function createEncryptedVaultOnDisk(
     throw err
   } finally {
     fileKey.fill(0)
+  }
+}
+
+/**
+ * T2.7 security fix round (F-2): may the create open its database at `dbPath`? SQLite opens the file, its `-wal` and its
+ * `-shm` by their names and writes through a link at any of them ({@link replayMayWrite} for the start's replay): each
+ * must be absent or a regular file no other name shares (`lstat`, never followed). Unlike the replay's test, the
+ * workspace folder itself may be a link: the create, like the unlock, reads and writes through a workspace folder a user
+ * keeps behind one (T2.16 R2 B2). The app never makes a link, so a working file it left always passes.
+ */
+function createMayOpenDatabase(dbPath: string): boolean {
+  return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].every((path) => {
+    const named = lstatOrNull(path)
+    return named === null || shredNameOf(named).kind === 'file'
+  })
+}
+
+/**
+ * T2.7 security fix round (F-3; FU-P2-6 in P2): the suffix a create sets a leftover aside under, on a build that allows no
+ * plaintext workspace ({@link setLeftoversAside}): `hilbertraum.sqlite.quarantine` with its `-wal` and `-shm` as
+ * `hilbertraum.sqlite.quarantine-wal` and `-shm` (so they stay a pair a person can open), and
+ * `hilbertraum.sqlite.recovery.quarantine`. Chosen so that nothing reads, shreds or vouches for them: the start's sweep
+ * removes exact names (the working file, its `.tmp`, `-wal` and `-shm`), the salvage reads the working file and
+ * `.recovery` only, the stage scan and the rekey journal admit only `.enc.new` names, and the orphaned-stage removal only
+ * `.enc.new` and its temps.
+ */
+export const QUARANTINE_SUFFIX = '.quarantine'
+
+/**
+ * T2.7 security fix round (F-3): a create on a build that allows no plaintext workspace never adopts what it finds. With
+ * no key file and no `.enc`, a working file at `hilbertraum.sqlite` (and its `-wal` and `-shm`) was opened as the new
+ * workspace, its settings kept, and the create's unlock rolled a `.recovery` forward over the new `.enc` when that copy's
+ * time was later: a drive could so hand the user a database the app did not make (rows naming files to shred, settings)
+ * under the user's new key. Each of those names that holds anything is moved, by its name (a link moves as the link), to
+ * its {@link QUARANTINE_SUFFIX} name, replacing a file a create set aside there before; none is opened. A move that fails
+ * (a hold, a folder at the target) throws, and the create fails with nothing of its own written. A newer build's copy
+ * never gets here: the create refuses it first (#985).
+ */
+function setLeftoversAside(vaultPaths: VaultPaths): void {
+  const db = vaultPaths.dbPath
+  const aside = `${db}${QUARANTINE_SUFFIX}`
+  const moves: Array<[string, string]> = [
+    [db, aside],
+    [`${db}-wal`, `${aside}-wal`],
+    [`${db}-shm`, `${aside}-shm`],
+    [`${db}${RECOVERY_SUFFIX}`, `${db}${RECOVERY_SUFFIX}${QUARANTINE_SUFFIX}`]
+  ]
+  for (const [from, to] of moves) {
+    if (lstatOrAbsent(from) !== null) renameSync(from, to)
   }
 }
 
@@ -3926,7 +4070,7 @@ export class WorkspaceController {
    *  ({@link discardedOnlyCopy}). */
   private _discardedOnlyCopy = false
   /** T2.16 (R2 B2): the folders the last {@link init} found to be links to a folder elsewhere ({@link linkedStartFolders}). */
-  private _linkedStartFolders: Array<'workspace' | 'logs'> = []
+  private _linkedStartFolders: Array<'workspace' | 'logs' | 'config'> = []
   /** #985 (review round 3 F3): the last successful unlock left a spent `.recovery` a newer build stamped in place, for the
    *  IPC to log once ({@link takeNewerRecoveryLeft}). */
   private _newerRecoveryLeft = false
@@ -4195,6 +4339,8 @@ export class WorkspaceController {
       const logsPath = this.vaultPaths.logsPath
       if (linkedWorkspace) this._linkedStartFolders.push('workspace')
       if (logsPath && folderAtItsName(logsPath) === 'outside') this._linkedStartFolders.push('logs')
+      // T2.7 (L-2): and `config/`, behind which the #875 marker is neither written nor removed ({@link configFolderLinked}).
+      if (configFolderLinked(this.vaultPaths)) this._linkedStartFolders.push('config')
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
       // If a previous run was killed before lock-on-quit ran, shred the leftover so the
       // decrypted database (+ WAL/SHM) never lingers on disk. Safe (see shredStalePlaintext)
@@ -4315,9 +4461,10 @@ export class WorkspaceController {
   }
 
   /** T2.16 fix round (R2 B2): the folders this start found to be links to a folder elsewhere, and acted through none of:
-   *  `workspace` (no sweep, no rekey recovery), `logs` (the rotated log not removed). For `main/index.ts`'s one
-   *  content-free log line: the folder's role only, never a path. */
-  linkedStartFolders(): ReadonlyArray<'workspace' | 'logs'> {
+   *  `workspace` (no sweep, no rekey recovery), `logs` (the rotated log not removed), and (T2.7, L-2) `config` (the #875
+   *  marker neither written nor removed). For `main/index.ts`'s one content-free log line: the folder's role only, never
+   *  a path. */
+  linkedStartFolders(): ReadonlyArray<'workspace' | 'logs' | 'config'> {
     return this._linkedStartFolders
   }
 
@@ -4597,6 +4744,9 @@ export class WorkspaceController {
       if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()
     } else {
+      // T2.7 (F-3): where no plaintext workspace is allowed, nothing found here is adopted; where one is (a dev build),
+      // the working file is taken into the new workspace as before (the dev → encrypted path).
+      if (!this.allowPlaintext()) setLeftoversAside(this.vaultPaths)
       createEncryptedVaultOnDisk(this.vaultPaths, password, DEFAULT_KDF, { onStampFailed: this.noteStampFailed })
       this._stampPending = false // T2.2: the unlock's open below decides whether the lock retries the stamp
       const { db, key, descriptor } = unlockEncryptedVault(

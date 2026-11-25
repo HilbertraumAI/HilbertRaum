@@ -105,19 +105,29 @@ export function generateDataKey(): Buffer {
  * denial-of-service on the vault. Tampering cannot disclose data (a wrong
  * key still fails the verifier); these bounds just keep the failure mode sane.
  */
-/** Upper bound for a descriptor's argon2id `m`, in KiB (2 GiB). */
-const ARGON2_MAX_M_KIB = 2 ** 21
+/** Upper bound for a descriptor's argon2id `m`, in KiB (1 GiB). T2.7 security fix round (L-1, owner 2026-11-25): it was
+ *  2 GiB, and with `t` up to 64 a descriptor could make one unlock attempt run for about 15 minutes on the main thread
+ *  (measured on the reference box: 3.4 s at m 2^16, t 8); m 2^20 and t 8 keep the worst case near a minute. The shipped
+ *  default (m 19456, t 2, p 1) and every descriptor a published release wrote lie far inside both (F-27: a later version
+ *  that needs more raises the descriptor version, which this build refuses as newer). */
+const ARGON2_MAX_M_KIB = 2 ** 20
 
 /** The upper bound of every KDF parameter a descriptor may raise, per algorithm (`m` in KiB): one table for the derive's
- *  check below and for {@link kdfParamAboveBounds}, so the two cannot drift apart. */
+ *  check below and for {@link kdfParamAboveBounds}, so the two cannot drift apart. T2.7 (L-1): argon2id `t` at most 8
+ *  (was 64); `p` and the scrypt bounds as before. */
 const KDF_UPPER_BOUNDS: Readonly<Record<KdfAlgo, Readonly<Record<string, number>>>> = {
   scrypt: { N: 2 ** 22, r: 32, p: 16 },
-  argon2id: { m: ARGON2_MAX_M_KIB, t: 64, p: 16 }
+  argon2id: { m: ARGON2_MAX_M_KIB, t: 8, p: 16 }
 }
+
+/** T2.7 security fix round (L-4): what a KDF error says of a descriptor value: its type only. The descriptor is plain
+ *  JSON on the drive, so a value quoted into a message reached app.log (a failure line keeps a non-file error's
+ *  message), at any length. */
+const typeOfValue = (value: unknown): string => (Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value)
 
 function validateKdfBounds(params: KdfParams): void {
   if (params.keyLen !== 32) {
-    throw new Error(`KDF keyLen must be 32 (AES-256), got ${String(params.keyLen)}`)
+    throw new Error(`KDF keyLen must be 32 (AES-256), got a value of type ${typeOfValue(params.keyLen)}`)
   }
   if (params.algo === 'scrypt') {
     const { N, r, p } = params
@@ -160,7 +170,8 @@ export function kdfParamAboveBounds(kdf: unknown): string | null {
  * same password + salt + params always yield the same key (so unlock matches encrypt).
  */
 export function deriveKey(password: string, salt: Buffer, params: KdfParams = DEFAULT_KDF): Buffer {
-  if (!isKnownKdfAlgo(params.algo)) throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
+  // T2.7 (L-4): the type only, never the value (`readVaultDescriptorChecked` reads only a string `algo` as newer).
+  if (!isKnownKdfAlgo(params.algo)) throw new Error(`Unsupported KDF algorithm (a value of type ${typeOfValue(params.algo)})`)
   if (params.algo === 'scrypt') {
     if (params.N == null || params.r == null || params.p == null) {
       throw new Error('scrypt parameters (N, r, p) are required')
@@ -181,8 +192,8 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     }
     validateKdfBounds(params)
     // Pure-JS, audited @noble/hashes — no native build. m = memory (KiB), t = iterations.
-    // `maxmem` (bytes) is set at the bound above: @noble/hashes 2.4 lowered its default to
-    // 1 GiB, which would refuse descriptors that validateKdfBounds accepts.
+    // `maxmem` (bytes) is set at the bound above, so the derive never depends on the library's
+    // own default (@noble/hashes 2.4 lowered it to 1 GiB, then below the 2 GiB bound).
     const out = argon2id(password, salt, {
       m: params.m,
       t: params.t,
@@ -190,10 +201,13 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
       dkLen: params.keyLen,
       maxmem: ARGON2_MAX_M_KIB * 1024
     })
-    return Buffer.from(out)
+    // T2.7 (L-7): the key is copied out, and the library's array, its only other copy, zeroed.
+    const key = Buffer.from(out)
+    out.fill(0)
+    return key
   }
   // Unreachable: the check at the top admits only KDF_ALGOS, and each has its branch above.
-  throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
+  throw new Error(`Unsupported KDF algorithm (a value of type ${typeOfValue(params.algo)})`)
 }
 
 /** An AES-256-GCM ciphertext + its IV and auth tag. */
@@ -220,7 +234,21 @@ export function encrypt(key: Buffer, plaintext: Buffer): EncryptedBlob {
 export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
   const decipher = createDecipheriv('aes-256-gcm', key, blob.iv)
   decipher.setAuthTag(blob.tag)
-  return Buffer.concat([decipher.update(blob.ciphertext), decipher.final()])
+  // T2.7 (L-7): the pieces are zeroed once joined: the plaintext (the unwrapped data key, among others) stays in the
+  // returned buffer only. A tag that fails throws from `final()`, before the join; the piece `update()` returned is
+  // zeroed then too.
+  const head = decipher.update(blob.ciphertext)
+  let tail: Buffer
+  try {
+    tail = decipher.final()
+  } catch (err) {
+    head.fill(0)
+    throw err
+  }
+  const out = Buffer.concat([head, tail])
+  head.fill(0)
+  tail.fill(0)
+  return out
 }
 
 // ---- Vault format versions (#845) -------------------------------------------------

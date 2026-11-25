@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -10,6 +11,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -19,11 +21,14 @@ import {
   REKEY_SUFFIX,
   ROTATED_ENCRYPTED_LOG_NAME,
   VaultRecoveryBlockedError,
+  WORKING_COPY_LOST_MARKER,
   WorkspaceController,
+  createEncryptedVaultOnDisk,
   encryptFile
 } from '../../src/main/services/workspace-vault'
 import {
   ENCRYPTION_REQUIRED,
+  FAST_KDF,
   endedUnlocked,
   freshVaultPaths,
   lockedVault,
@@ -31,6 +36,7 @@ import {
   unlockedController,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 import { FOLDER_LINKS, UNSEEN_JUNCTIONS, unlinkFolder, type FolderLink } from '../helpers/folder-links'
 
 // T2.16 fix round (W-83, frozen F-9; G-43 (b)): the start of an encrypted workspace runs at every launch, before any
@@ -349,6 +355,213 @@ describe('the workspace folder or the logs folder itself a link (T2.16, R2 B2)',
         expect(statSync(join(elsewhere, 'hilbertraum.sqlite')).isFile()).toBe(true)
       } finally {
         unlinkFolder(ws)
+      }
+    })
+  }
+})
+
+// T2.7 security fix round (F-1, F-2; frozen F-9): the vault writes every file it replaces through a temp at a fixed name
+// beside it and renames that temp into place. A drive formatted NTFS, APFS or ext4 can carry a link at such a name (a
+// Kit's exFAT cannot), and opening the temp with 'w' wrote through it into the file it reaches. Each write temp is now
+// removed by its name first (`lstat`, never followed) and created anew ('wx'). Each row puts a link at one name, to a
+// file outside the workspace, and requires that file byte for byte; the vault's own file then is a regular file.
+
+/** A file link at `link` to the file `target`. */
+type FileLink = (target: string, link: string) => void
+const fileSymlink: FileLink = (target, link) => symlinkSync(target, link, 'file')
+/** Can this account make a symbolic link to a file? (On Windows only with Developer Mode or the privilege.) */
+function canLinkFiles(make: FileLink): boolean {
+  const root = tempRoot('file-links-can')
+  try {
+    writeFileSync(join(root, 'target'), '')
+    make(join(root, 'target'), join(root, 'link'))
+    return true
+  } catch {
+    return false
+  }
+}
+/** The file links a drive can carry: a hard link needs no privilege; a symbolic link to a file is made where this
+ *  account may (here, on Windows, it may not: the macOS and Ubuntu CI legs run it). */
+const FILE_LINKS: Array<[string, FileLink, boolean]> = [
+  ['a hard link', (target, link) => linkSync(target, link), true],
+  ['a symbolic link', fileSymlink, canLinkFiles(fileSymlink)]
+]
+
+/** A file outside `config/` and `workspace/` (under `<root>/elsewhere/`), with `text` in it. */
+const victimOf = (vp: FreshVaultPaths, name: string, text: string): string => plant(join(vp.root, 'elsewhere', name), text)
+
+/** `path` is a regular file no other name shares, as the app writes its own files. */
+const ownFile = (path: string): boolean => {
+  const named = lstatSync(path)
+  return named.isFile() && named.nlink <= 1
+}
+
+describe('a link at one of the vault’s fixed write-temp names is never written through (T2.7, F-1, F-2)', () => {
+  // F-1: the unlock decrypts the database into `hilbertraum.sqlite.tmp` and renames it into place. On a drive with no
+  // workspace yet the start runs no sweep, and the create's unlock met the link there: the whole database was written
+  // into the file it reached, the session wrote into it under the database's name, and the lock only unlinked that name.
+  for (const [label, make, can] of FILE_LINKS) {
+    it.skipIf(!can)(`${label} at the decrypt's temp name before a create: the file it reaches never gets the workspace (F-1)`, () => {
+      const vp = freshVaultPaths('start-links-f1')
+      const victim = victimOf(vp, 'notes.txt', 'USER FILE: notes')
+      make(victim, `${vp.dbPath}.tmp`)
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(ctl.create(PW, 'encrypted').state).toBe('unlocked')
+        expect(ownFile(vp.dbPath), 'the working file is the decrypt’s own').toBe(true)
+        updateSettings(ctl.requireDb(), { contextTokens: 7373 })
+        expect(readFileSync(victim, 'utf8'), 'after the create and a write').toBe('USER FILE: notes')
+        ctl.lock()
+        expect(readFileSync(victim, 'utf8'), 'after the lock').toBe('USER FILE: notes')
+        expect(ctl.unlock(PW).state).toBe('unlocked')
+        expect(getSettings(ctl.requireDb()).contextTokens).toBe(7373)
+      } finally {
+        ctl.shutdown()
+      }
+    })
+  }
+
+  // F-1, the async twin: a document or image copy is decrypted into `<dest>.tmp` and renamed into place.
+  it('a hard link at a copy’s decrypt temp name: decryptFileAsync writes the plaintext only to its own file (F-1)', async () => {
+    const vp = lockedVault('start-links-f1-async', PW)
+    const ctl = unlockedController(vp, PW)
+    try {
+      const src = plant(join(vp.root, 'src.txt'), 'the document text')
+      const stored = join(dirname(vp.dbPath), 'documents', 'doc.txt.enc')
+      mkdirSync(dirname(stored), { recursive: true })
+      await ctl.documentCipher()!.encryptFileAsync(src, stored)
+      const dest = join(dirname(vp.dbPath), 'documents', 'doc.parse.txt')
+      const victim = victimOf(vp, 'letter.txt', 'USER FILE: letter')
+      linkSync(victim, `${dest}.tmp`)
+      await ctl.documentCipher()!.decryptFileAsync(stored, dest)
+      expect(readFileSync(victim, 'utf8')).toBe('USER FILE: letter')
+      expect(readFileSync(dest, 'utf8')).toBe('the document text')
+      expect(ownFile(dest)).toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // F-2: the lock re-encrypts the working file into `hilbertraum.sqlite.enc.tmp` (no start removes that name).
+  it('a hard link at the lock’s encrypt temp name: the file it reaches is not overwritten with ciphertext (F-2)', () => {
+    const vp = lockedVault('start-links-f2-enc', PW)
+    const victim = victimOf(vp, 'workspace.json', 'USER FILE: another drive’s key file')
+    const ctl = unlockedController(vp, PW)
+    try {
+      linkSync(victim, `${vp.encPath}.tmp`)
+      updateSettings(ctl.requireDb(), { contextTokens: 6464 })
+      expect(ctl.lock().state).toBe('locked')
+      expect(readFileSync(victim, 'utf8')).toBe('USER FILE: another drive’s key file')
+      expect(ownFile(vp.encPath)).toBe(true)
+      expect(ctl.unlock(PW).state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6464)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // F-2, the async twin: an imported document or image is encrypted into `<dest>.tmp` and renamed into place.
+  it('a hard link at a copy’s encrypt temp name: encryptFileAsync writes only its own file (F-2)', async () => {
+    const vp = lockedVault('start-links-f2-async', PW)
+    const ctl = unlockedController(vp, PW)
+    try {
+      const src = plant(join(vp.root, 'src.txt'), 'the document text')
+      const stored = join(dirname(vp.dbPath), 'documents', 'doc.txt.enc')
+      mkdirSync(dirname(stored), { recursive: true })
+      const victim = victimOf(vp, 'letter.txt', 'USER FILE: letter')
+      linkSync(victim, `${stored}.tmp`)
+      await ctl.documentCipher()!.encryptFileAsync(src, stored)
+      expect(readFileSync(victim, 'utf8')).toBe('USER FILE: letter')
+      expect(ownFile(stored)).toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // F-2: the create and every password change write the descriptor into `config/workspace.json.tmp` (no start step
+  // looks in `config/`).
+  it('a hard link at the descriptor’s temp name before a create: the file it reaches is not overwritten (F-2)', () => {
+    const vp = freshVaultPaths('start-links-f2-desc')
+    const victim = victimOf(vp, 'other-kit-workspace.json', 'USER FILE: another workspace’s key file')
+    linkSync(victim, `${vp.descriptorPath}.tmp`)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.create(PW, 'encrypted').state).toBe('unlocked')
+      expect(readFileSync(victim, 'utf8')).toBe('USER FILE: another workspace’s key file')
+      expect(ownFile(vp.descriptorPath)).toBe(true)
+      ctl.lock()
+      expect(ctl.unlock(PW).state).toBe('unlocked')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // F-2: the create opens `hilbertraum.sqlite` with SQLite, which opens it, its `-wal` and its `-shm` by their names and
+  // writes through a link at any of them (T2.16 R1 B-2 measured it for the replay). Before that open, each of the three
+  // must be absent or a regular file no other name shares, as the replay requires (`replayMayWrite`); otherwise the
+  // create is refused, with nothing written. (The controller's create moves a leftover at these names aside first on a
+  // build that allows no plaintext, F-3: these rows call the create's on-disk step itself.)
+  it.each<[string, (path: string) => void]>([
+    // The database of another program: SQLite would open it and run the app's migrations in it.
+    [
+      'hilbertraum.sqlite',
+      (path) => {
+        const raw = openRawDb(path)
+        try {
+          raw.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('USER ROW');")
+        } finally {
+          raw.close()
+        }
+      }
+    ],
+    ['hilbertraum.sqlite-wal', (path) => writeFileSync(path, 'USER FILE: a write-ahead log’s name')],
+    ['hilbertraum.sqlite-shm', (path) => writeFileSync(path, 'USER FILE: a shared-memory file’s name')]
+  ])('a hard link at %s before the create opens the database: the create is refused, the file it reaches stays (F-2)', (name, makeVictim) => {
+    const vp = freshVaultPaths('start-links-f2-sqlite')
+    const victim = join(vp.root, 'elsewhere', 'victim')
+    mkdirSync(dirname(victim), { recursive: true })
+    makeVictim(victim)
+    const before = sha(victim)
+    linkSync(victim, join(dirname(vp.dbPath), name))
+    expect(thrownBy(() => createEncryptedVaultOnDisk(vp, PW, FAST_KDF)).name).toBe('Error')
+    expect(sha(victim)).toBe(before)
+    expect(existsSync(vp.descriptorPath), 'nothing committed').toBe(false)
+    expect(existsSync(vp.encPath)).toBe(false)
+  })
+})
+
+// T2.7 security fix round (L-2): the start writes and removes the #875 marker in `config/`, before any password. With
+// `config/` a link to a folder elsewhere, a file of that name was created, replaced or removed there. Now, as behind a
+// linked workspace or logs folder (T2.16 R2 B2), the marker is neither written nor removed behind it (this run still
+// shows the notice), and the start notes the folder for its log line.
+describe('the config folder a link (T2.7, L-2)', () => {
+  for (const [label, make, can] of FOLDER_LINKS) {
+    it.skipIf(!can)(`the config folder ${label} to a folder elsewhere: the start and the unlock neither write nor remove the #875 marker there, and the start notes it`, () => {
+      const vp = lockedVault('start-links-config', PW)
+      endedUnlocked(vp, 8282, PW) // an unclean end: the start's sweep records it in a marker
+      const config = dirname(vp.descriptorPath)
+      const elsewhere = join(vp.root, 'config-elsewhere')
+      renameSync(config, elsewhere)
+      make(elsewhere, config)
+      try {
+        // A marker of this build's format naming another snapshot: the start would remove it as stale.
+        const marker = plant(join(elsewhere, WORKING_COPY_LOST_MARKER), JSON.stringify({ v: 1, enc: 'AAAAAAAAAAAAAAAA', cause: 'lock' }))
+        const before = filesBelow(elsewhere)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        try {
+          expect(filesBelow(elsewhere), 'after the start').toEqual(before)
+          expect(ctl.linkedStartFolders()).toEqual(['config'])
+          expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+          expect(ctl.unlock(PW).state).toBe('unlocked')
+          expect(readFileSync(marker, 'utf8'), 'after the unlock').toBe(JSON.stringify({ v: 1, enc: 'AAAAAAAAAAAAAAAA', cause: 'lock' }))
+        } finally {
+          ctl.shutdown()
+        }
+      } finally {
+        unlinkFolder(config)
       }
     })
   }

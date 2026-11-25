@@ -15,7 +15,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, join, parse, relative, resolve } from 'node:path'
 import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
@@ -158,8 +158,11 @@ function failedLockLeftovers(vp: FreshVaultPaths): string[] {
 }
 
 /** T2.9 fix round, R1-6: each KDF parameter this build bounds from above, with the first value past its bound (argon2id
- *  m 2 GiB in KiB, t 64, p 16; scrypt N 2^22, a power of two, r 32, p 16; `security/crypto.ts`). */
+ *  m 1 GiB in KiB, t 8, p 16; scrypt N 2^22, a power of two, r 32, p 16; `security/crypto.ts`). T2.7 (L-1) lowered the
+ *  argon2id bounds from m 2 GiB and t 64: the first values past those stay too, and read newer as before. */
 const KDF_ABOVE_BOUNDS = [
+  ['argon2id', 'm', 2 ** 20 + 1],
+  ['argon2id', 't', 9],
   ['argon2id', 'm', 2 ** 21 + 1],
   ['argon2id', 't', 65],
   ['argon2id', 'p', 17],
@@ -1205,6 +1208,44 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       expect(ctl.takeStageOutcome()).toBe('removed')
     } finally {
       ctl.shutdown()
+    }
+  })
+
+  // T2.7 security fix round (L-5): an entry is resolved against the app's working folder, which the launchers set to the
+  // drive root, so an entry by a relative name (`workspace/hilbertraum.sqlite.enc.new`) resolved inside the workspace
+  // and vouched: the start rolled a stage nothing proves is this workspace's over `.enc`, with no key check. Every
+  // journal a release wrote names its entries by their full path (they are built from the drive root the launcher
+  // passes). An entry that is not one (on Windows: no drive letter and no `\\` share) now never vouches: it is judged as
+  // an entry outside the workspace, and the stage stays in doubt for the unlock's key check.
+  it.each<[string, string]>([
+    ['a relative name', join('workspace', 'hilbertraum.sqlite.enc.new')],
+    ...(process.platform === 'win32'
+      ? ([['a name rooted on the working folder’s drive', '\\{root}\\workspace\\hilbertraum.sqlite.enc.new']] as Array<[string, string]>)
+      : [])
+  ])('a journal that names the stage by %s, the working folder at the drive root: it never vouches for a crash leftover (L-5)', (_case, spelled) => {
+    const vp = workspaceWithMarker('fmtguard-l5')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const rootOnDrive = vp.root.slice(parse(vp.root).root.length)
+    rekeyJournal(vp, 1, [spelled.replace('{root}', rootOnDrive)])
+    const before = snapshot(vp.root)
+    const cwd = process.cwd()
+    process.chdir(vp.root)
+    try {
+      expect(resolve(spelled.replace('{root}', rootOnDrive)), 'the entry resolves to the stage').toBe(resolve(stagedOf(vp)))
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(snapshot(vp.root)).toEqual(before)
+        ctl.unlock(PW)
+        expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+        expect(existsSync(stagedOf(vp))).toBe(false)
+        expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+        expect(ctl.takeStageOutcome()).toBe('removed')
+      } finally {
+        ctl.shutdown()
+      }
+    } finally {
+      process.chdir(cwd)
     }
   })
 

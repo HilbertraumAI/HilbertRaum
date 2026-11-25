@@ -1329,7 +1329,10 @@ export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
     db = openReadWriteConnection(dbPath)
     // #911: the start also runs this before any password, on a file anyone with write access could plant: as in the
     // probe, no function the file's schema names runs with the trust SQLite gives a schema by default.
-    db.exec('PRAGMA trusted_schema = OFF;')
+    // T2.7 security fix round (L-6): and SQLite checks each cell's size against its page as it reads (its own advice for
+    // a database file from an untrusted source); a cell that does not fit is SQLITE_CORRUPT, which the replay already
+    // reads as `damaged`.
+    db.exec('PRAGMA trusted_schema = OFF; PRAGMA cell_size_check = ON;')
     const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
     return { outcome: row.busy ? 'busy' : 'checkpointed', log: row.log, checkpointed: row.checkpointed }
   } catch (err) {
@@ -1412,11 +1415,15 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
   const indexRoots: number[] = []
   let db: Db | null = null
   try {
-    db = new DatabaseSync(immutableUri(path), { readOnly: true })
+    // T2.7 security fix round (L-6): `defensive: true` as well, explicit (node:sqlite's default depends on the runtime, as
+    // for the read-write connection above): the file may be one anyone planted on the drive.
+    db = new DatabaseSync(immutableUri(path), { readOnly: true, defensive: true })
     // The schema read here is whatever the file holds, possibly before any unlock (the init() salvage): no function a
     // view, trigger or generated column in it names runs with the trust SQLite gives a schema by default (ON in
     // node:sqlite's build). The app's own schema needs no such trust (#876 review round 3).
-    db.exec('PRAGMA trusted_schema = OFF;')
+    // T2.7 (L-6): and each cell's size is checked against its page as it is read (`cell_size_check`), SQLite's own advice
+    // for an untrusted database file; a cell that does not fit is SQLITE_CORRUPT, read as `damaged` below.
+    db.exec('PRAGMA trusted_schema = OFF; PRAGMA cell_size_check = ON;')
     const objects = db.prepare('SELECT type, name, rootpage FROM sqlite_schema').all() as Array<{
       type: string
       name: string

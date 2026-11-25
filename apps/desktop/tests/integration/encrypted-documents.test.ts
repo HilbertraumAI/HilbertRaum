@@ -163,6 +163,25 @@ describe('encrypted document cache (H1)', () => {
       .get(doc.id) as unknown as { stored_path: string }
     expect(row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
   })
+
+  // T2.7 security fix round (F-3, FU-P2-6): the migration above shreds the plaintext copy it found. With no copy under
+  // the row's own name in the store, `locateStoredCopy` finds the recorded `stored_path` verbatim, which may name a file
+  // outside the store (a later version's row, a cloned drive's, one in a database the app did not make), and that file
+  // was shredded. Now only a copy inside the store folder is shredded; one elsewhere stays.
+  it('a legacy row whose stored_path names a plaintext file outside the store: the re-index leaves that file (F-3)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    await processDocument(db, store, doc.id, {}) // a plaintext stored copy in the store
+    for (const name of readdirSync(store)) rmSync(join(store, name))
+    const victim = join(tempRoot('encdoc-outside'), 'contract-user-copy.txt')
+    writeFileSync(victim, SECRET_TEXT)
+    db.prepare('UPDATE documents SET stored_path = ?, stored_name = NULL WHERE id = ?').run(victim, doc.id)
+
+    await reindexDocument(db, store, doc.id, { cipher: testCipher() })
+
+    expect(readFileSync(victim, 'utf8')).toBe(SECRET_TEXT)
+  })
 })
 
 // DB-2 / DB-7: concurrent reads of ONE encrypted copy each decrypt into their own `.parse`

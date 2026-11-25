@@ -23,6 +23,7 @@ import https from 'node:https'
 import net from 'node:net'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { openDatabase } from '../../src/main/services/db'
+import { createConversation } from '../../src/main/services/chat'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { DEFAULT_SETTINGS, type PrivacyPolicy } from '../../src/shared/types'
 import {
@@ -45,6 +46,7 @@ import {
   applyPendingRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
+  QUARANTINE_SUFFIX,
   PlaintextNotAllowedError,
   VaultDescriptorMissingError,
   VaultOpenFailedError,
@@ -279,11 +281,12 @@ describe('encrypted vault lifecycle', () => {
   // the two used to leave that file, and the next start's rekey recovery rolls ANY `.enc.new` forward under a v2
   // descriptor: a workspace put back into the same folder (troubleshooting's "go back" step) had its `.enc` shredded and
   // replaced by the failed create's empty database, under a key nobody has. A directory where the descriptor's temp
-  // goes fails the commit's first write for real (EISDIR), after the stage.
+  // goes fails the commit's first write for real, after the stage (EEXIST since T2.7's F-2: the temp is created with
+  // 'wx', and a folder at its name is left; with 'w' it was EISDIR).
   it('a create that fails before its commit leaves no staged file, so a workspace put back later opens intact (#954 S-1)', () => {
     const vp = freshVaultPaths('vault')
     mkdirSync(`${vp.descriptorPath}.tmp`)
-    expect(() => createEncryptedVaultOnDisk(vp, 'brand-new-pw', FAST_KDF)).toThrow(/EISDIR/)
+    expect(() => createEncryptedVaultOnDisk(vp, 'brand-new-pw', FAST_KDF)).toThrow(/EEXIST/)
     expect(existsSync(vp.descriptorPath)).toBe(false) // not committed
     expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
     rmSync(`${vp.descriptorPath}.tmp`, { recursive: true })
@@ -367,8 +370,9 @@ describe('streaming file crypto (M5)', () => {
   })
 
   // Walk round (#956's lock line in the real app): an encrypt that fails removes its temp best-effort. A directory at
-  // the temp's name failed the open (EISDIR), and the cleanup's own `rm` of that directory threw `ERR_FS_EISDIR` over
-  // it, so the lock's log line named the cleanup, not the cause.
+  // the temp's name failed the open (EISDIR; EEXIST since T2.7's F-2, which creates the temp with 'wx' and leaves a folder
+  // at its name), and the cleanup's own `rm` of that directory threw `ERR_FS_EISDIR` over it, so the lock's log line
+  // named the cleanup, not the cause.
   it('an encrypt whose temp is a directory rethrows the open error, not the cleanup’s', () => {
     const src = tmpFile('plain.bin', randomBytes(64))
     const enc = `${src}.enc`
@@ -379,7 +383,7 @@ describe('streaming file crypto (M5)', () => {
     } catch (err) {
       thrown = err as NodeJS.ErrnoException
     }
-    expect({ code: thrown?.code, syscall: thrown?.syscall }).toEqual({ code: 'EISDIR', syscall: 'open' })
+    expect({ code: thrown?.code, syscall: thrown?.syscall }).toEqual({ code: 'EEXIST', syscall: 'open' })
     expect(existsSync(enc)).toBe(false)
   })
 
@@ -917,6 +921,86 @@ describe('WorkspaceController', () => {
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, true)
     ctrl.init()
     expect(() => ctrl.create('x', 'plaintext_dev')).toThrow(PlaintextNotAllowedError)
+  })
+
+  // T2.7 security fix round (F-3, FU-P2-6 in P2): a create opened a working file it found at `hilbertraum.sqlite` (and
+  // its `-wal`) as the new workspace, kept its settings, and its unlock rolled a `.recovery` forward over the new `.enc`
+  // when that copy's time was later. A drive with no key file and no `.enc` could so hand the user a database the app
+  // did not make, its rows and settings encrypted under the user's new key. On a build that allows no plaintext
+  // workspace, a create now moves such leftovers aside under `<name>.quarantine` (`-wal` and `-shm` as
+  // `hilbertraum.sqlite.quarantine-wal` / `-shm`), opens none of them, and starts an empty database.
+  const quarantined = (path: string): string => `${path}${QUARANTINE_SUFFIX}`
+  const conversationCount = (ctl: WorkspaceController): number =>
+    (ctl.requireDb().prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n
+
+  it('a working database with its -wal and -shm and no key file: the create moves the three aside unchanged and starts an empty workspace (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-create')
+    const planted = openDatabase(vp.dbPath)
+    seedSettings(planted)
+    updateSettings(planted, { contextTokens: 7373 })
+    createConversation(planted, { title: 'planted' })
+    leaveAsKilled(vp, planted) // the main file, a -wal holding its last commits, and the -shm
+    const names = [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]
+    const before = names.map((path) => readFileSync(path).toString('base64'))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState().state).toBe('uninitialized')
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+      expect(conversationCount(ctl)).toBe(0)
+      const aside = [quarantined(vp.dbPath), `${quarantined(vp.dbPath)}-wal`, `${quarantined(vp.dbPath)}-shm`]
+      expect(aside.map((path) => readFileSync(path).toString('base64'))).toEqual(before)
+      ctl.lock()
+      expect(aside.every((path) => existsSync(path)), 'the next lock leaves them as they are').toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('a .recovery copy dated in the future and no key file: the create moves it aside and never rolls it forward (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-recovery')
+    const planted = openDatabase(vp.dbPath)
+    seedSettings(planted)
+    updateSettings(planted, { contextTokens: 7474 })
+    createConversation(planted, { title: 'planted' })
+    planted.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    planted.close()
+    const recovery = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    renameSync(vp.dbPath, recovery)
+    const future = new Date('2099-01-01T00:00:00Z')
+    utimesSync(recovery, future, future)
+    const before = readFileSync(recovery).toString('base64')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+      expect(conversationCount(ctl)).toBe(0)
+      expect(existsSync(recovery)).toBe(false)
+      expect(readFileSync(quarantined(recovery)).toString('base64')).toBe(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The other side of the owner's call: where a plaintext workspace is allowed (a dev build), a create still adopts the
+  // working file it finds, as before (the dev → encrypted path). The controller is not started here: a dev start opens
+  // that file as the plaintext workspace itself, and a create is refused while it is open.
+  it('a dev build that allows a plaintext workspace: the create still takes the working file it finds into the new workspace (F-3)', () => {
+    const vp = freshVaultPaths('vault-f3-dev')
+    const dev = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    dev.init()
+    updateSettings(dev.requireDb(), { contextTokens: 7575 })
+    dev.shutdown()
+    const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    try {
+      expect(ctl.create('fresh-password', 'encrypted').state).toBe('unlocked')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(7575)
+      expect(existsSync(quarantined(vp.dbPath))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
   })
 
   it('shreds a leftover plaintext DB from a crash on startup, staying LOCKED (H1)', () => {
