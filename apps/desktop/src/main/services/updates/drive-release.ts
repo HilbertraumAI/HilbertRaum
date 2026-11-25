@@ -13,7 +13,7 @@
 //
 // The reader logs nothing, caches nothing and never throws. The startup line (T3.2) is where F-13's "is logged" happens.
 
-import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseSemver } from './version'
 
@@ -101,11 +101,22 @@ export function parseDriveReleaseText(text: string): Record<string, unknown> | D
 }
 
 /**
+ * How the record is opened: read only, and on POSIX also O_NOFOLLOW (a link put at the name after the `lstat` fails the
+ * open) and O_NONBLOCK (a pipe put there cannot hold the start; a regular file reads as before). Windows has neither
+ * flag, so there the open follows a link put at the name in between to what it names. The same flags as the update
+ * log's own source reads (update-log.ts).
+ */
+const OPEN_FLAGS = constants.O_RDONLY | (process.platform === 'win32' ? 0 : (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+
+/**
  * Read the record at `<rootPath>/config/drive-release.json` as text and parse it. Never throws. One `lstat` first:
  * anything but a regular file at the name is damaged and never opened or followed (a link to a record included, the
  * #1047 rule at a fixed name; a pipe would block the main thread). Larger than the limit is damaged and never opened;
- * a file that grew since is read to one byte past the limit and is damaged too. The text is decoded leniently: a byte
- * that is not UTF-8 becomes U+FFFD, which no version holds.
+ * a file that grew since is read to one byte past the limit and is damaged too. What was opened is checked again, on
+ * its descriptor: anything put at the name between the `lstat` and the open that is no regular file is damaged too
+ * (what remains of that window: on Windows a link put there is followed to the file it names, and a file cut to 0 bytes
+ * there reads as `not-json`). The text is decoded leniently: a byte that is not UTF-8 becomes U+FFFD, which no version
+ * holds.
  */
 export function readDriveReleaseFile(rootPath: string): DriveReleaseFile {
   const path = join(rootPath, ...DRIVE_RELEASE_REL.split('/'))
@@ -115,17 +126,23 @@ export function readDriveReleaseFile(rootPath: string): DriveReleaseFile {
     if (!info.isFile()) return { kind: 'damaged', fault: 'not-a-file' }
     if (info.size === 0) return { kind: 'damaged', fault: 'empty' }
     if (info.size > DRIVE_RELEASE_MAX_BYTES) return { kind: 'damaged', fault: 'too-large' }
-    fd = openSync(path, 'r')
+    fd = openSync(path, OPEN_FLAGS)
   } catch (err) {
     return readFailure(err)
   }
   let bytes: Buffer
   try {
-    bytes = readAtMost(fd, Math.min(fstatSync(fd).size, DRIVE_RELEASE_MAX_BYTES) + 1, DRIVE_RELEASE_MAX_BYTES + 1)
+    const opened = fstatSync(fd)
+    if (!opened.isFile()) return { kind: 'damaged', fault: 'not-a-file' }
+    bytes = readAtMost(fd, Math.min(opened.size, DRIVE_RELEASE_MAX_BYTES) + 1, DRIVE_RELEASE_MAX_BYTES + 1)
   } catch (err) {
     return readFailure(err)
   } finally {
-    closeSync(fd)
+    try {
+      closeSync(fd)
+    } catch {
+      // The read's answer stands: closing a descriptor opened for reading loses nothing when the close fails.
+    }
   }
   if (bytes.length > DRIVE_RELEASE_MAX_BYTES) return { kind: 'damaged', fault: 'too-large' }
   const parsed = parseDriveReleaseText(bytes.toString('utf8'))

@@ -16,15 +16,16 @@
 // One definition: the read, the version check, the root-name rule and the serializer are the app's own module
 // apps/desktop/src/main/services/updates/drive-release.ts, loaded through Node's type stripping (Node 22.18 or later,
 // 23.6 or later; ts-sibling-imports resolves its extension-less import of ./version). A Node without type stripping is
-// refused with one line. Node may print a MODULE_TYPELESS_PACKAGE_JSON warning when it loads the module (that
-// package.json names no module type): harmless, and `node --no-warnings` silences it. Every line of the helper's own
-// starts with "drive-release.json".
+// refused with one line, and so is a reader that cannot be loaded (a partial checkout, a Node without module hooks).
+// Node may print a MODULE_TYPELESS_PACKAGE_JSON warning when it loads the module (that package.json names no module
+// type): harmless, and `node --no-warnings` silences it. Every line of the helper's own starts with "drive-release.json".
 //
 // Never written through or over a link: a link or a folder at config/ or at the record's name is refused. The record
 // goes to config/drive-release.json.tmp first, is flushed to the disk, then renamed over the old one.
 //
 // Exit codes: 0 written (with --dry-run: computed and printed, nothing written) · 1 refused or failed: nothing written,
-// an existing record untouched, no temporary file left · 2 usage.
+// an existing record untouched, no temporary file left; or, said as such, the record was written but could not be read
+// back as written (the old one is replaced then) · 2 usage.
 
 import { createHash } from 'node:crypto'
 import { closeSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -187,7 +188,7 @@ function writeRecord(dr, root, dryRun) {
   writeAtomically(join(config, 'drive-release.json'), text)
   const back = dr.readDriveRelease(root)
   if (back.kind !== 'record' || dr.driveAppVersion(back) !== choice.value) {
-    console.error(`${NAME}: the written record does not read back as written; check the drive`)
+    console.error(`${NAME}: the record was written but could not be read back as written; check the drive`)
     return 1
   }
   console.log(`${NAME}: ${summary}`)
@@ -204,8 +205,14 @@ async function main(argv) {
     console.error(`${NAME}: this Node (${process.version}) has no type stripping, so it cannot load the reader; use Node 22.18 or later; nothing written`)
     return 1
   }
-  registerTsSiblingImports()
-  const dr = await import(pathToFileURL(READER).href)
+  let dr
+  try {
+    registerTsSiblingImports()
+    dr = await import(pathToFileURL(READER).href)
+  } catch (err) {
+    console.error(`${NAME}: the reader could not be loaded (${errorCode(err)}); nothing written`)
+    return 1
+  }
   try {
     return writeRecord(dr, resolve(args.target), args.dryRun)
   } catch (err) {

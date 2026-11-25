@@ -28,3 +28,18 @@ reader module, and `tree` and `writes` through the helper's command line in a re
 proves that the helper loads the TypeScript reader through Node's type stripping). Locked by
 `../../golden-fixtures.sha256`. What T3.3b adds for `config/kit-support.txt` (F-13 includes it) joins this folder with
 its own lines.
+
+What is frozen and what is not: `read` and `noCache` are F-13, release 1's reader, for ever; no answer there ever
+changes, and a new case is a new vector. `artifacts`, `tree` and `writes` (with `expected-record.json`) pin the HEAD
+helper and the root-name rule `rootArtifactOf`, which are replaceable: a later builder's helper may write differently
+within F-13's field meanings, and P6 freezes the root names (F-18). The case rule is P6's to decide (CF-33; review m7:
+`rootArtifactOf` matches a name byte for byte, while the Windows start file's glob ignores case). A change there
+updates those vectors and this folder's manifest lines, never `read` or `noCache`.
+
+Added in T3.3a's fix round 1 (2026-11-25, at `6f1b388f`), by hand like the rest: `R27` (review m1: a `config/` that is
+itself a link is followed, the sheet's residual R27) and `W30` (review M1: what the helper makes of kept values that a
+double cannot hold, derived from ECMA-262's `JSON.parse` and `JSON.stringify` over IEEE binary64 and checked with
+integer arithmetic, never taken from the helper's output). The test file's rows R28 (something put at the name between
+the reader's `lstat` and its open), R29 (a close that fails), W31 (a reader that cannot be loaded) and W32 (a record
+that does not read back) take their expected values from `read` (R12a), `expected-record.json` and the helper's
+documented lines; they add no file here.

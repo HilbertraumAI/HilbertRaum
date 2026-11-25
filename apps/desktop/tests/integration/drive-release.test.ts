@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   driveAppVersion,
   readDriveRelease,
@@ -12,7 +13,7 @@ import {
   type RootEntryKind
 } from '../../src/main/services/updates/drive-release'
 import { DESKTOP_ROOT, REPO_ROOT } from '../helpers/repo-files'
-import { testBudgetMs, within } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, within } from '../helpers/hang-budget'
 import { makeUnreadable } from '../helpers/unreadable-dir'
 
 // F-13 (app-update plan Appendix B, W-20; docs/app-updates.md §8.5, §5.10 table B.11): what release 1 makes of
@@ -80,6 +81,10 @@ const GOLDEN = JSON.parse(readFileSync(join(GOLDEN_DIR, 'vectors.json'), 'utf8')
 const EXPECTED_RECORD = readFileSync(join(GOLDEN_DIR, 'expected-record.json'))
 const GOLDEN_PATHS = (JSON.parse(EXPECTED_RECORD.toString('utf8')) as { files: Array<{ path: string }> }).files.map((f) => f.path)
 const HELPER = join(REPO_ROOT, 'scripts', 'lib', 'write-drive-release.mjs')
+const READER_TS = join(DESKTOP_ROOT, 'src', 'main', 'services', 'updates', 'drive-release.ts')
+const SIBLING_IMPORTS = join(REPO_ROOT, 'scripts', 'lib', 'ts-sibling-imports.mjs')
+/** The golden's answer for a file holding `{"app_version":"0.2.0"}` (R12a), for the rows that read one outside `read`. */
+const R12A = GOLDEN.read.find((v) => v.id === 'R12a')!
 
 const isWindows = process.platform === 'win32'
 const isPosixRoot = process.getuid?.() === 0
@@ -166,7 +171,9 @@ async function placeAt(root: string, at: At, parts: Part[] | undefined): Promise
       return () => undefined
     case 'no-config':
     case 'absent':
+      return () => undefined
     case 'config-link':
+      if (parts !== undefined) writeFileSync(file, bytes) // through the link, into the folder it points to
       return () => undefined
     case 'config-is-file':
       writeFileSync(join(root, 'config'), 'not a folder')
@@ -199,13 +206,59 @@ async function placeAt(root: string, at: At, parts: Part[] | undefined): Promise
   }
 }
 
-/** A scratch drive root with config/drive.json, or without config/ where `at` needs that. */
+/** A scratch drive root with config/drive.json, or without config/ where `at` needs that; for `config-link` config/ is a
+ *  link to the folder that holds it. */
 function readRoot(at: At): string {
   const root = scratch('read')
   if (at === 'no-config' || at === 'config-is-file') return root
-  mkdirSync(join(root, 'config'))
-  writeFileSync(join(root, 'config', 'drive.json'), '{}')
+  const config = join(root, at === 'config-link' ? 'config-target' : 'config')
+  mkdirSync(config)
+  writeFileSync(join(config, 'drive.json'), '{}')
+  if (at === 'config-link') symlinkSync(config, join(root, 'config'), 'junction') // `junction` is ignored outside Windows
   return root
+}
+
+/**
+ * The reader as plain Node loads it (the helper's way), in a child whose `node:fs` answers as `readInChild` is told:
+ * `HR_SEEN`, the record's name `lstat`s as that regular file did (what was there before a swap); `HR_CLOSE_FAILS`, a
+ * close closes, then throws. The reader's own open, fstat and read stay real.
+ */
+const CHILD_READ = [
+  "import fs from 'node:fs'",
+  "import { syncBuiltinESMExports } from 'node:module'",
+  'const env = process.env',
+  'const { registerTsSiblingImports } = await import(env.HR_SIBLINGS)',
+  'registerTsSiblingImports()',
+  'const { readDriveRelease } = await import(env.HR_READER)',
+  'const { lstatSync, closeSync } = fs',
+  'if (env.HR_SEEN) {',
+  '  const seen = lstatSync(env.HR_SEEN)',
+  '  fs.lstatSync = (path, ...rest) => (path === env.HR_RECORD ? seen : lstatSync(path, ...rest))',
+  '}',
+  "if (env.HR_CLOSE_FAILS) fs.closeSync = (fd) => { closeSync(fd); throw Object.assign(new Error('injected'), { code: 'EIO' }) }",
+  'syncBuiltinESMExports()',
+  'process.stdout.write(JSON.stringify(readDriveRelease(env.HR_ROOT)))'
+].join('\n')
+
+/** `readDriveRelease(root)` in a child (see CHILD_READ), bounded: an open that blocks is killed and fails the row. */
+function readInChild(root: string, opts: { seen?: string; closeFails?: boolean }): DriveReleaseRead {
+  const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '--eval', CHILD_READ], {
+    env: {
+      ...process.env,
+      HR_SIBLINGS: pathToFileURL(SIBLING_IMPORTS).href,
+      HR_READER: pathToFileURL(READER_TS).href,
+      HR_ROOT: root,
+      HR_RECORD: recordPath(root),
+      HR_SEEN: opts.seen ?? '',
+      HR_CLOSE_FAILS: opts.closeFails ? '1' : ''
+    },
+    encoding: 'utf8',
+    timeout: hangBudgetMs(10_000),
+    windowsHide: true
+  })
+  if (r.error) throw new Error(`the read did not return (${(r.error as NodeJS.ErrnoException).code ?? 'error'}): an open that blocks?`)
+  expect(r.status, r.stderr).toBe(0)
+  return JSON.parse(r.stdout) as DriveReleaseRead
 }
 
 describe('F-13 golden: readDriveRelease reads config/drive-release.json as release 1 does for ever', () => {
@@ -244,6 +297,33 @@ describe('F-13 golden: readDriveRelease reads config/drive-release.json as relea
     utimesSync(file, pinned, pinned)
     expect(driveAppVersion(readDriveRelease(root))).toBe(secondDecision)
   })
+
+  // Review m2 and T3.2's review m-7: what the open finds can differ from what the lstat saw, when something is swapped
+  // in at the name between the two. A race cannot be timed portably, so the child's lstat answers for the name as the
+  // regular file there before the swap did, and the name really holds what was swapped in, which the reader's real open
+  // and fstat meet: a folder (every system: the open succeeds, the fstat sees a folder); a named pipe (POSIX: opened
+  // non-blocking, so it cannot hold the start); a symbolic link to a record (POSIX: O_NOFOLLOW refuses it; Windows has
+  // no such flag, so there the open follows the link to the file it names: the recorded residual).
+  const SWAPS: ReadonlyArray<readonly [string, At, DriveReleaseRead]> = [
+    ['a folder', 'folder', { kind: 'damaged', fault: 'not-a-file' }],
+    ['a named pipe', 'fifo', { kind: 'damaged', fault: 'not-a-file' }],
+    ['a symbolic link to a record', 'file-link', isWindows ? (R12A.expect as DriveReleaseRead) : { kind: 'unreadable', code: 'ELOOP' }]
+  ]
+  it.for(SWAPS)('R28 swapped in after the lstat: %s', { timeout: testBudgetMs(60_000) }, async ([, at, want], ctx) => {
+    if (cannotPlace(at)) ctx.skip()
+    const root = readRoot('file')
+    const seen = join(root, 'config', 'before-the-swap.json')
+    writeFileSync(seen, bytesOf(R12A.parts!))
+    await placeAt(root, at, R12A.parts)
+    expect(readInChild(root, { seen })).toStrictEqual(want)
+  })
+
+  // Review m3: a close that fails after the read cannot make the reader throw; the read's answer stands.
+  it('R29 a close that fails after the read: the read still answers, nothing is thrown', () => {
+    const root = readRoot('file')
+    writeFileSync(recordPath(root), bytesOf(R12A.parts!))
+    expect(readInChild(root, { closeFails: true })).toStrictEqual(R12A.expect)
+  }, testBudgetMs(60_000))
 })
 
 describe('rootArtifactOf: the drive-root names release 1 counts as apps, and the version each carries (record §4.4)', () => {
@@ -259,18 +339,34 @@ interface Run {
   stdout: string
   /** The helper's own stderr lines (each starts with "drive-release.json"); Node's warnings are left out. */
   own: string[]
+  stderr: string
 }
 
-/** The helper as the builders run it, from a working folder of its own unless `cwd` says otherwise. */
-function runHelper(args: string[], opts: { cwd?: string; nodeArgs?: string[] } = {}): Run {
-  const r = spawnSync(process.execPath, [...(opts.nodeArgs ?? []), HELPER, ...args], {
+/** The helper as the builders run it (or the copy `helper`), from a working folder of its own unless `cwd` says otherwise. */
+function runHelper(args: string[], opts: { cwd?: string; nodeArgs?: string[]; helper?: string } = {}): Run {
+  const r = spawnSync(process.execPath, [...(opts.nodeArgs ?? []), opts.helper ?? HELPER, ...args], {
     cwd: opts.cwd ?? scratch('cwd'),
     encoding: 'utf8',
     timeout: testBudgetMs(60_000),
     windowsHide: true
   })
   if (r.error) throw r.error
-  return { status: r.status, stdout: r.stdout, own: r.stderr.split(/\r?\n/).filter((l) => l.startsWith('drive-release.json')) }
+  return { status: r.status, stdout: r.stdout, own: r.stderr.split(/\r?\n/).filter((l) => l.startsWith('drive-release.json')), stderr: r.stderr }
+}
+
+/** A copy of the helper and its ts-sibling-imports under a scratch repo root, with `reader` (its text) at the reader's
+ *  path there, or nothing at that path. Returns the copy's path. */
+function helperCopy(reader: string | null): string {
+  const repo = scratch('helper-copy')
+  const lib = join(repo, 'scripts', 'lib')
+  mkdirSync(lib, { recursive: true })
+  for (const name of ['write-drive-release.mjs', 'ts-sibling-imports.mjs']) copyFileSync(join(REPO_ROOT, 'scripts', 'lib', name), join(lib, name))
+  if (reader !== null) {
+    const dir = join(repo, 'apps', 'desktop', 'src', 'main', 'services', 'updates')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'drive-release.ts'), reader)
+  }
+  return join(lib, 'write-drive-release.mjs')
 }
 
 /** The golden tree with the vector's changes under a fresh root; config/ goes behind a junction for `config-link`. */
@@ -432,6 +528,32 @@ describe('F-13 golden: the helper writes the record the HEAD builders put on eve
     expect(run.status).toBe(1)
     expect(run.own).toEqual([expect.stringContaining('type stripping')])
     expect(lstatOrNull(recordPath(root))).toBeNull()
+  }, testBudgetMs(60_000))
+
+  // Review m4: a reader that cannot be loaded (a partial checkout, a later Node without module hooks) ends the helper
+  // with its own one line, never Node's stack with the checkout's paths. Run as the builders run it (`--no-warnings`,
+  // T3.3b), stderr holds that line and nothing else.
+  it('W31 a reader that cannot be loaded is refused with one line, and nothing is written', () => {
+    const root = treeRoot()
+    const run = runHelper(['--target', root], { helper: helperCopy(null), nodeArgs: ['--no-warnings'] })
+    expect(run.status).toBe(1)
+    expect(run.stdout).toBe('')
+    expect(run.stderr.split(/\r?\n/).filter((l) => l !== '')).toEqual(['drive-release.json: the reader could not be loaded (ERR_MODULE_NOT_FOUND); nothing written'])
+    expect(lstatOrNull(recordPath(root))).toBeNull()
+  }, testBudgetMs(60_000))
+
+  // Review m5: the record is replaced before it is read back, so a failed read-back says the record was written. The
+  // copy's reader is the real one but for a read-back that finds no record, as a drive that does not give back what
+  // was written would.
+  it('W32 a record that does not read back as written: exit 1, and the line says it was written', () => {
+    const root = treeRoot()
+    const reader = `export * from ${JSON.stringify(pathToFileURL(READER_TS).href)}\nexport function readDriveRelease() {\n  return { kind: 'absent' }\n}\n`
+    const run = runHelper(['--target', root], { helper: helperCopy(reader) })
+    expect(run.status).toBe(1)
+    expect(run.stdout).toBe('')
+    expect(run.own).toEqual(['drive-release.json: the record was written but could not be read back as written; check the drive'])
+    expect(readFileSync(recordPath(root))).toEqual(EXPECTED_RECORD)
+    expect(lstatOrNull(`${recordPath(root)}.tmp`)).toBeNull()
   }, testBudgetMs(60_000))
 
   it.each<[string, string[]]>([
