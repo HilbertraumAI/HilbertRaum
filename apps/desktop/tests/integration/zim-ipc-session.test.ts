@@ -1698,6 +1698,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // retry restarts over the SAME build and `library.names` STILL carries the pack: only
       // re-running `retrievablePacks` inside the callback — which resolves each pack by its
       // header UUID — can notice that it is no longer retrievable.
+      // W-71 (T2.14 fix round 1): a restart resolves the packs again and reuses the build only
+      // while they are the same files, so the file goes AFTER that resolve: while the restarted
+      // child is being started (its port lookup), with the build already reused.
       {
         const delta = await h.registerPack('delta.zim')
         expect((await h.svc.ensureServer(h.db()))!.names.has(delta)).toBe(true)
@@ -1711,7 +1714,11 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           new AbortController().signal
         )
         await rawGate.entered
-        rmSync(join(h.zimDir, 'delta.zim')) // no revision bump: the published build stands
+        h.hooks.findPort = async () => {
+          h.hooks.findPort = async () => h.httpPort
+          rmSync(join(h.zimDir, 'delta.zim')) // no revision bump: the published build stands
+          return h.httpPort
+        }
         liveChild().emit('exit', 0, null) // …but the child dies, so the attempt is discarded
         h.hooks.beforeRespond = async () => undefined
         rawGate.release()

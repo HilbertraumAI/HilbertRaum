@@ -55,7 +55,8 @@ import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 // - ONE monotonic allocator (`nextGeneration`) hands out generations to library BUILDS and to
 //   kiwix-serve CHILDREN alike, so no generation ever repeats in the process: a build takes
 //   g₁ and writes `library.<g₁>.xml`, its first child takes g₂, a bind-race retry g₃, a
-//   natural-crash restart g₄ (same XML — the pack set did not change, so the build is current).
+//   natural-crash restart g₄ (same XML — the pack set did not change, so the build is current;
+//   W-71: as long as the packs, resolved again, are the same files, else a new build).
 //   P5's alive/generation request guard consumes this through `serverState()`.
 // - ONE promise chain (`chain`) carries every library rebuild, teardown and start in FIFO
 //   order, so there is exactly ONE writer of library files at any time and no two builds
@@ -266,6 +267,9 @@ type Published =
       generation: number
       port: number
       libraryXmlPath: string
+      /** The identity-resolved packs THIS build holds (`{ id, path }`): a crash restart reuses the build only while
+       *  the packs still resolve to exactly these (W-71, T2.14 fix round 1). */
+      winners: ReadonlyArray<{ id: string; path: string }>
       /** pack id → the name kiwix-serve answers to for THIS build (plan §9.17 (d)6). */
       names: ReadonlyMap<string, string>
       /** Packs deliberately left out of the build: an earlier UUID owns their serving name. */
@@ -862,7 +866,8 @@ export class ZimService {
           return servedLibraryOf(pub)
         }
         // Published but the child is gone (a natural crash): fall through and restart it
-        // over the SAME build — a new generation, the same revision.
+        // over the SAME build — a new generation, the same revision — while its packs still
+        // resolve to the same files (W-71, T2.14 fix round 1: else over a new build).
       }
       if (this.startFailure) {
         if (this.startFailure.revision !== this.packRevision) this.startFailure = null
@@ -1066,6 +1071,18 @@ export class ZimService {
     const dir = this.ensureLibraryDir()
 
     const prior = this.published
+    // IDENTITY FIRST (M5/L4, plan §9.17 (d)6). Resolve every enabled pack by its header
+    // UUID, compute libkiwix's own serving-name map, and build ONLY the winners: the
+    // collision losers never enter the XML, so the server cannot answer for the wrong book
+    // and the outcome matches whichever book libkiwix would have kept.
+    // W-71 (app-update wave, T2.14 fix round 1, review R1-1): on EVERY start, the natural-crash
+    // restart included. A served file replaced under a running session (by one in a newer ZIM
+    // format, which `resolvePack` never returns, or by another archive) must not reach the
+    // restarted child through the earlier build, so that build is reused only while the packs
+    // still resolve to exactly the files it holds.
+    const resolved = servedCandidates(db, this.zimDir)
+    const served = computeServedSet(resolved, this.opts.platform ?? process.platform)
+    const winners = resolved.filter((c) => served.names.has(c.id))
     let build: number
     let libraryXmlPath: string
     let ownsBuild = false
@@ -1075,11 +1092,12 @@ export class ZimService {
       prior &&
       prior.kind === 'served' &&
       prior.revision === cap.revision &&
-      existsSync(prior.libraryXmlPath)
+      existsSync(prior.libraryXmlPath) &&
+      sameServedPacks(prior.winners, winners)
     ) {
-      // Natural-crash restart: the pack set did not change, so the BUILD is still current.
-      // Reuse its exact XML — and therefore its exact serving map, which describes that file —
-      // and take only a new child generation (plan §9.15 item 1).
+      // Natural-crash restart: the pack set did not change and its files did not either, so
+      // the BUILD is still current. Reuse its exact XML — and therefore its exact serving map,
+      // which describes that file — and take only a new child generation (plan §9.15 item 1).
       build = prior.build
       libraryXmlPath = prior.libraryXmlPath
       names = prior.names
@@ -1091,12 +1109,6 @@ export class ZimService {
       // Tracked on the operation that asked for this start BEFORE the first byte is written,
       // so a lock's sweep shreds it even if the build cannot cancel (plan §9.17 (c)1).
       op?.track(libraryXmlPath)
-      // IDENTITY FIRST (M5/L4, plan §9.17 (d)6). Resolve every enabled pack by its header
-      // UUID, compute libkiwix's own serving-name map, and build ONLY the winners: the
-      // collision losers never enter the XML, so the server cannot answer for the wrong book
-      // and the outcome matches whichever book libkiwix would have kept.
-      const resolved = servedCandidates(db, this.zimDir)
-      const served = computeServedSet(resolved, this.opts.platform ?? process.platform)
       names = served.names
       excluded = served.excluded
       this.lastExcluded = [...excluded] // the authoritative (disk-resolved) list, D-Z16
@@ -1106,7 +1118,6 @@ export class ZimService {
           excluded: excluded.map((e) => ({ packId: e.packId, collidesWith: e.collidesWith }))
         })
       }
-      const winners = resolved.filter((c) => names.has(c.id))
       let count: number
       try {
         count = await writeLibraryXml(this.packDeps(signal), libraryXmlPath, winners, signal)
@@ -1132,6 +1143,7 @@ export class ZimService {
         this.discardBuild(libraryXmlPath)
         const empty: Published = { kind: 'empty', revision: cap.revision }
         this.published = empty
+        this.discardReplacedBuild(prior, cap.revision, libraryXmlPath)
         return empty
       }
     }
@@ -1162,11 +1174,25 @@ export class ZimService {
       generation: started.generation,
       port: started.port,
       libraryXmlPath,
+      winners,
       names,
       excluded
     }
     this.published = pub
+    this.discardReplacedBuild(prior, cap.revision, libraryXmlPath)
     return pub
+  }
+
+  /**
+   * W-71 (T2.14 fix round 1): a crash restart that could not reuse the earlier build of the same revision (its packs no
+   * longer resolve to the files it holds) has just replaced it, so that build's file goes now. Its child is already gone
+   * (the restart runs only then); a build an unconfirmed child may still hold stays, as everywhere (`discardBuild`).
+   * A build of an earlier revision was removed by the invalidation that moved the revision.
+   */
+  private discardReplacedBuild(prior: Published | null, revision: number, current: string): void {
+    if (prior && prior.kind === 'served' && prior.revision === revision && prior.libraryXmlPath !== current) {
+      this.discardBuild(prior.libraryXmlPath)
+    }
   }
 
   private serverInstance(binPath: string): KiwixServer {
@@ -1587,6 +1613,17 @@ function skippedOutcomes(
     found: 0,
     admitted: 0
   }))
+}
+
+/** W-71 (T2.14 fix round 1): the same packs at the same resolved paths, in any order (the served candidates come in
+ *  the database's row order). */
+function sameServedPacks(
+  a: ReadonlyArray<{ id: string; path: string }>,
+  b: ReadonlyArray<{ id: string; path: string }>
+): boolean {
+  if (a.length !== b.length) return false
+  const paths = new Map(a.map((p) => [p.id, p.path]))
+  return b.every((p) => paths.get(p.id) === p.path)
 }
 
 /** The caller-facing view of one published configuration (the XML path stays internal). */
