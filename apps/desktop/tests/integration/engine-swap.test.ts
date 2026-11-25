@@ -78,7 +78,7 @@ import { runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
 import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
-import { verifierInert } from '../helpers/binary-fixtures'
+import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixtures'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 afterEach(() => {
@@ -204,6 +204,21 @@ function archivesUnder(root: string): string[] {
 async function recover(root: string, manifestsDir: string): Promise<void> {
   recoverEngineSwaps(root, manifestsDir)
   await engineFolderDeletesSettled()
+}
+
+/**
+ * T8.5c: every entry under `dir` by its path relative to it (`/`), each file by the SHA-256 of its bytes, each
+ * folder as `dir`; `{}` when `dir` is not there. Two equal answers mean the tree is byte-identical.
+ */
+function contentDigest(dir: string): Record<string, string> {
+  if (!existsSync(dir)) return {}
+  const out: Record<string, string> = {}
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const full = join(entry.parentPath, entry.name)
+    const rel = full.slice(dir.length + 1).split(/[\\/]/).join('/')
+    out[rel] = entry.isDirectory() ? 'dir' : sha256(readFileSync(full))
+  }
+  return out
 }
 
 // ---- The start recovery: one disk layout per place a kill can land -------------------------------
@@ -479,6 +494,158 @@ describe('recoverEngineSwaps: the start finishes or rolls back an interrupted sw
     expect(summary(liveDir(rootPath))).toBe('engine b150|b150')
     // The refused new copy stays for the next start, which finds the install complete and drops it.
     expect(summary(`${liveDir(rootPath)}.new`)).toBe('engine b200|b200')
+  })
+})
+
+// T8.5c (R2 M-1 = R1 F-5): a marker the start cannot read just now (an antivirus holding it, a denied read) is no
+// verdict, as at the pre-spawn check (#1012 round 6): the family's folders stay exactly as they are for this start,
+// and the next start decides. It read as "no marker", so the start deleted the only whole copy, rolled an update
+// back or replaced a whole `cpu/` net on it. The hold is real (`denyReading`: a deny-read ACL on Windows, mode 000
+// elsewhere); `stat` still answers, the read fails.
+interface HeldLayout {
+  name: string
+  build: (root: string) => void
+  /** The copy whose marker is held. */
+  held: (root: string) => string
+  /** `recoverEngineSwaps`' label for it, relative to the family folder. */
+  label: string
+  /** What the next start, with the marker readable again, makes of the layout. */
+  healed: Record<string, string>
+}
+const HELD_LAYOUTS: HeldLayout[] = [
+  {
+    name: 'a first install killed between its renames: the only whole copy is in .new',
+    build: (root) => {
+      mkdirSync(`${liveDir(root)}.old`, { recursive: true })
+      copy(`${liveDir(root)}.new`, 'b200')
+    },
+    held: (root) => `${liveDir(root)}.new`,
+    label: `${HOST_OS}.new`,
+    healed: { live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT }
+  },
+  {
+    name: 'an update killed between its renames whose new program was taken since: the only whole copy is in .old',
+    build: (root) => {
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+      copy(`${liveDir(root)}.new`, 'b200', { exe: false })
+    },
+    held: (root) => `${liveDir(root)}.old`,
+    label: `${HOST_OS}.old`,
+    healed: { live: 'engine b150|b150', net: 'net b150|b150', ...NOTHING_LEFT }
+  },
+  {
+    name: 'an update killed before its cleanup: the new install beside a whole .old',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(netDir(root), 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    held: (root) => liveDir(root),
+    label: HOST_OS,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  },
+  {
+    name: 'the same layout with the install’s own cpu/ net held: the net in .old would replace it',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(netDir(root), 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    held: (root) => netDir(root),
+    label: `${HOST_OS}/cpu`,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  },
+  {
+    name: 'the cpu/ net’s own swap killed between its renames, the new net in cpu.new',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      net(join(liveDir(root), 'cpu.old'), 'b150')
+      net(join(liveDir(root), 'cpu.new'), 'b200')
+    },
+    held: (root) => join(liveDir(root), 'cpu.new'),
+    label: `${HOST_OS}/cpu.new`,
+    healed: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  }
+]
+
+describe('recoverEngineSwaps: a marker it cannot read just now leaves the layout as it is (T8.5c)', () => {
+  it.each(HELD_LAYOUTS)('$name', async ({ build, held, label, healed }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    build(rootPath)
+    const runtime = join(rootPath, 'runtime')
+    const before = contentDigest(runtime)
+    const marker = runtimeMarkerPath(held(rootPath))
+    const warn: Array<[string, unknown]> = []
+    const info: string[] = []
+    denyReading(marker)
+    try {
+      recoverEngineSwaps(rootPath, manifestsDir, { log: (m) => info.push(m), warn: (m, meta) => warn.push([m, meta]) })
+      await engineFolderDeletesSettled()
+    } finally {
+      allowReading(marker)
+    }
+    expect(contentDigest(runtime)).toEqual(before)
+    expect(info).toEqual([])
+    // Content-free: the family, the copy's folder by its layout name, the error's code; never a path or a message.
+    expect(warn).toEqual([
+      [
+        'Engine swap recovery: a marker could not be read just now; this family is left as it is',
+        { family: 'llama_cpp', marker: label, code: expect.stringMatching(/^(EPERM|EACCES)$/) }
+      ]
+    ])
+    // Readable again, the next start decides as it always did.
+    await recover(rootPath, manifestsDir)
+    expect(layout(rootPath)).toEqual(healed)
+  })
+
+  // …and an engine job's own recovery and its leftover guard read the same: the family is refused as files in use
+  // with the copies left as they are. The job used to roll an update back and install the pin over it, or delete the
+  // only whole copy as a stale `.new` and download it again.
+  it.each([
+    {
+      name: 'the new install beside a whole .old, its marker held: a reinstall',
+      build: (root: string) => {
+        copy(liveDir(root), 'b200')
+        copy(`${liveDir(root)}.old`, 'b150')
+      },
+      held: liveDir,
+      request: { families: ['llama_cpp' as const], reinstall: true as const },
+      // The whole family: the archive the job downloads into the install folder goes again.
+      kept: (root: string) => [join(root, 'runtime')]
+    },
+    {
+      name: 'the only whole copy in .new, its marker held: a first install',
+      build: (root: string) => {
+        mkdirSync(`${liveDir(root)}.old`, { recursive: true })
+        copy(`${liveDir(root)}.new`, 'b200')
+      },
+      held: (root: string) => `${liveDir(root)}.new`,
+      request: {},
+      // The download makes the install folder (`fetchArchive`), so the leftovers are compared.
+      kept: (root: string) => [`${liveDir(root)}.new`, `${liveDir(root)}.old`]
+    }
+  ])('an engine job over $name leaves the copies as they are and fails as files in use', async ({ build, held, request, kept }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    build(rootPath)
+    const before = kept(rootPath).map(contentDigest)
+    const marker = runtimeMarkerPath(held(rootPath))
+    const mgr = manager()
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    denyReading(marker)
+    let job: EngineDownloadJob
+    try {
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...request })
+      job = await settle(mgr, started.jobId)
+    } finally {
+      allowReading(marker)
+    }
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    expect(ends.map((e) => e.reason)).toEqual(['filesInUse'])
+    expect(kept(rootPath).map(contentDigest)).toEqual(before)
   })
 })
 
@@ -1184,6 +1351,74 @@ describe('the staged swap in an engine job (#986)', () => {
     expect({ extracted, paused }).toEqual({ extracted: 0, paused: 0 })
     expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
     expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+})
+
+// T8.5c (R1 F-2): F-24 promises that this release never touches a later version's engine folders: its install lives
+// beside this one as `<os>@<pin>/` (built in `<os>@<pin>.new/`), and an update file's engine archives wait in
+// `updates/engines/<version>/`. The start's row above holds the start to it; these hold every kind of engine job:
+// each such folder is byte-identical after the job and after the deletes it queued.
+describe('an engine job leaves a later version’s engine folders as they are (T8.5c)', () => {
+  /** The folders a later version owns, filled as it fills them: a marked pin folder with its net, a half-built one. */
+  function laterVersion(root: string): string[] {
+    const pin = `${liveDir(root)}@b300`
+    copy(pin, 'b300', { records: ['ggml.dll'] })
+    net(join(pin, 'cpu'), 'b300')
+    copy(`${pin}.new`, 'b300', { marker: false })
+    const engines = join(root, 'updates', 'engines', '0.2.0')
+    mkdirSync(engines, { recursive: true })
+    writeFileSync(join(engines, `llama-b300-bin-${HOST_OS}-vulkan-${HOST_ARCH}.zip`), 'a staged engine archive')
+    return [pin, `${pin}.new`, join(root, 'updates', 'engines')]
+  }
+
+  /** An extractor that cancels its own job, then writes the copy: the stage meets the cancel after the unpack. */
+  const cancelling = (box: { mgr?: EngineDownloadManager; jobId?: string }): ExtractFn => async (archive, destDir, signal) => {
+    box.mgr!.cancel(box.jobId!)
+    await newEngine(archive, destDir, signal)
+  }
+  const failing: ExtractFn = async () => {
+    throw new Error('tar exited with code 2')
+  }
+  const reinstallNet = {
+    families: ['llama_cpp' as const],
+    reinstall: true as const,
+    reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+  }
+
+  it.each([
+    { name: 'a first install', setup: () => undefined, request: {}, extract: 'new', end: 'done' },
+    { name: 'an update', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'new', end: 'done' },
+    {
+      name: 'a reinstall of the main build',
+      setup: (r: string) => copy(liveDir(r), 'b200'),
+      request: { families: ['llama_cpp' as const], reinstall: true as const },
+      extract: 'new',
+      end: 'done'
+    },
+    {
+      name: 'a reinstall of the cpu/ net alone',
+      setup: (r: string) => {
+        copy(liveDir(r), 'b200')
+        net(netDir(r), 'b150')
+      },
+      request: reinstallNet,
+      extract: 'new',
+      end: 'done'
+    },
+    { name: 'an update whose unpack fails', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'fail', end: 'failed' },
+    { name: 'a cancelled update', setup: (r: string) => copy(liveDir(r), 'b150'), request: update, extract: 'cancel', end: 'cancelled' }
+  ])('$name', async ({ setup, request, extract, end }) => {
+    const { rootPath, manifestsDir } = makeDrive()
+    setup(rootPath)
+    const later = laterVersion(rootPath)
+    const before = later.map(contentDigest)
+    const box: { mgr?: EngineDownloadManager; jobId?: string } = {}
+    box.mgr = manager({ extract: extract === 'fail' ? failing : extract === 'cancel' ? cancelling(box) : newEngine })
+    const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...request })
+    box.jobId = started.jobId
+    expect((await settle(box.mgr, started.jobId)).status).toBe(end)
+    expect(later.map(contentDigest)).toEqual(before)
+    expect(before.every((d) => Object.keys(d).length > 0)).toBe(true)
   })
 })
 

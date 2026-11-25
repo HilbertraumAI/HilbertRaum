@@ -1,8 +1,18 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
-import { lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
+import {
+  chmodSync,
+  constants as fsConstants,
+  createReadStream,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync
+} from 'node:fs'
+import { copyFile, lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { mainUiLanguage, tMain } from './i18n'
 import { fmt1, unitJoin } from '../../shared/format'
@@ -31,6 +41,8 @@ import {
   planInFolder,
   planRuntimeDownload,
   readRuntimeMarker,
+  readRuntimeMarkerState,
+  recordedFilePath,
   requiredInstallFiles,
   runtimeBinaryPresent,
   runtimeInstallCurrent,
@@ -436,6 +448,17 @@ function tarExtractArgs(archivePath: string, destDir: string): string[] {
 /** What starts the extractor's child: `child_process.spawn`'s shape (a seam for the #999 rows). */
 export type ExtractSpawn = (command: string, args: string[], options: SpawnOptions) => ChildProcess
 
+/**
+ * #1045: tar ran to its end and failed (a non-zero exit code), as opposed to a child that was stopped (a cancel, the
+ * deadline, a signal) or never started. Only this failure may be mended (`mendTarFailure`): a stopped tar may have cut
+ * the member it was writing short.
+ */
+class TarExitError extends Error {
+  constructor(readonly exitCode: number) {
+    super(`tar exited with code ${exitCode}`)
+  }
+}
+
 export interface TarExtractorOptions {
   /** Default `child_process.spawn`. */
   spawn?: ExtractSpawn
@@ -531,7 +554,10 @@ export function makeTarExtractor(options: TarExtractorOptions = {}): ExtractFn {
       })
       child.on('close', (code: number | null) => {
         if (stopError) return onGone()
-        settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
+        settle(() => {
+          if (code === 0) resolvePromise()
+          else reject(code === null ? new Error('tar exited with code null') : new TarExitError(code))
+        })
       })
     })
 }
@@ -698,7 +724,8 @@ export function planEngineSteps(opts: EngineStepRequest): EngineJobSteps {
   // set up before a pin bump the "Install voice engine" button also re-installed the chat
   // engine — refused outright while a model ran, and a silent DOWNGRADE of a newer engine. An
   // engine that is on the drive changes only through an explicit update or reinstall.
-  // An explicit `families` list (the consent step) installs the named families not yet current.
+  // An explicit `families` list (the consent step) installs the named families not yet current, never one
+  // newer than the pin (T8.5c).
   // #532: a reinstall keeps the requested families even when current — and only those, so it
   // needs the explicit list; a family it names that has no build here cannot be repaired here.
   // #678: it replaces the builds the OS refused — the main build, the `cpu/` net, or both.
@@ -749,11 +776,16 @@ export function planEngineSteps(opts: EngineStepRequest): EngineJobSteps {
     // provisioned as the processor build over an older Kit's `cpu/`): nothing here can replace it.
     if (steps.length === 0) throw new Error(tMain('main.engine.noHostBuild'))
   } else {
-    const selected = engines.filter((e) =>
+    const named = engines.filter((e) =>
       wanted ? wanted.includes(e.family) && !runtimeInstallCurrent(e.plan) : !e.optional && !runtimeBinaryPresent(e.plan)
     )
+    // T8.5c (F-24: `newer` is never replaced): only a reinstall replaces an engine newer than this app's pin. A named
+    // family's newer copy used to be replaced as "not current", and the default selection's when it lacked a file this
+    // pin lists (a later release's layout). The update's presence test, so the two agree; a request left with nothing
+    // to install that way gets the update's answer.
+    const selected = named.filter((e) => !(existsSync(e.plan.binaryPath) && runtimeInstallRelation(e.plan) === 'newer'))
     if (selected.length === 0) {
-      throw new Error(tMain('main.engine.alreadyInstalled'))
+      throw new Error(tMain(named.length > 0 ? 'main.engine.nothingToUpdate' : 'main.engine.alreadyInstalled'))
     }
     steps = selected.map(main)
   }
@@ -1191,6 +1223,13 @@ export class EngineDownloadManager {
     const logs: RecoveryLogs = { info: this.deps.log, warn: this.deps.log }
     const recovered: InstallStep[] = []
     for (const step of steps) {
+      // T8.5c: as at the start, a marker it cannot read just now leaves the layout as it is; the leftover guard then
+      // refuses the family (`holdsIrreplaceableLeftover`).
+      const held = heldEngineMarker(rootPath, step.plan, step.main ? step.cpuNet : undefined)
+      if (held) {
+        this.deps.log?.(HELD_MARKER_NOTE, { family: step.family, ...held })
+        continue
+      }
       const folders: Array<[RuntimeDownloadPlan, boolean]> = [[step.plan, step.main]]
       if (step.main && step.cpuNet) folders.push([step.cpuNet, false])
       for (const [plan, main] of folders) {
@@ -1854,13 +1893,54 @@ function irreplaceableLeftover(
 
 /**
  * Does `step` find a leftover it must not delete (#986 review, `irreplaceableLeftover`) beside its install
- * folder, or, for a main build, beside its `cpu/` net's? Throws when a folder lies outside the drive root.
+ * folder, or, for a main build, beside its `cpu/` net's? T8.5c: also when a marker there cannot be read just now
+ * (`heldEngineMarker`): nothing is judged, so nothing is deleted. Throws when a folder lies outside the drive root.
  */
 function holdsIrreplaceableLeftover(rootPath: string, step: InstallStep): boolean {
+  if (heldEngineMarker(rootPath, step.plan, step.main ? step.cpuNet : undefined)) return true
   if (irreplaceableLeftover(step.plan, engineSwapDirs(rootPath, step.plan.extractTo), step.main, step.cpuNet)) return true
   if (!step.main || !step.cpuNet) return false
   return irreplaceableLeftover(step.cpuNet, engineSwapDirs(rootPath, step.cpuNet.extractTo), false)
 }
+
+/**
+ * T8.5c (R2 M-1 = R1 F-5): the first marker of an engine family's swap layout that cannot be read just now
+ * (`readRuntimeMarkerState`'s `unreadable`: an antivirus holding it, a denied read), or null. "Complete" reads such a
+ * marker as none, so on it the start's recovery deleted the only whole copy, rolled an update back or replaced a whole
+ * `cpu/` net; as at the pre-spawn check (#1012 round 6) it is no verdict, and the family is left as it is until the
+ * next start or job (the start's recovery, a job's own, and its leftover guard). The layout is `plan`'s install folder
+ * with its `.new` and `.old`, and with `netPlan` the `cpu/` net's folder names inside each of the three
+ * (`NESTED_NET_FOLDERS`): every marker those may judge. Read only when a leftover lies beside the install or its
+ * net, so a start with none reads nothing more. `marker` names the copy by its folder, relative to the family's
+ * (`win.old/cpu`), and `code` is the read's errno code: content-free. Never throws.
+ */
+function heldEngineMarker(
+  rootPath: string,
+  plan: RuntimeDownloadPlan,
+  netPlan?: RuntimeDownloadPlan
+): { marker: string; code: string | null } | null {
+  let units: EngineSwapDirs[]
+  try {
+    units = [engineSwapDirs(rootPath, plan.extractTo), ...(netPlan ? [engineSwapDirs(rootPath, netPlan.extractTo)] : [])]
+  } catch {
+    return null
+  }
+  if (!units.some((d) => present(d.staging) || present(d.previous))) return null
+  const own = units[0]
+  const copies = new Set<string>()
+  for (const d of units) for (const dir of [d.live, d.staging, d.previous]) copies.add(dir)
+  if (netPlan) {
+    for (const dir of [own.live, own.staging, own.previous]) for (const n of NESTED_NET_FOLDERS) copies.add(join(dir, n))
+  }
+  for (const dir of copies) {
+    const state = readRuntimeMarkerState(dir)
+    if (state.kind === 'unreadable') return { marker: relative(dirname(own.live), dir).split(sep).join('/'), code: state.code }
+  }
+  return null
+}
+
+/** What the start and a job log for a family `heldEngineMarker` leaves as it is. */
+const HELD_MARKER_NOTE = 'Engine swap recovery: a marker could not be read just now; this family is left as it is'
 
 /**
  * Is the `cpu/` net at `dir` whole (#986 review 2): a real folder whose own marker is satisfied
@@ -1892,11 +1972,174 @@ export interface StageEngineOptions {
   log?: (msg: string, meta?: unknown) => void
 }
 
+/** An archive name the link repair reads (#1045): a tar.gz, the macOS and Linux release format (fetch-runtime.sh's `case`). */
+const TAR_GZ_NAME = /\.(tar\.gz|tgz)$/i
+
+/** The most a link listing may print (#1045): a release lists some hundred members, this room tens of thousands. */
+const LINK_LISTING_MAX_BYTES = 8 * 1024 * 1024
+
+/** One symbolic link an archive lists: its name and its target, as the archive writes them. */
+interface ArchiveLink {
+  name: string
+  target: string
+}
+
+/**
+ * #1045: the symbolic links the tar.gz at `archivePath` lists, read with the OS's tar (`tar -tvzf -`) as
+ * fetch-runtime.sh reads them: the archive goes in on stdin, so no path is on the command line (#767, #856) and
+ * the child holds no file on the drive. GNU tar and bsdtar print a link as `l… <name> -> <target>`; a name or a
+ * target holding white space is not read (as the script's `sed`). Null when the listing fails, is cancelled, runs
+ * past the extractor's deadline or prints more than `LINK_LISTING_MAX_BYTES`.
+ */
+function listArchiveLinks(archivePath: string, cwd: string, signal?: AbortSignal): Promise<ArchiveLink[] | null> {
+  return new Promise((resolvePromise) => {
+    let child: ChildProcess
+    try {
+      child = spawn(resolveTarBinary(), ['-tvzf', '-'], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
+    } catch {
+      return resolvePromise(null)
+    }
+    const source = createReadStream(archivePath)
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let settled = false
+    const finish = (links: ArchiveLink[] | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', stop)
+      source.destroy()
+      resolvePromise(links)
+    }
+    const stop = (): void => {
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+      finish(null)
+    }
+    const timer = setTimeout(stop, extractDeadlineMs())
+    timer.unref?.()
+    if (signal?.aborted) return stop()
+    signal?.addEventListener('abort', stop, { once: true })
+    source.on('error', stop)
+    // tar may stop reading before the end (a broken archive): the pipe then closes under the stream.
+    child.stdin?.on('error', () => undefined)
+    if (child.stdin) source.pipe(child.stdin)
+    child.stdout?.on('data', (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > LINK_LISTING_MAX_BYTES) return stop()
+      chunks.push(chunk)
+    })
+    child.on('error', () => finish(null))
+    child.on('close', (code: number | null) => {
+      if (code !== 0) return finish(null)
+      const links: ArchiveLink[] = []
+      for (const line of Buffer.concat(chunks).toString('utf8').split(/\r?\n/)) {
+        const m = /^l.*\s(\S+)\s->\s(\S+)$/.exec(line)
+        if (m) links.push({ name: m[1], target: m[2] })
+      }
+      finish(links)
+    })
+  })
+}
+
+/**
+ * #1045: does a link the archive lists leave the folder `dir` it is unpacked in, by its name or by its target (read
+ * from the link's own folder)? fetch-runtime.sh's rule (`stays_inside`): an absolute name (`/`, `\`, a drive letter)
+ * or a `..` that climbs above the folder. And, by this host's own path rules, a name that resolves outside `dir` (a
+ * `\` is a separator on Windows), as every other key the app reads from an archive or a marker (`recordedFilePath`).
+ */
+function linkLeavesFolder(dir: string, link: ArchiveLink): boolean {
+  const absolute = (p: string): boolean => /^([/\\]|[A-Za-z]:)/.test(p)
+  const climbsOut = (p: string): boolean => {
+    let depth = 0
+    for (const seg of p.split('/')) {
+      if (seg === '' || seg === '.') continue
+      depth += seg === '..' ? -1 : 1
+      if (depth < 0) return true
+    }
+    return false
+  }
+  const target = `${posix.dirname(link.name)}/${link.target}`
+  if (absolute(link.name) || absolute(link.target) || climbsOut(link.name) || climbsOut(target)) return true
+  return recordedFilePath(dir, link.name) === null || recordedFilePath(dir, target) === null
+}
+
+/**
+ * #1045: mend a tar that ran to its end and failed (`TarExitError`) on a tar.gz, as fetch-runtime.sh does after its
+ * extraction. The macOS and Linux release archives carry version links (`libllama.so` → `libllama.so.0` → …), and a
+ * drive that holds no links (exFAT, the Kit's file system) makes tar fail each one; the loader needs only the names.
+ * So every link the archive lists (`listArchiveLinks`) that is missing in `dir` becomes a copy of its target, in up to
+ * four passes (links chain, listed before what they name). A link whose name or target leaves `dir`
+ * (`linkLeavesFolder`) refuses the install: it throws, and the stage's caller deletes `dir`. Then the failure is real
+ * (false) when a member the archive lists (`members`, read in-process) is still not on the disk, or when either
+ * listing is missing. True: every member is there, and the stage goes on. Runs before the flatten, so the names are
+ * the archive's; never writes through a link tar did make (the SEC-2 sweep runs first). Logs what it found or did,
+ * content-free (the pinned archive's name, tar's exit code, the archive's own member names).
+ */
+async function mendTarFailure(
+  archivePath: string,
+  dir: string,
+  members: string[] | null,
+  failure: TarExitError,
+  opts: StageEngineOptions
+): Promise<boolean> {
+  const at = { archive: basename(archivePath), exitCode: failure.exitCode }
+  const links = members === null ? null : await listArchiveLinks(archivePath, dir, opts.signal)
+  if (members === null || links === null) {
+    opts.log?.('tar failed and the archive could not be listed: no link is copied', at)
+    return false
+  }
+  for (const link of links) {
+    if (linkLeavesFolder(dir, link)) {
+      throw new Error(`extracted archive member escapes the install dir: ${link.name} -> ${link.target}`)
+    }
+  }
+  await assertExtractedSymlinksContained(dir)
+  const exists = (p: string): Promise<boolean> => lstat(p).then(() => true, () => false)
+  const listed = new Set(members)
+  let copies = 0
+  for (let pass = 0; pass < 4; pass++) {
+    let unresolved = 0
+    for (const link of links) {
+      const to = join(dir, ...link.name.split('/'))
+      if (!listed.has(link.name) || (await exists(to))) continue
+      const from = resolve(dir, ...posix.dirname(link.name).split('/'), ...link.target.split('/'))
+      if (!(await stat(from).then((s) => s.isFile(), () => false))) {
+        unresolved++
+        continue
+      }
+      await mkdir(dirname(to), { recursive: true })
+      await copyFile(from, to, fsConstants.COPYFILE_EXCL)
+      copies++
+    }
+    if (unresolved === 0) break
+  }
+  const missing: string[] = []
+  for (const member of members) {
+    const key = stagedMemberKey(member, '')
+    if (key === null || !(await exists(join(dir, ...key.split('/'))))) missing.push(member)
+  }
+  if (missing.length > 0) {
+    opts.log?.('tar failed and files the archive lists are still missing after the link copies', {
+      ...at,
+      count: missing.length,
+      missing: missing.slice(0, 20)
+    })
+    return false
+  }
+  opts.log?.('tar failed, and every member the archive lists is there with its links copied', { ...at, copies })
+  return true
+}
+
 /**
  * Build a complete, checked, marked install of `plan` in `stagingDir` (#986), from the verified archive at
  * `plan.zipDest`, and return the plan rebased onto `stagingDir`. A leftover `stagingDir` goes first
  * (marker first; one that cannot go fails the stage). The archive is moved in (#856: tar is given only
- * `./<name>` and runs inside the folder), listed (#998: `archiveMembers`), extracted, flattened, cleared
+ * `./<name>` and runs inside the folder), listed (#998: `archiveMembers`), extracted (#1045: on a drive that holds
+ * no links, a tar.gz's links are made copies of their targets, `mendTarFailure`), flattened, cleared
  * of the family's left-out executables (#729), swept for escaping links (SEC-2), and deleted; then every
  * member the archive lists must be there (#998: an antivirus can take a fresh file; a listing that cannot
  * be read skips this with a log line), and every required file; the executables get their mode, EVERY
@@ -1921,7 +2164,14 @@ export async function stageEngineInstall(
   await renameWithRetry(plan.zipDest, staged.zipDest)
   // #998: what the verified archive holds, read from the archive itself (as its size, #986).
   const members = await archiveMembers(staged.zipDest)
-  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
+  try {
+    await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
+  } catch (err) {
+    // #1045: a tar.gz's version links on a drive that holds none fail tar every time; their copies mend it
+    // (`mendTarFailure`). Any other failure stands, and so does a tar that was stopped. The Windows archives are zips.
+    if (!(err instanceof TarExitError) || opts.signal?.aborted || !TAR_GZ_NAME.test(staged.zipDest)) throw err
+    if (!(await mendTarFailure(staged.zipDest, stagingDir, members, err, opts))) throw err
+  }
   if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
   const flattened = await flattenNestedBinary(staged)
   // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
@@ -2197,6 +2447,8 @@ function carryCpuNetSync(
  *  (`cpu.new`, `cpu.old`) is finished or rolled back there (#986 review 2).
  *  - Else neither copy is whole: carry `.old/cpu` (the net must not go with an incomplete `.old`), then
  *    delete `.new` and `.old`.
+ * A family any of whose markers cannot be read just now (`heldEngineMarker`, T8.5c) is left as it is, net included,
+ * with a warning: such a read is no verdict, and the next start decides.
  * Renames run here, synchronously, each once: a refusal is logged and the layout left as it is, never
  * made worse. Deletes run in the background, marker first. A rename refused because the drive cannot be
  * written is where the app-update plan's "run the complete copy where it lies" (CE-F10) would hook: the
@@ -2235,6 +2487,12 @@ export function recoverEngineSwaps(
     return
   }
   for (const e of engines) {
+    // T8.5c: a marker of the family's layout that cannot be read just now leaves all of it, main build and net, as it is.
+    const held = heldEngineMarker(rootPath, e.plan, e.cpuNet)
+    if (held) {
+      logs.warn?.(HELD_MARKER_NOTE, { family: e.family, ...held })
+      continue
+    }
     recover(e.family, e.plan, true, e.cpuNet)
     if (e.cpuNet) recover(e.family, e.cpuNet, false)
   }

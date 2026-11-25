@@ -63,9 +63,13 @@ const URLS = {
 const llamaDir = (root: string): string => join(root, 'runtime', 'llama.cpp', HOST_OS)
 const cpuDir = (root: string): string => join(llamaDir(root), 'cpu')
 const whisperDir = (root: string): string => join(root, 'runtime', 'whisper.cpp', HOST_OS)
+const kiwixDir = (root: string): string => join(root, 'runtime', 'kiwix-tools', HOST_OS)
 
-/** The pin: llama b200 (vulkan + a cpu/ net), whisper v1.8.6, the optional kiwix tools 3.8.1; sizes on two builds. */
-function makeDrive(): { rootPath: string; manifestsDir: string } {
+/**
+ * The pin: llama b200 (vulkan + a cpu/ net), whisper v1.8.6, the optional kiwix tools 3.8.1; sizes on two builds.
+ * `chatRuntimeFiles`: files the chat engine's main build must hold beside its program.
+ */
+function makeDrive(opts: { chatRuntimeFiles?: string[] } = {}): { rootPath: string; manifestsDir: string } {
   const rootPath = mkdtempSync(join(tmpdir(), 'hr-engine-plan-root-'))
   const manifestsDir = mkdtempSync(join(tmpdir(), 'hr-engine-plan-manifests-'))
   const build = (backend: string, url: string, extractTo: string, sizeBytes?: number) => ({
@@ -83,7 +87,10 @@ function makeDrive(): { rootPath: string; manifestsDir: string } {
       llama_cpp: {
         version: 'b200',
         builds: [
-          build('vulkan', URLS.vulkan, `runtime/llama.cpp/${HOST_OS}`, 3_000),
+          {
+            ...build('vulkan', URLS.vulkan, `runtime/llama.cpp/${HOST_OS}`, 3_000),
+            ...(opts.chatRuntimeFiles ? { runtime_files: opts.chatRuntimeFiles } : {})
+          },
           build('cpu', URLS.cpu, `runtime/llama.cpp/${HOST_OS}/cpu`, 2_000)
         ]
       },
@@ -107,12 +114,13 @@ async function installed(dir: string, bin: string, version: string, backend: str
 }
 
 const exe = (base: string): string => (HOST_OS === 'win' ? `${base}.exe` : base)
+/** Each family's release: its programs (the chat engine's with the library a `chatRuntimeFiles` pin names). */
 const extractFamily: ExtractFn = async (_archive, destDir) => {
   const names = destDir.includes('whisper.cpp')
     ? [WHISPER_BIN]
     : destDir.includes('kiwix-tools')
       ? [exe('kiwix-serve'), exe('kiwix-manage')]
-      : [BIN]
+      : [BIN, 'ggml.dll']
   for (const name of names) await writeFile(join(destDir, name), 'new binary')
 }
 
@@ -143,12 +151,14 @@ const chatCurrentNetCurrent: Setup = async (root) => {
   await installed(cpuDir(root), BIN, 'b200', 'cpu')
 }
 const voiceCurrent: Setup = async (root) => installed(whisperDir(root), WHISPER_BIN, 'v1.8.6', 'cpu')
+// T8.5c: engines newer than the pin (a later app or fetch-runtime wrote them); the chat engine's program alone.
+const chatNewer: Setup = async (root) => installed(llamaDir(root), BIN, 'b250', 'vulkan')
 const both = (...setups: Setup[]): Setup => async (root) => {
   for (const s of setups) await s(root)
 }
 
 describe('the preview equals what start() fetches (#843: one step selection)', () => {
-  const rows: Array<[string, Setup, Request, EngineDownloadPreview['kind'], string[]]> = [
+  const rows: Array<[string, Setup, Request, EngineDownloadPreview['kind'], string[], { chatRuntimeFiles?: string[] }?]> = [
     ['install: only the chat engine is missing', voiceCurrent, {}, 'install', [URLS.vulkan]],
     ['install: both required engines are missing (never the optional tools)', nothing, {}, 'install', [URLS.vulkan, URLS.whisper]],
     ['install: an explicit family list', nothing, { families: ['whisper_cpp'] }, 'install', [URLS.whisper]],
@@ -160,11 +170,17 @@ describe('the preview equals what start() fetches (#843: one step selection)', (
     ['reinstall: the main build (no refused builds named)', chatCurrentNetCurrent, { families: ['llama_cpp'], reinstall: true }, 'reinstall', [URLS.vulkan]],
     ['reinstall: the refused cpu/ net alone', chatCurrentNetCurrent, { families: ['llama_cpp'], reinstall: true, reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } } }, 'reinstall', [URLS.cpu]],
     ['reinstall: both refused builds', chatCurrentNetCurrent, { families: ['llama_cpp'], reinstall: true, reinstallBuilds: { llama_cpp: { main: true, cpuNet: true } } }, 'reinstall', [URLS.vulkan, URLS.cpu]],
-    ['reinstall: two families', both(chatCurrentNetCurrent, voiceCurrent), { families: ['llama_cpp', 'whisper_cpp'], reinstall: true }, 'reinstall', [URLS.vulkan, URLS.whisper]]
+    ['reinstall: two families', both(chatCurrentNetCurrent, voiceCurrent), { families: ['llama_cpp', 'whisper_cpp'], reinstall: true }, 'reinstall', [URLS.vulkan, URLS.whisper]],
+    // T8.5c (R1 F-4 = R2 M-3; F-24: `newer` is never replaced): only a reinstall replaces an engine newer than the pin.
+    // A named list skips the newer family and installs the rest; it used to replace it as "not current".
+    ['install: a named list skips the family newer than the pin and installs the missing one', chatNewer, { families: ['llama_cpp', 'whisper_cpp'] }, 'install', [URLS.whisper]],
+    // …and so does the argument-less install, for a newer chat engine that lacks a file this pin lists (a later
+    // release's layout): it counted as missing, so "Install voice engine" replaced it too.
+    ['install: the argument-less install skips a newer chat engine that lacks a file this pin lists', chatNewer, {}, 'install', [URLS.whisper], { chatRuntimeFiles: ['ggml.dll'] }]
   ]
 
-  it.each(rows)('%s', async (_title, setup, request, kind, expected) => {
-    const { rootPath, manifestsDir } = makeDrive()
+  it.each(rows)('%s', async (_title, setup, request, kind, expected, drive) => {
+    const { rootPath, manifestsDir } = makeDrive(drive)
     await setup(rootPath)
     const preview = previewEngineDownload({ rootPath, manifestsDir, ...request })
     const { fetchImpl, urls } = recordingFetch()
@@ -186,6 +202,11 @@ describe('the preview equals what start() fetches (#843: one step selection)', (
     ['update: a newer engine is never downgraded', async (root) => installed(llamaDir(root), BIN, 'b250', 'vulkan'), { families: ['llama_cpp'], update: true }, tMain('main.engine.nothingToUpdate')],
     ['update: the optional tools are reported, never updated in-app', async (root) => installed(join(root, 'runtime', 'kiwix-tools', HOST_OS), exe('kiwix-serve'), '3.7.0', 'cpu'), { families: ['kiwix_tools'], update: true }, tMain('main.engine.nothingToUpdate')],
     ['install: every required engine is on the drive', both(chatCurrentNetCurrent, voiceCurrent), {}, tMain('main.engine.alreadyInstalled')],
+    // T8.5c (R1 F-4 = R2 M-3): a named install answers a newer engine as the update does. It replaced it as "not current".
+    ['install: a named engine newer than the pin is never replaced', chatNewer, { families: ['llama_cpp'] }, tMain('main.engine.nothingToUpdate')],
+    // The knowledge-pack tools' consent sends `{ families: ['kiwix_tools'] }` when a file the pin lists is missing: a
+    // later release's newer copy may lack one (here kiwix-manage).
+    ['install: the named optional tools, newer than the pin and lacking a file it lists, are never replaced', async (root) => installed(kiwixDir(root), exe('kiwix-serve'), '3.9.0', 'cpu'), { families: ['kiwix_tools'] }, tMain('main.engine.nothingToUpdate')],
     ['update: no family named', nothing, { update: true }, tMain('main.engine.badRequest')]
   ]
 
