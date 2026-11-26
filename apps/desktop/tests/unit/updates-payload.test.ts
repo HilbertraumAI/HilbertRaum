@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { createHash, createPublicKey } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,6 +23,7 @@ import { isReleaseVersion, rootApps, type RootApp } from '../../src/main/service
 import { appOlderThanMinimum, type AppVersionRead, type VersionCore } from '../../src/shared/app-version'
 import { DESKTOP_ROOT, REPO_ROOT, repoText } from '../helpers/repo-files'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { envelopeBytes, vectorSetFiles } from '../helpers/update-vectors'
 
 // The update file's signed payload (app-update W-2, W-63, W-75; F-2, F-4, F-18's names; T4.2): every row is a row of the
 // record's tables (docs/app-updates.md §2.4 "The payload's values", §2.5 "The version rule's values", §2.10 "The
@@ -868,47 +869,17 @@ describe('the running version the payload check is given (the T4.2 sheet\u{2019}
 // and no `envelope` runs the version rule alone. The whole `expect` is compared, `stage` included. A vector that
 // disagrees with the code is never edited (the T4.2 sheet's Q5): the record decides which side is wrong.
 
-/** The sets this runner reads; T4.4 adds `positive` (a one-line edit). */
-const VECTOR_SETS = ['negative']
-const VECTORS_DIR = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates', 'vectors')
+/**
+ * The sets this runner reads. The set reader (tests/helpers/update-vectors.ts) lists every vectors*.json of a set in
+ * name order (§10.7: a test reads every one; a bare JSON array each), builds each envelope's bytes, guards each
+ * vector's form, and throws, so this file fails, when a listed set does not exist or holds no vector.
+ */
+const VECTOR_SETS = ['negative', 'positive']
 
-type VectorPart = { base64: string } | { text: string } | { repeat: string; times: number }
-interface Vector {
-  id: string
-  why: string
-  keys?: string[]
-  envelope?: string | { parts: VectorPart[] }
-  version?: string
-  host: Record<string, unknown>
-  expect: Record<string, unknown>
-}
-interface VectorFile {
-  set: string
-  file: string
-  vectors: Vector[]
-}
-
-/** Every vectors*.json of a set, in name order (§10.7: a test reads every one; a bare JSON array each). */
-function readVectorSet(set: string): VectorFile[] {
-  const dir = join(VECTORS_DIR, set)
-  if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .filter((name) => /^vectors.*\.json$/.test(name))
-    .sort()
-    .map((file) => ({ set, file, vectors: JSON.parse(readFileSync(join(dir, file), 'utf8')) as Vector[] }))
-}
-const VECTOR_FILES = VECTOR_SETS.flatMap(readVectorSet)
+const VECTOR_FILES = VECTOR_SETS.flatMap((set) => vectorSetFiles(set))
 const ALL_VECTORS = VECTOR_FILES.flatMap((f) => f.vectors.map((vector) => ({ ...f, vector })))
 const ENVELOPE_FORM = ALL_VECTORS.filter((x) => 'envelope' in x.vector)
 const VERSION_FORM = ALL_VECTORS.filter((x) => !('envelope' in x.vector) && 'version' in x.vector)
-
-/** An envelope's exact bytes: one base64 string, or its parts joined (§10.7, "`envelope`"). */
-function envelopeBytes(envelope: NonNullable<Vector['envelope']>): Buffer {
-  if (typeof envelope === 'string') return Buffer.from(envelope, 'base64')
-  return Buffer.concat(
-    envelope.parts.map((p) => ('base64' in p ? Buffer.from(p.base64, 'base64') : 'text' in p ? Buffer.from(p.text, 'utf8') : Buffer.from(p.repeat.repeat(p.times), 'utf8')))
-  )
-}
 
 /** The vector's key set: each SPKI loaded, its id computed from it (§2.7), never read from the vector. */
 function vectorKeys(keys: readonly string[]): UpdateKey[] {

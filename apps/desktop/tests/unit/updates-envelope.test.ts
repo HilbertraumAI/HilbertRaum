@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify, type KeyObject } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -16,6 +16,7 @@ import {
 import { embeddedKeySet } from '../../src/main/services/updates/keys'
 import { DESKTOP_ROOT, REPO_ROOT } from '../helpers/repo-files'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { envelopeBytes, setVectors, vectorFile } from '../helpers/update-vectors'
 
 // The update file's signed envelope and the embedded key set (app-update W-1, F-1, F-3; T4.1): DSSE's PAE and Ed25519
 // over node:crypto, the caps, the base64 grammar, `keyid` as a hint and the UnknownSigner rule, the `payloadType`
@@ -638,15 +639,6 @@ describe('verifyEnvelope: the payloadType is decided after a signature verified 
 // another task, never from this code (C14), and locked by the golden manifest. A vector that disagrees with the code is
 // never edited here: the disagreement goes to the orchestrator.
 
-const VECTORS = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates', 'vectors')
-
-/** One vector file: a bare JSON array, one vector per element (§10.7 "File shape and routing"); never empty. */
-function vectorFile<T>(set: string, name: string): T[] {
-  const all: unknown = JSON.parse(readFileSync(join(VECTORS, set, name), 'utf8'))
-  if (!Array.isArray(all) || all.length === 0) throw new Error(`${set}/${name} is no bare array of vectors`)
-  return all as T[]
-}
-
 interface PaeVector {
   id: string
   payloadType: string
@@ -710,58 +702,11 @@ describe('the spec vectors: the key set (spec/key-set.json; record §2.7)', () =
 })
 
 /**
- * The sets whose vectors this file runs through the envelope check (§10.7 "File shape and routing"); T4.4 adds
- * 'positive'. A set's files are its `vectors*.json`, found by name; spec/ holds its three own files instead (§10.7
- * "Folder"), whose vectors have no envelope.
+ * The sets whose vectors this file runs through the envelope check (§10.7 "File shape and routing"). The set reader
+ * (tests/helpers/update-vectors.ts) lists a set's `vectors*.json` by name (spec/: its three own files, whose vectors
+ * have no envelope), guards each vector's form, and throws when a listed set does not exist or holds no vector.
  */
-const ENVELOPE_SETS = ['spec', 'negative']
-const SPEC_FILES = ['pae.json', 'ed25519.json', 'key-set.json']
-
-interface PipelineVector {
-  id: string
-  /** The key set: Ed25519 SPKI DER in standard base64 (§2.7). */
-  keys?: string[]
-  envelope?: string | { parts: Array<{ base64: string } | { text: string } | { repeat: string; times: number }> }
-  version?: string
-  host: { runningVersion: string }
-  expect: { stage: string; code: string; params: Record<string, unknown> }
-}
-
-/**
- * Every vector of a set, with its file. Throws (so no run passes on nothing) when the set is missing (readdirSync),
- * holds no vector, or a `vectors*.json` vector has not exactly one of the two forms, which no runner would route.
- */
-function setVectors(set: string): Array<{ file: string; v: PipelineVector }> {
-  const files = readdirSync(join(VECTORS, set))
-    .filter((name) => /^vectors.*\.json$/.test(name) || (set === 'spec' && SPEC_FILES.includes(name)))
-    .sort()
-  const all = files.flatMap((file) => vectorFile<PipelineVector>(set, file).map((v) => ({ file, v })))
-  if (all.length === 0) throw new Error(`the vector set ${set} holds no vector`)
-  for (const { file, v } of all) {
-    if (/^vectors/.test(file) && (v.envelope === undefined) === (v.version === undefined)) throw new Error(`${set}/${file} ${v.id} has no single form`)
-  }
-  return all
-}
-
-/** Standard base64 that re-encodes to itself: a vector's own encoding, never misread by a lenient decoder. */
-function canonicalBase64(text: string): Buffer {
-  const bytes = Buffer.from(text, 'base64')
-  if (bytes.toString('base64') !== text) throw new Error('a vector holds base64 that is not canonical')
-  return bytes
-}
-
-/** Member 0's bytes as §10.7 "`envelope`" writes them: one base64 string, or the parts joined in order. */
-function envelopeBytes(envelope: NonNullable<PipelineVector['envelope']>): Buffer {
-  if (typeof envelope === 'string') return canonicalBase64(envelope)
-  return Buffer.concat(
-    envelope.parts.map((part) => {
-      if ('base64' in part) return canonicalBase64(part.base64)
-      if ('text' in part) return Buffer.from(part.text, 'utf8')
-      if ('repeat' in part) return Buffer.from(part.repeat.repeat(part.times), 'utf8')
-      throw new Error(`a part of no known form: ${JSON.stringify(Object.keys(part))}`)
-    })
-  )
-}
+const ENVELOPE_SETS = ['spec', 'negative', 'positive']
 
 /**
  * Whether some `sig` of the envelope is a signature by one of `spkis` over the release type's PAE of `payload`: the
@@ -790,8 +735,8 @@ describe('the contract vectors: the envelope stage of every vector with an envel
   // whatever its `expect.stage`; a `version` alone is the version rule's (updates-version.test.ts).
   const runs = ENVELOPE_SETS.flatMap((set) =>
     setVectors(set)
-      .filter(({ v }) => v.envelope !== undefined)
-      .map(({ file, v }) => [`${set}/${file} ${v.id}`, v] as const)
+      .filter(({ vector }) => vector.envelope !== undefined)
+      .map(({ file, vector }) => [`${set}/${file} ${vector.id}`, vector] as const)
   )
   if (runs.length === 0) throw new Error('the listed sets hold no vector with an envelope')
 
@@ -799,7 +744,7 @@ describe('the contract vectors: the envelope stage of every vector with an envel
     const read = parseKeySet(MARKER + (v.keys ?? []).join(','))
     expect(read.valid, 'the vector\u{2019}s keys read as a key set').toBe(true)
     const bytes = envelopeBytes(v.envelope!)
-    const r = verifyEnvelope(bytes, read.valid ? read.keys : [], v.host.runningVersion)
+    const r = verifyEnvelope(bytes, read.valid ? read.keys : [], v.host.runningVersion as string)
     if (v.expect.stage === 'envelope') {
       expect(outcome(r)).toEqual({ code: v.expect.code, params: v.expect.params })
     } else {
