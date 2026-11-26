@@ -4362,8 +4362,8 @@ never throws. The tests and the release tools run on Node's OpenSSL, the app on 
 Measured at P4's exit, all 1,047 committed contract vectors (at commit `8ea9d58c`) gave the same answer
 in the packaged app (Electron 43.8.10, BoringSSL) as on Node 24.13 (OpenSSL 3.5.4), each the answer the
 vector expects; the run's records are kept outside the repository (record §10.7). The two libraries are
-known to differ in two cases that a genuine release never meets: under a weak key, which release 1
-never embeds (below), and on a signature whose `R` is the curve's neutral point, which only the key's
+known to differ in two cases that a genuine release never meets: under a small-order key, which
+release 1 never embeds (its parser refuses every weak key, below), and on a signature whose `R` is the curve's neutral point, which only the key's
 holder can make and which a standard RFC 8032 signer makes with a chance of about 1 in 2^252. OpenSSL
 accepts that signature and BoringSSL refuses it; the release side's duty to sign with a standard signer
 is what keeps the two in step (record §2.3, "Verification" and "Writers: the caps and the signer").
