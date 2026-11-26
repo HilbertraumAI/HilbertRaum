@@ -162,6 +162,13 @@ describe('checkPayload: the reading (record §2.4, "Reading")', () => {
     expect(withInherited('en', 'An inherited summary.', () => accepted(check({ summary: {} })).summary)).toBeNull()
   })
 
+  // T4.2 review 1, m-4: `requires` itself is read as an own key only. The floor 99 refuses on this host when it is read.
+  it('a requires reached through the prototype, or held under an own __proto__ key, is no requires: no floor', () => {
+    expect(run({ requires: { win32: '99' } })).toEqual(OS_TOO_OLD('win32', '99', '10.0.26300'))
+    expect(answer(checkPayload(verified(GOOD.slice(0, -1) + ',"__proto__":{"requires":{"win32":"99"}}}'), WIN))).toBe('accepted')
+    expect(withInherited('requires', { win32: '99' }, () => run())).toBe('accepted')
+  })
+
   it('unknown fields are ignored, and the parsed value is never walked as a whole (5,000 levels in an ignored key)', () => {
     const deep = '['.repeat(5000) + ']'.repeat(5000)
     const text = GOOD.slice(0, -1) + `,"engine":{"llama":"b12110"},"security":"x","notes":${deep}}`
@@ -729,6 +736,11 @@ describe('checkPayload: the check order (record §4.5)', () => {
     ['the version rule\u{2019}s own refusal carries it', { version: '0.9.0' }, STALE, 'UPD-SAME-OR-OLDER', true],
     ['a refusal by the cap carries it', {}, { ...STALE, maxVersion: v('1.0.5') }, 'UPD-ABOVE-MAX-VERSION', true],
     ['a refusal by requires carries it', { requires: { linux: '2.x' } }, STALE, 'UPD-CANT-CHECK-LINUX-FLOOR', true],
+    // The other three refusals of requires, one per return (T4.2 review 1, M-1): no object, a win32 or darwin floor that
+    // breaks the grammar, an unreadable host glibc with a linux floor named.
+    ['a refusal by a requires that is no object carries it', { requires: [] }, STALE, 'UPD-TOO-NEW', true],
+    ['a refusal by a win32 floor that breaks the grammar carries it', { requires: { win32: '10.x' } }, STALE, 'UPD-TOO-NEW', true],
+    ['a refusal by an unreadable host glibc, a linux floor named, carries it', { requires: { linux: '2.0' } }, { ...LINUX, driveAppVersion: '1.4.0', rootApps: [], glibc: null }, 'UPD-CANT-CHECK-LINUX-FLOOR', true],
     ['a refusal by files[] carries it', { files: undefined }, STALE, 'UPD-TOO-NEW', true],
     ['a refusal by files[] with a drive version that counts: false', { files: undefined }, { ...STALE, driveAppVersion: '1.0.0', rootApps: null }, 'UPD-TOO-NEW', false]
   ])('staleDriveVersion on a refusal: %s', (_label, fields, host, code, stale) => {

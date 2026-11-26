@@ -113,11 +113,12 @@ export type VersionRuleResult =
 /**
  * F-4 (record §2.5, "The version rule's values"): `version` is accepted when it is above `running` in SemVer 2.0.0 order
  * and, where the drive's `app_version` counts, not below it (equal passes); else UPD-SAME-OR-OLDER. `driveAppVersion` is
- * `driveAppVersion(readDriveRelease(root))`; a value that does not parse counts as null (F-13: invalid is absent). It
- * counts when a root app carries it byte for byte, when a root `*.app` folder exists (its version is unknown), or when
- * `rootApps` is null (the root could not be listed: without the evidence the floor stays). Otherwise it is stale:
- * treated as absent, and `staleDriveVersion` is set. A root file of no known version keeps nothing. `highest_version_seen`
- * is no input. Pure; never throws.
+ * `driveAppVersion(readDriveRelease(root))`: F-13's valid value or null, so never more than 64 bytes. That bound is the
+ * caller's: this function reads any version `parseSemver` reads (up to 256 characters), and a value that does not parse
+ * counts as null. The drive version counts when a root app carries it byte for byte, when a root `*.app` folder exists
+ * (its version is unknown), or when `rootApps` is null (the root could not be listed: without the evidence the floor
+ * stays). Otherwise it is stale: treated as absent, and `staleDriveVersion` is set. A root file of no known version keeps
+ * nothing. `highest_version_seen` is no input. Pure; never throws.
  */
 export function checkVersionRule(
   version: Semver,
