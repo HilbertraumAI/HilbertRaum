@@ -113,3 +113,24 @@ export interface AcceptedPayload {
   readonly files: readonly AcceptedFile[]
   readonly flags: UpdateFlags
 }
+
+/**
+ * The payload check's refusals (§2.4, §2.5, §2.6), the version rule's included: the first failing check in §4.5's order
+ * decides (format, product, kind, channel, version, min_upgrade_from, the version rule, updates.max_version, requires,
+ * files[]).
+ */
+export type PayloadRefusal = Extract<
+  UpdateRefusal,
+  {
+    code:
+      | 'UPD-TOO-NEW'
+      | 'UPD-NOT-AN-UPDATE'
+      | 'UPD-FOR-NEWER-HILBERTRAUM'
+      | 'UPD-WRONG-CHANNEL'
+      | 'UPD-NEEDS-IN-BETWEEN'
+      | 'UPD-SAME-OR-OLDER'
+      | 'UPD-ABOVE-MAX-VERSION'
+      | 'UPD-CANT-CHECK-LINUX-FLOOR'
+      | 'UPD-OS-TOO-OLD'
+  }
+>

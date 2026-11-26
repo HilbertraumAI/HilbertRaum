@@ -85,3 +85,81 @@ export function compareSemver(a: Semver, b: Semver): -1 | 0 | 1 {
   // Every shared identifier equal: the longer set is above (§11.4.4).
   return a.prerelease.length === b.prerelease.length ? 0 : a.prerelease.length < b.prerelease.length ? -1 : 1
 }
+
+// ---- The update version rule (app-update F-4, G-19 (b); docs/app-updates.md §2.5; T4.2). Release 1 applies it to every
+// update for ever. It stays here, beside the order it uses, and keeps this file free of value imports: the release tools
+// and the no-hook load row of updates-version.test.ts load it as it is. Its refusal is declared below in the shape of
+// shared/updates/types.ts's UPD-SAME-OR-OLDER (payload.ts hands it on as that type, so the typecheck holds the two).
+
+/** A root app as the version rule reads it: `rootApps`' RootApp (drive-release.ts) fits. */
+export interface VersionRuleApp {
+  readonly kind: 'file' | 'folder' | 'other'
+  /** The version its name carries byte for byte, or null (a root `*.app` folder, a name of no known version). */
+  readonly version: string | null
+}
+
+/** UPD-SAME-OR-OLDER with §2.10's parameters, each the text as written. */
+export interface VersionRuleRefusal {
+  readonly code: 'UPD-SAME-OR-OLDER'
+  /** `driveVersion`: the drive's `app_version` that counted, or null when none counted (a stale one included). */
+  readonly params: { readonly version: string; readonly runningVersion: string; readonly driveVersion: string | null }
+}
+
+/** The rule's answer, with `staleDriveVersion` (a flag for `update.log`, P6, CF-44) on both arms. */
+export type VersionRuleResult =
+  | { readonly accepted: true; readonly staleDriveVersion: boolean }
+  | { readonly accepted: false; readonly refusal: VersionRuleRefusal; readonly staleDriveVersion: boolean }
+
+/**
+ * F-4 (record §2.5, "The version rule's values"): `version` is accepted when it is above `running` in SemVer 2.0.0 order
+ * and, where the drive's `app_version` counts, not below it (equal passes); else UPD-SAME-OR-OLDER. `driveAppVersion` is
+ * `driveAppVersion(readDriveRelease(root))`; a value that does not parse counts as null (F-13: invalid is absent). It
+ * counts when a root app carries it byte for byte, when a root `*.app` folder exists (its version is unknown), or when
+ * `rootApps` is null (the root could not be listed: without the evidence the floor stays). Otherwise it is stale:
+ * treated as absent, and `staleDriveVersion` is set. A root file of no known version keeps nothing. `highest_version_seen`
+ * is no input. Pure; never throws.
+ */
+export function checkVersionRule(
+  version: Semver,
+  running: Semver,
+  driveAppVersion: string | null,
+  rootApps: readonly VersionRuleApp[] | null
+): VersionRuleResult {
+  const drive = parseSemver(driveAppVersion)
+  const counts = drive !== null && (rootApps === null || rootApps.some((app) => app.version === drive.text || app.kind === 'folder'))
+  const floor = counts ? drive : null
+  const staleDriveVersion = drive !== null && !counts
+  if (compareSemver(version, running) > 0 && (floor === null || compareSemver(version, floor) >= 0)) {
+    return { accepted: true, staleDriveVersion }
+  }
+  const params = { version: version.text, runningVersion: running.text, driveVersion: floor === null ? null : floor.text }
+  return { accepted: false, refusal: { code: 'UPD-SAME-OR-OLDER', params }, staleDriveVersion }
+}
+
+// ---- The OS floors (app-update G-24; record §2.4, "A floor's grammar", "Comparing"; T4.2)
+
+/** A floor, or a host value read as one, is at most this many bytes. */
+export const FLOOR_MAX_BYTES = 64
+
+/** One or more components joined by single dots, each 1 to 9 ASCII digits (nine keep every integer exact). */
+const FLOOR = /^[0-9]{1,9}(?:\.[0-9]{1,9})*$/
+
+/**
+ * A floor's components as integers (a leading zero means nothing: `07` is 7), or null for anything outside the grammar:
+ * no space, sign, letter or empty component, at most 64 bytes, a string only. The payload's `win32`, `darwin` and
+ * `linux` values and the host's own values (the system version, the runtime glibc) are read alike. Never throws.
+ */
+export function parseFloor(text: unknown): readonly number[] | null {
+  if (typeof text !== 'string' || text.length > FLOOR_MAX_BYTES || !FLOOR.test(text)) return null
+  return text.split('.').map(Number)
+}
+
+/** Component by component as integers, a missing component counting 0, the first difference deciding: true when `host` equals or exceeds `floor`. */
+export function meetsFloor(host: readonly number[], floor: readonly number[]): boolean {
+  for (let i = 0; i < Math.max(host.length, floor.length); i++) {
+    const h = host[i] ?? 0
+    const f = floor[i] ?? 0
+    if (h !== f) return h > f
+  }
+  return true
+}
