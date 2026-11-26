@@ -21,6 +21,8 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
   was reachable only from inside the app; the opt-in local API deliberately opens a loopback door,
   and the sidecars had always had an unauthenticated one. This threat is now modeled explicitly
   (kiwix-serve excepted — R-9) — see "The fifth threat: same-machine processes" below.
+- **A forged or altered update file, or a stolen signing key** (the in-field update, being built) —
+  see "Update trust" below.
 
 ## Security baseline (spec §3.5)
 
@@ -4329,6 +4331,125 @@ asks for a re-verify on every llama.cpp pin bump; if a future server ever echoed
 error body, the fallback should be sanitized to a fixed structural string + numeric status. Re-verified
 on the b11146 bump (#512): the 400 `exceed_context_size_error` and 500 image-not-supported bodies are
 byte-identical to b9849's.
+
+## Update trust (app-update P4; [`app-updates.md`](app-updates.md) §2)
+
+The in-field update (BUILD_STATE §5 item 3) trusts an update file only when a public key built into
+the app verifies its signature. P4 built that trust core, frozen with golden vectors (F-1–F-4): the
+check of a file's signed envelope and of its payload, the key set each build embeds, and the release
+guard that checks the embedded keys in every release build. Nothing in this build hands the check a
+file yet (the import is P6's), so no outside input reaches it. This section says what is checked and
+what is not; every exact value (the caps, the grammars, the codes, the weak encodings, the guard's
+reasons) is in the design record's §2, and the recorded limits are in
+[`known-limitations.md`](known-limitations.md) "App updates: the trust core".
+
+**The envelope verifier** (`services/updates/envelope.ts`, `verifyEnvelope`; record §2.3). One pure
+function is given the bytes of the update file's signed envelope (a DSSE envelope), the embedded keys
+and the running version. An empty key set refuses before a byte is read. A file over 4 MiB, or with
+more than 64 signature entries, is "too new for this version", never "not genuine": the caps leave
+room for later releases. The bytes must be strict UTF-8 without a byte-order mark and one JSON object
+with a `signatures` array and a string `payloadType` and `payload`, the payload in a strict base64
+grammar (either alphabet, padding required, no other character); anything else reads as a damaged
+file. Every signature entry that holds a 64-byte signature is tried against every embedded key: pure
+Ed25519 through `node:crypto` over DSSE's pre-authentication encoding, which covers the payload type
+and the payload with their byte counts. The first signature that verifies accepts the file; a `keyid` is only a hint and never selects
+or skips a key. When none verifies, the file is "not genuine" if a signature names an embedded key's
+id, otherwise "signed with a newer key". Only after a signature verified does the `payloadType` say
+what the file is (a release, a file for a newer HilbertRaum, or no update at all), so no field outside
+the signature decides how a file is read. The verified payload bytes are handed on exactly as they
+were signed, in a buffer of their own, never re-encoded or read again from the envelope. The function
+never throws. The tests and the release tools run on Node's OpenSSL, the app on Electron's BoringSSL;
+when P4 ran the contract vectors on both, every answer was the same (record §10.7).
+
+**The payload check** (`services/updates/payload.ts`, `checkPayload`; record §2.4, §2.5). It reads
+only the verified bytes, with the envelope's JSON rules; a payload it cannot read is "too new", since a
+known key signed it. Then, in one order, the first failure deciding: `format` 1, `product`, `kind`,
+`channel` `stable`, `version`, `min_upgrade_from`, the version rule (newer than the running version,
+and not below the drive's recorded version where that counts, record §2.5), the drive policy's
+`updates.max_version`, the operating-system floors in `requires` (fail closed where a floor is named
+and cannot be read), the advisory date `issued` (notices only), and `files[]`, the list of every member
+of the update file by name, size and SHA-256 (each name by the member-name rule, no two equal after
+case folding). Unknown fields are ignored, so a later writer's file stays readable. Every host value
+(the running version, the policy's cap, the drive's version and root apps, the system and its version,
+glibc, the clock, the UI language) is an argument. It does not check the update file's container, the
+members' bytes against their hashes, whether each group of members is complete, or this computer's
+apply script: those are the import's (P6). `install_as`, `group` and `summary` are signed text it
+never uses as a path, and P6 shows `summary` as plain text. Its type asks for a verified envelope, but
+any code can build that shape: that the bytes were verified is the caller's duty, and P6 adds a row
+that holds it.
+
+**The embedded key set** (`services/updates/keys.json`, read by `keys.ts` through `parseKeySet`;
+record §2.7). A build trusts the Ed25519 public keys in its own `keys.json`: release 1 embeds three,
+any one of which signs alone, and has no way to withdraw one (K1, record §2.1). One parser reads the
+set. A set that does not read in any part (another marker, a malformed or repeated entry, more than 16
+keys, a weak key) is invalid as a whole, the build then embeds no key, and every update file is refused
+(fail closed). At each start the diagnostics log notes `Update keys` with the count and whether the set
+read, never a key or an id. The committed set is empty until the owner's key ceremony, and so is every
+build made before it; refusing an empty set at sale belongs to the sell gate and the pre-publish check
+(P5, not built yet).
+
+**Weak keys** (owner, 2026-11-26; record §2.7, "A weak key"). The parser also refuses a weak key: an
+encoding of one of Ed25519's small-order points, or a non-canonical encoding. Under such a key a
+signature made without any private key can verify, and whether it does depends on the crypto library:
+measured in P4, Node 24.13's OpenSSL, on which the tests and the release tools run, accepts such
+signatures, and Electron 43.8.10's BoringSSL, which the app runs on, refuses them. Release 1 refuses the
+key itself rather than rest a frozen rule on a library's behaviour. A key made by an Ed25519 key
+generator is never weak. The rule does not make a key the owner's: a key whose private half is public
+reads as valid and verifies in both libraries, and the key proof below keeps such a key out.
+
+**The release guard** (`services/updates/bundle-check.ts`, `checkBundleKeys`; record §2.7;
+[`packaging.md`](packaging.md) "The release workflow"). Each build leg of `release.yml` (Windows,
+macOS, Linux) checks the `app.asar` it just packaged: across every file under `out/main` in it, the
+key-set marker is found exactly once, in a code file, as one string literal opened and closed by the
+same quote; its value reads through the one parser; and it equals the committed `keys.json`'s set byte
+for byte, an empty set included. A red check stops the tag-gated release job. **Its claim is bounded**
+(owner, 2026-11-26): it proves that the key-set literal in the built main bundle equals `keys.json`, not
+what the code makes of that literal. A source change that adds a key elsewhere in the code passes it;
+whoever can make that change can also change `keys.json`, the guard and the workflow, so the code review
+catches it, and the key proof and the key count below close it on the real binary. The guard reads
+bytes and does not parse JavaScript, so a quoted copy of the set in a comment or inside another string
+is not told apart from the real one. It passes a bundle that embeds no key: it compares, it does not
+judge an empty set.
+
+**The key proof** (the owner's step before release 1 is published; record §2.8). On the exact
+release-1 candidate binary of each sold system:
+- One throw-away update file per real key, which the owner signs for a version below every build that
+  embeds the production keys. The binary must refuse each one as "same or older", an answer it reaches
+  only after the signature verified, so each file proves that its key is embedded.
+- The key count the packaged app logs at start (`Update keys`) must equal the number of keys the owner
+  proved (three), never the committed file's own count: an extra key in `keys.json` would match its own
+  count. With the per-key files this proves that the build embeds exactly the proved keys.
+- A belt, kept from before the weak-key rule: each key's signature made at the ceremony must not verify
+  a second, unrelated message.
+
+The throw-away files are never uploaded.
+
+**Repository rules** (`repo-hygiene.test.ts`; record §2.7 "Test keys", §10.7). Test keys are made at
+test time, or by a vector generator that writes only their public half; no private key is committed,
+test keys included. Two rows hold that:
+- No file under `apps/desktop/tests/fixtures/` holds the start of a PKCS#8 Ed25519 private key (the v1
+  and v2 forms, as hex in either case or as base64), a PEM `PRIVATE KEY` line or a JWK private key. The
+  row cannot see a raw 32-byte seed (no text tells it from a public key or a hash), a key inside a
+  base64 payload unless the key's bytes start a multiple of three bytes into it, another encoding, or a
+  file outside that folder.
+- The committed `keys.json` must read, and none of its keys may be one of RFC 8032 §7.1's five test
+  keys (the RFC prints their private halves) or a public key a committed contract vector names. The row
+  cannot see a test key that no committed file names, such as one a test makes at run time or the update
+  walk's one-time key; the key proof and the key count keep those out.
+
+**What a stolen key means** (record §2.1, §2.2, §11.3). Offline custody of the private keys is the
+defence: each is a password-protected file on separate offline media, never on GitHub, never in CI, and
+no agent holds one. A release-1 Kit accepts a signature from any one of its keys and cannot withdraw
+one, so a stolen key stays trusted on every Kit that never installs the release that drops it, and is
+trusted again on a Kit that goes back to a version that still embeds it (record §6.10).
+
+**Forks** (W-1; record §2.9). Builds from this repository, free DIY builds included, embed the
+project's public keys and accept the project's signed update files. A fork that publishes its own
+builds replaces `keys.json` with its own public keys, or ships an empty set, which turns the in-app
+update off. It keeps the protocol's format tokens (the key-set marker among them) or changes its
+reader with them, and never spells the marker in another `keys.json` field or anywhere else in its
+main bundle, where the release guard would find it twice. There is no trust on first use and no key a
+user can add.
 
 ## Residual egress channels
 

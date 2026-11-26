@@ -813,7 +813,7 @@ function signedByAVectorKey(bytes: Buffer, spkis: string[], payload: Buffer): bo
 
 describe('the contract vectors: the envelope stage of every vector with an envelope (record §10.7; §2.3, §2.10)', () => {
   // Routed by form, never by file or stage (§10.7 "File shape and routing"): an envelope runs the envelope check here,
-  // whatever its `expect.stage`; a `version` alone is the version rule's (updates-version.test.ts).
+  // whatever its `expect.stage`; a `version` alone is the version rule's (its runner is in updates-payload.test.ts).
   const runs = ENVELOPE_SETS.flatMap((set) =>
     setVectors(set)
       .filter(({ vector }) => vector.envelope !== undefined)

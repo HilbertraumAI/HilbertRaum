@@ -156,6 +156,18 @@ npm run package        # electron-vite build + electron-builder (current OS targ
 npm run package:win    # build + a Windows portable .exe specifically
 ```
 
+**A local package build is not offline, even with every cache present** (measured 2026-11-26,
+app-update T4.3). electron-builder's bundled `@electron/get` (3.1.0) fetches Electron's
+`SHASUMS256.txt` from the network on every build to check its cached Electron zip; it never takes the
+checksums from its cache. For a build that must not touch the network (no network on the box, or a
+check that nothing is fetched): after `npm run build`, write a scratch electron-builder config outside
+the repo, never committed, that is the app's `electron-builder.yml` as it is plus
+`electronDownload.checksums`, mapping the cached zip's name (`electron-v<version>-<platform>-<arch>.zip`)
+to its sha256 from the lockfile-pinned `node_modules/electron/checksums.json` (the cached zip must
+match it). Then, from `apps/desktop`, `npx electron-builder --win dir --config <that file>` (or the
+target needed), with the proxy settings pointed at a dead local port as the guard that nothing is
+fetched. The `app.asar` is packed exactly as `npm run package` packs it.
+
 Key config points:
 - **`executableName: HilbertRaum`** is pinned at the top level (PR #30). electron-builder derives
   the per-platform executable / AppImage name from the **npm package name**, which in this monorepo
@@ -1316,6 +1328,8 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
   the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
   step itself on every PR (a workflow change first runs at a tag). Then it **checks the packaged
+  app's embedded update keys** on `release/win-unpacked/resources/app.asar` (app-update W-3,
+  blocking; "The update key check" below). Then it **checks the packaged
   app's user-data folder** (app-update W-15, blocking): it starts the portable exe with a scratch
   drive root and no profile switch, waits for `%APPDATA%\@hilbertraum\desktop\lockfile` (the
   single-instance lock's file, present only while an instance holds that profile), and stops the
@@ -1344,11 +1358,16 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
   Silicon) → **ditto-zip** (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on
   exFAT, which can't hold the `.app`'s framework symlinks; the drive launcher extracts to a local
-  cache). Also fetches the mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with
+  cache) → **checks the signed app's embedded update keys** on
+  `release/mac*/HilbertRaum.app/Contents/Resources/app.asar`, before the zip is uploaded (app-update
+  W-3, blocking; "The update key check" below). Also fetches the mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with
   symlinks **dereferenced** (`llama-runtime-mac-arm64.zip`) so it drops straight onto exFAT under
   `runtime/llama.cpp/mac/`.
 - **`build-linux`** — `ubuntu-latest`: `npm ci` → typecheck → `npm run package` →
-  `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg runs).
+  `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg runs), uploaded,
+  then **checks the packaged app's embedded update keys** on
+  `release/linux-unpacked/resources/app.asar`, which the AppImage target leaves in place (app-update
+  W-3, blocking; "The update key check" below).
 - **`release`** (tag-gated, needs all three) — asserts **tag == `apps/desktop/package.json`
   version** (fail fast on mismatch), aggregates `SHA256SUMS.txt`, builds the release notes from the
   CHANGELOG section for the version being tagged — `## [<version>]`, with `[Unreleased]` as the
@@ -1367,6 +1386,54 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   Full Changelog link). The issues step is best-effort: on API failure it warns and the draft is
   created without the section — notes never block a release build. The script is locally testable:
   `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`.
+
+**The update key check: the release guard's three steps (app-update W-3, F-3;
+[`app-updates.md`](app-updates.md) §2.7, [`security-model.md`](security-model.md) "Update trust").**
+Each build leg runs one step, "Check the packaged app's embedded update keys (app-update W-3)", from
+`apps/desktop`: `npx --no-install vitest run tests/unit/updates-bundle-check.test.ts` with
+`HILBERTRAUM_PACKED_ASAR` naming the `app.asar` that leg just packaged. Where each runs:
+- **`build-win`**, after the #769 packaged-app check, on `release/win-unpacked/resources/app.asar`;
+- **`build-mac`**, after the ad-hoc sign and the zip and before the zip's upload, on the signed app's
+  `app.asar`: the step resolves `release/mac*/HilbertRaum.app/Contents/Resources/app.asar` itself and
+  fails unless exactly one such file exists;
+- **`build-linux`**, after the AppImage's upload, on `release/linux-unpacked/resources/app.asar`.
+
+What it checks: the file's packed row reads every file under `out/main` in that archive (chunks and
+any `.map` included) and passes only when the key-set marker is found there exactly once, in a `.js`,
+`.mjs` or `.cjs` file, as one string literal opened and closed by the same quote, its value reads
+through the app's one key-set parser, and that value equals the checkout's `keys.json` set byte for
+byte (in order too). An empty set on both sides passes, so a dispatch or walk build made before the
+owner's key ceremony is fine here; refusing an empty set is the sell gate's and the pre-publish
+check's (P5, not built yet). A failure names its reason: `committed-unreadable`, `marker-not-found`,
+`marker-repeated`, `marker-not-in-code`, `marker-not-quoted`, `embedded-unreadable` or `keys-differ`
+(with both lists of key ids). The row fails when the named archive is missing, so it cannot skip on a
+build leg; on a `ci.yml` leg, where no variable is set, it is the file's one skipped row. The check
+proves the literal, not what the code makes of it (owner, 2026-11-26): the code review, the key proof
+and the key count cover the rest ([`security-model.md`](security-model.md) "Update trust").
+
+What a red one means (T4.3's step-placement decision and review R-8): that leg fails, and the
+tag-gated `release` job, which needs all three legs, does not run, so no draft release is made. What
+the run already uploaded stays downloadable from the run: the Windows portable exe and the AppImage are
+uploaded before their checks (the mac zip only after its check). Those are the run's unsigned test
+builds, never a release.
+
+Per PR: `packaging.test.ts` reads the three steps on every PR (the command, each leg's archive path,
+each step's place after its leg's package step, no `if:`, `continue-on-error:` or `shell:` on the step,
+no `if:`, `defaults:` or `continue-on-error:` on its job, no workflow default shell, the `release`
+job's `needs` and its tag-only `if:`), and `updates-bundle-check.test.ts`'s other rows run on every CI
+leg, its `out/main` row on the bundle each leg builds before its tests. A change to the steps still
+first runs at a dispatch or a tag.
+
+`--no-install` (app-update T4.5's security fixes): with it, a vitest missing from the tree fails the
+step instead of being installed, unpinned, from the registry. Two recorded limits: with no local
+vitest, npx still sends one registry request for vitest's metadata before it refuses, and it would run
+a vitest already in npm's own npx cache; the `npm test -- <file>` form sends none. CI always has its
+local vitest after `npm ci`, so neither happens there. The older #769 step above still runs plain
+`npx vitest`, which would install a missing vitest: pre-existing, a follow-up.
+
+By hand, after a local package build (checklist item 16 below): from `apps/desktop`, set
+`HILBERTRAUM_PACKED_ASAR` to the archive and run
+`npm test -- tests/unit/updates-bundle-check.test.ts`; every row passes and none skips.
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —
@@ -1455,7 +1522,8 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
    against it (next section).
 11. **The `app.asar` layout model against a real archive (#548).** `release.yml`'s build-win runs it on every Windows
-   build it packages (#769, "The release workflow" above): check that step passed. By hand, after an electron-builder
+   build it packages (#769, "The release workflow" above): check that step passed. (The update key check runs on all
+   three legs: item 16.) By hand, after an electron-builder
    bump or a local `npm run package:win`, from `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar`
    and `HILBERTRAUM_PACKED_EXE=release/win-unpacked/HilbertRaum.exe`, then
    `npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`.
@@ -1516,6 +1584,14 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    after the probe's `cmd` call, so `rename_ok` is later by about that call's time than in spike
    1's poll, which had no probe; and the unpack folder is looked at a few milliseconds after the
    probe's open, when `cmd` has returned.
+16. **The update keys embedded in each built `app.asar` (app-update W-3).** `release.yml`'s three
+   build legs check every archive they package ("The update key check" above): check that all three
+   steps passed. By hand, after an electron-builder or electron-vite bump or a local package build, from
+   `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR` to the archive (`release/win-unpacked/resources/app.asar`,
+   the `.app`'s `Contents/Resources/app.asar`, `release/linux-unpacked/resources/app.asar`), then
+   `npm test -- tests/unit/updates-bundle-check.test.ts`. **Pass** = no failed and no skipped row. The
+   step checks the key-set literal against the committed `keys.json` only; whether the build trusts
+   exactly the owner's keys is the key proof's ([`app-updates.md`](app-updates.md) §2.8).
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 

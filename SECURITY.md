@@ -67,6 +67,17 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   binary is verified against its recorded install hash immediately before it is executed. A
   packaged build refuses to spawn a tampered binary and falls back; dev builds are inert. Downloaded
   model files are separately checksum-verified before first use.
+- **Update files are verified offline against keys built into the app** (the in-field update, being
+  built; [`docs/security-model.md`](docs/security-model.md) "Update trust"). An update file counts only
+  when one of the Ed25519 public keys embedded in the app verifies its signature: no online service, no
+  trust on first use and no key a user can add. The private keys never leave the owner's offline
+  custody (never on GitHub, never in CI). Three keys are embedded, any one of which signs alone, so a
+  lost key is replaced by another; a Kit cannot withdraw a key, so a stolen one stays trusted on every
+  Kit that does not install the release that drops it, and again on a Kit that goes back to a version
+  that still embeds it. Each release build checks that its embedded keys are exactly the committed ones
+  ([`docs/known-limitations.md`](docs/known-limitations.md) "App updates: the trust core" has the
+  limits). This version holds the check, but no key yet and nothing that imports an update file.
+  Report a suspected problem with an update file as any other vulnerability (above).
 - **User skill packs are treated as untrusted input** — a drop-in `SKILL.md` pack is third-party
   content, so it is size-gated on import (over-cap packs are rejected) and its tools run through the
   same audited bridge with a **frozen document scope they cannot widen**.
