@@ -10,20 +10,25 @@
 # stub exit. The unpack dir is checked again right after the first free probe and right after the first
 # successful rename.
 #
-# Pass (every run): the unpack dir is absent when the probe first reads free, and the probe reads free at most
-# -MaxProbeFreeMs (1500) ms after WM_CLOSE. The rename's time is recorded beside it, for comparison only.
+# Pass (every run): the probe reads "held" while the app runs (what the update's wait rests on), the unpack dir
+# is absent when the probe first reads free, and the probe reads free at most -MaxProbeFreeMs (1500) ms after
+# WM_CLOSE. The rename's time is recorded beside it, for comparison only. The verdict line names the rule and
+# marks a limit other than 1500.
 # Exit code: 0 pass, 1 a run failed the pass rule, 2 the app did not start, 3 the host profile changed,
-# 5 a bad parameter.
+# 5 a bad parameter, or a drive root that already holds an exe of -Exe's name with other content.
 #
 # Usage (Windows PowerShell 5.1 or pwsh, from any folder; nothing else of HilbertRaum may be running):
 #   powershell -NoProfile -File scripts\release\run-hold.ps1 `
 #     -Exe apps\desktop\release\HilbertRaum-<version>-portable.exe -WorkDir <scratch folder on the volume to measure>
 #   -WorkDir       holds drive\ (the scratch drive root), ud\ (the scratch profile) and logs\ unless
 #                  -DriveRoot, -UserDataDir or -LogDir name other places (a stick: -DriveRoot <letter>:\<folder>).
-#   -ExeSha256     optional: the copy in the drive root must have this sha256.
+#                  A drive root that already holds a file of -Exe's name is used only if that file's sha256
+#                  equals -Exe's; otherwise the script stops (exit 5) and replaces nothing.
+#   -ExeSha256     optional: -Exe (and so the copy in the drive root) must have this sha256.
 #   -Runs 3  -IntervalMs 25  -SettleMs 5000 (time at the first window before the close)  -Tag <name for the log folder>
-# Output: <LogDir>\<Tag>\run.log (one line per run, min / median / max, PASS or FAIL), run<N>.json, all.json,
-# and the stub's and the app tree's file handles per run.
+# Output: <LogDir>\<Tag>-<UTC start time>\run.log (both sha256 values, one line per run, min / median / max,
+# PASS or FAIL), run<N>.json, all.json, and the stub's and the app tree's file handles per run. Every run of
+# the script writes a folder of its own.
 #
 # History: this is the app-update wave's spike 1 harness, moved here with three changes. The close poll gained
 # the write-open probe (the pass rule is stated on it; the spike's poll had only the rename), the unpack dir is
@@ -58,14 +63,29 @@ if (-not $LogDir) { $LogDir = Join-Path $WorkDir 'logs' }
 $rootExeName = Split-Path -Leaf $Exe
 # The probe is a cmd line: these characters would change what it means.
 if ((Join-Path $DriveRoot $rootExeName) -match '["%^!]') { Write-Output "the drive root or the exe name holds one of `" % ^ ! : $DriveRoot\$rootExeName"; exit 5 }
-$runDir = Join-Path $LogDir $Tag
+# One folder, and so one run.log, per run of this script: the start time is part of the folder's name.
+$startUtc = (Get-Date).ToUniversalTime()
+$runDir = Join-Path $LogDir "$Tag-$($startUtc.ToString('yyyyMMddTHHmmssZ'))"
+if ([IO.Directory]::Exists($runDir)) { Write-Output "the log folder $runDir exists already (a run started in the same second): start again"; exit 5 }
 [void][IO.Directory]::CreateDirectory($runDir)
 $log = Join-Path $runDir 'run.log'
-Write-Log $log "# run-hold $Tag runs=$Runs interval=$IntervalMs settle=$SettleMs maxProbeFree=$MaxProbeFreeMs start $((Get-Date).ToUniversalTime().ToString('o'))"
-$rootExe = New-DriveRoot $DriveRoot $Exe $ExeSha256
+Write-Log $log "# run-hold $Tag runs=$Runs interval=$IntervalMs settle=$SettleMs maxProbeFree=$MaxProbeFreeMs start $($startUtc.ToString('o'))"
+$rootExe = New-DriveRoot $DriveRoot $Exe
+# The exe measured is the copy in the drive root. A copy left by an earlier run has the same name after a bump
+# of electron-builder, NSIS or Electron (the app's version did not change), so it is compared with -Exe and a
+# different one is refused, not replaced: this script deletes and overwrites nothing.
+$exeSha = Get-Sha256 $Exe
+$rootSha = Get-Sha256 $rootExe
+Write-Log $log "exe=$Exe sha256=$exeSha"
+Write-Log $log "root exe=$rootExe sha256=$rootSha"
+if ($rootSha -ne $exeSha) {
+  Write-Log $log "STOP: $rootExe is not a copy of -Exe (the sha256 values above differ; a file an earlier run left?). Remove it, or name an empty -DriveRoot or -WorkDir."
+  exit 5
+}
+if ($ExeSha256 -and $exeSha -ne $ExeSha256.ToLower()) { Write-Log $log "STOP: -Exe has sha256 $exeSha, not -ExeSha256 $($ExeSha256.ToLower())"; exit 5 }
 [void][IO.Directory]::CreateDirectory($UserDataDir)
 $volume = try { (Get-Volume -FilePath $DriveRoot -ErrorAction Stop).FileSystem } catch { 'unknown' }
-Write-Log $log "root=$DriveRoot ($volume) exe=$rootExe sha256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $rootExe).Hash.ToLower()) ud=$UserDataDir harness pid=$PID in job=$([T11]::InJob($PID))"
+Write-Log $log "root=$DriveRoot ($volume) ud=$UserDataDir harness pid=$PID in job=$([T11]::InJob($PID))"
 $hostBefore = @(Get-HostProfileListing)
 $results = @()
 for ($i = 1; $i -le $Runs; $i++) {
@@ -156,6 +176,7 @@ for ($i = 1; $i -le $Runs; $i++) {
   $r.host_post_identical = Test-HostProfileUnchanged $hostBefore "r$i-post" $log
   # the pass rule
   $why = @()
+  if ($r.probe_while_running -ne 'held') { $why += "the probe read '$($r.probe_while_running)', not 'held', while the app ran" }
   if ($r.unpack_at_probe -ne 'absent') { $why += "the unpack dir was '$($r.unpack_at_probe)' when the probe first read free" }
   if ($r.probe_free_end -eq 'null' -or $null -eq $r.probe_free_end) { $why += 'the probe never read free' }
   elseif ([double]::Parse($r.probe_free_end, [Globalization.CultureInfo]::InvariantCulture) -gt $MaxProbeFreeMs) { $why += "the probe read free $($r.probe_free_end) ms after WM_CLOSE (limit $MaxProbeFreeMs)" }
@@ -175,7 +196,9 @@ foreach ($k in 'start_ms', 'window_ms', 'app_exit', 'tree_exit', 'unpack_gone', 
   Write-Log $log ("{0,-14} {1}" -f $k, (Get-Stats ($results | ForEach-Object { $_.$k }))) | Out-Null
 }
 $failed = @($results | Where-Object { -not $_.pass })
-$verdict = if ($results.Count -eq $Runs -and $failed.Count -eq 0) { "PASS: $Runs of $Runs runs on $volume" } else { "FAIL: $($failed.Count) of $($results.Count) runs failed the pass rule ($Runs asked) on $volume" }
+$rule = "probe held while the app ran, probe free <= $MaxProbeFreeMs ms after WM_CLOSE with the unpack dir absent"
+if ($MaxProbeFreeMs -ne 1500) { $rule += " (NOT the checklist's rule: its limit is 1500 ms)" }
+$verdict = if ($results.Count -eq $Runs -and $failed.Count -eq 0) { "PASS: $Runs of $Runs runs on $volume; $rule" } else { "FAIL: $($failed.Count) of $($results.Count) runs failed the pass rule ($Runs asked) on $volume; $rule" }
 Write-Log $log $verdict | Out-Null
 Write-Log $log "# end $((Get-Date).ToUniversalTime().ToString('o'))" | Out-Null
 Get-Content $log

@@ -2425,7 +2425,7 @@ describe('decodeEntities', () => {
     ],
     // …and a zero-width joiner or direction mark to its code point, like its numeric form and the
     // literal character (the review found an override would treat the forms differently).
-    ['the zero-width joiners and direction marks as their own characters', '&zwnj;&#8204; &zwj; &lrm;&#x200E; &rlm;', '‌‌ ‍ ‎‎ ‏']
+    ['the zero-width joiners and direction marks as their own characters', '&zwnj;&#8204; &zwj; &lrm;&#x200E; &rlm;', '‌‌ ‍ \u{200E}\u{200E} \u{200F}']
   ])('decodes %s (#663)', (_label, input, expected) => {
     expect(decodeEntities(input)).toBe(expected)
   })

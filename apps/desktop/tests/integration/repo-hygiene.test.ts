@@ -1892,7 +1892,17 @@ describe('repo hygiene — the renderer keeps only listed UI preferences in loca
     'hilbertraum.docs.locationsMoreOpen': "'1' when the rail's \"More\" list is open. Lost: it starts closed"
   }
 
-  it('every localStorage key is on the list, and nothing is kept in IndexedDB', () => {
+  // The profile's other stores carry the same hazard as localStorage and hold nothing today, so each is refused by
+  // name: a property, a `['name']` access or a bare identifier of that name, whatever it hangs on.
+  const OTHER_WEB_STORAGE: Record<string, string> = {
+    indexedDB: 'IndexedDB',
+    caches: 'CacheStorage',
+    getDirectory: 'the origin private file system (navigator.storage.getDirectory)',
+    cookie: 'cookies (document.cookie)',
+    openDatabase: 'Web SQL'
+  }
+
+  it('every localStorage key is on the list, and no other web storage of the profile is used', () => {
     const preview = join(DESKTOP_ROOT, 'src', 'renderer', 'preview') + sep
     const sources = [join(DESKTOP_ROOT, 'src', 'renderer'), join(DESKTOP_ROOT, 'src', 'preload')]
       .flatMap((dir) => filesUnder(dir, /\.tsx?$/))
@@ -1908,7 +1918,7 @@ describe('repo hygiene — the renderer keeps only listed UI preferences in loca
     // Every `const NAME = '<string>'` of those files: a key is usually such a constant, sometimes imported.
     const constants = new Map<string, Set<string>>()
     const uses: ts.Node[] = []
-    const indexedDb: string[] = []
+    const otherStorage: string[] = []
     const visit = (n: ts.Node): void => {
       if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined && ts.isStringLiteralLike(n.initializer)) {
         constants.set(n.name.text, (constants.get(n.name.text) ?? new Set()).add(n.initializer.text))
@@ -1918,7 +1928,11 @@ describe('repo hygiene — the renderer keeps only listed UI preferences in loca
         (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression) && n.argumentExpression.text === name) ||
         (ts.isIdentifier(n) && n.text === name && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n))
       if (named('localStorage')) uses.push(n)
-      if (named('indexedDB')) indexedDb.push(where(n))
+      for (const [name, store] of Object.entries(OTHER_WEB_STORAGE)) if (named(name)) otherStorage.push(`${where(n)}: ${store}`)
+      // `navigator.storage` (the StorageManager) is the way into the origin private file system.
+      if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && named('storage') && /\bnavigator$/.test(n.expression.getText())) {
+        otherStorage.push(`${where(n)}: navigator.storage`)
+      }
       ts.forEachChild(n, visit)
     }
     for (const source of sources) visit(source)
@@ -1944,6 +1958,56 @@ describe('repo hygiene — the renderer keeps only listed UI preferences in loca
     expect(uses.length, 'the scan found the localStorage uses').toBeGreaterThan(0)
     expect(unjudged, 'a localStorage use whose key this row cannot read').toEqual([])
     expect([...keys].sort()).toEqual(Object.keys(LOCAL_STORAGE_KEYS).sort())
-    expect(indexedDb, 'IndexedDB lives in the same shared profile').toEqual([])
+    expect(otherStorage, 'no other web storage: each of these lives in the same shared profile').toEqual([])
+  })
+})
+
+// The Edit tool once wrote a right-to-left override into a test's string literal as the raw character where the
+// escape was meant (app-update wave, T3.8's fix round, S-1). Such a character shows nothing in a diff or an editor and
+// reorders what a reviewer sees, and a raw line or paragraph separator ends a line for some tools and not for others.
+// So no tracked source file under the roots below holds one raw: the bidirectional controls (U+202A to U+202E,
+// U+2066 to U+2069, U+200E, U+200F, U+061C) and U+2028, U+2029. Written as an escape in source they stay allowed,
+// and that is how a test that needs one writes it. The code points are numbers here so that this file holds none.
+describe('repo hygiene — no raw bidirectional-control or line-separator characters in source', () => {
+  const RANGES: Array<[number, number]> = [
+    [0x202a, 0x202e],
+    [0x2066, 0x2069],
+    [0x200e, 0x200f],
+    [0x061c, 0x061c],
+    [0x2028, 0x2029]
+  ]
+  const refused = new RegExp(`[${RANGES.map(([from, to]) => `${String.fromCharCode(from)}-${String.fromCharCode(to)}`).join('')}]`, 'g')
+  /** Every refused character of a text as `line N: U+XXXX`. */
+  const rawControls = (text: string): string[] =>
+    [...text.matchAll(refused)].map(
+      (m) => `line ${text.slice(0, m.index).split('\n').length}: U+${m[0].charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`
+    )
+
+  it('no tracked source, script, workflow or doc file under apps, scripts, launchers, docs and .github holds one', () => {
+    const SOURCE_FILE = /\.(ts|tsx|mjs|js|ps1|sh|cmd|yml|md)$/
+    const files = execFileSync('git', ['ls-files', '-z', '--', 'apps', 'scripts', 'launchers', 'docs', '.github'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8'
+    })
+      .split('\0')
+      .filter((p) => SOURCE_FILE.test(p) && existsSync(join(REPO_ROOT, p)))
+    expect(files.length).toBeGreaterThan(500) // the scan reads the real tree, not an empty list
+    const offenders = files.flatMap((p) => rawControls(readFileSync(join(REPO_ROOT, p), 'utf8')).map((found) => `${p} ${found}`))
+    // No file is exempt. (The #663 entity row in tests/unit/zim-html.test.ts needs two of these marks in an expected
+    // value and writes them in the braced escape form, which the Edit tool leaves as written.)
+    expect(offenders).toEqual([])
+  })
+
+  it('the scan itself finds each of the fourteen characters, and neither an escape nor a neighbouring character', () => {
+    const codes = RANGES.flatMap(([from, to]) => Array.from({ length: to - from + 1 }, (_, i) => from + i))
+    expect(codes).toHaveLength(14)
+    for (const code of codes) expect(rawControls(`a${String.fromCharCode(code)}b`), `U+${code.toString(16)}`).toHaveLength(1)
+    expect(rawControls(`const a = 1\nconst b = '${String.fromCharCode(0x202e)}'\n`)).toEqual(['line 2: U+202E'])
+    // An escape in source is six ordinary characters.
+    expect(rawControls(`const b = '${'\\'}u202E ${'\\'}u2028'`)).toEqual([])
+    // Not refused: zero-width space and joiners (emoji sequences use U+200D), the no-break spaces, the word joiner, a BOM.
+    for (const code of [0x200b, 0x200c, 0x200d, 0x00a0, 0x202f, 0x2060, 0xfeff, 0x2065, 0x206a]) {
+      expect(rawControls(String.fromCharCode(code)), `U+${code.toString(16)}`).toEqual([])
+    }
   })
 })

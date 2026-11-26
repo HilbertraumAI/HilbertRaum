@@ -50,16 +50,19 @@ function Wait-NoApp([int]$Ms = 60000) {
   throw ('a HilbertRaum process is still running, refusing to start another: ' + ((Get-AppProcs) -join ', '))
 }
 
-# A scratch drive root: config\drive.json = {} and a copy of the portable exe under its own name.
-function New-DriveRoot([string]$Root, [string]$Src, [string]$Sha) {
+# A scratch drive root: config\drive.json = {} and a copy of the portable exe under its own name. A file of that
+# name already there is kept, never overwritten: the caller compares it with the source (run-hold.ps1 refuses a
+# copy whose sha256 differs).
+function New-DriveRoot([string]$Root, [string]$Src) {
   [void][IO.Directory]::CreateDirectory((Join-Path $Root 'config'))
   $dj = Join-Path $Root 'config\drive.json'
   if (-not [IO.File]::Exists($dj)) { [IO.File]::WriteAllText($dj, '{}', $Utf8) }
   $exe = Join-Path $Root (Split-Path -Leaf $Src)
   if (-not [IO.File]::Exists($exe)) { Copy-Item -LiteralPath $Src -Destination $exe }
-  if ($Sha) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower(); if ($h -ne $Sha.ToLower()) { throw "sha256 mismatch for $exe : $h" } }
   return $exe
 }
+
+function Get-Sha256([string]$File) { (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLower() }
 
 # Start an exe with ELECTRON_RUN_AS_NODE removed and $Env set only for the start (restored after).
 function Start-Exe([string]$Exe, [string[]]$ArgList = @(), [hashtable]$Env = @{}) {

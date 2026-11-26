@@ -1316,7 +1316,16 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   ([`app-updates.md`](app-updates.md) §8.7), so a build whose profile moved must not be released;
   a failure names every new lockfile and folder the start left under `%APPDATA%`. The step uses the
   runner's own profile, which is thrown away with the runner: never run it on a computer someone
-  works on. `packaging.test.ts` pins the names the path derives from and reads this step too. Also fetches the win Vulkan runtime via
+  works on. `packaging.test.ts` pins the names the path derives from and reads this step too
+  (that it has no `if:` and no `continue-on-error`, and that `release` needs build-win). What
+  each sees: the step sees every move that also moves the lock, on Windows, at a tag or a
+  dispatch. A move made after the lock was taken (a `setPath` of `appData` or `sessionData` later
+  in the start) leaves the lockfile where it was, so only the pin sees it: main may call `setPath`
+  for `userData`, `appData` or `sessionData` once, the dev-only `userData` one. The pins read
+  source text and syntax, not what runs: an alias of `app` (`const a = app; a.name = …`),
+  `Object.assign(app, …)`, `app['setPath'](…)`, and a second `package.json` brought in by
+  `directories.app` or `extends` pass them, and the `localStorage` list resolves a key's constant
+  by its name across the renderer's files. The step is the check on the outcome. Also fetches the win Vulkan runtime via
   `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
   in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
   extracted install tree (`Compress-Archive`; root entry `win/` incl. the
@@ -1465,12 +1474,15 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    (`%APPDATA%\@hilbertraum\desktop` on Windows), named by the packaged `package.json`:
    `productName` if present, else `name` ([`app-updates.md`](app-updates.md) §8.7). For each built
    archive (`release/win-unpacked/resources/app.asar`, the `.app`'s `Contents/Resources/app.asar`,
-   `release/linux-unpacked/resources/app.asar`), from an **empty scratch folder** (the command
-   writes a file named `package.json` into the current folder, over one that is there):
-   `npx asar extract-file <path to app.asar> package.json`. **Pass** = the extracted file's `name` is
-   `@hilbertraum/desktop` and it has no `productName`. On Windows, `release.yml`'s build-win also
-   reads the path itself from a start of the built exe ("The release workflow" above): check that
-   step passed.
+   `release/linux-unpacked/resources/app.asar`), from a **new, empty scratch folder per archive**
+   (the command writes a file named `package.json` into the current folder, over one that is
+   there), with the repo's own installed tool named by its path:
+   `node <repo>\node_modules\@electron\asar\bin\asar.js extract-file <path to app.asar> package.json`.
+   Not `npx asar`: outside the repo, or in a folder that holds a `package.json`, npm no longer finds
+   the repo's copy and asks the registry for a package of that name. **Pass** = the extracted file's
+   `name` is `@hilbertraum/desktop` and it has no `productName`. On Windows, `release.yml`'s
+   build-win also reads the path itself from a start of the built exe ("The release workflow"
+   above): check that step passed.
 15. **The portable stub's hold on the drive-root exe, after every electron-builder, NSIS or
    Electron major bump (app-update W-21).** An update's apply waits until the exe on the drive is
    free, by the start files' write-open probe ([`app-updates.md`](app-updates.md) §5.5, §5.6), and
@@ -1478,13 +1490,25 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    exe, 3 runs on an NTFS volume, with nothing else of HilbertRaum running:
    `powershell -NoProfile -File scripts\release\run-hold.ps1 -Exe apps\desktop\release\HilbertRaum-<version>-portable.exe -WorkDir <scratch folder>`
    (the script's header lists the other parameters; it starts the app with a scratch drive root and
-   a scratch profile, and deletes nothing). **Pass** (the script prints `PASS` and exits 0) = in
-   every run the unpack folder is absent when the probe first reads free, and the probe reads free
-   at most 1.5 s after the window was closed (WM_CLOSE). Record the run log's `probe_free_end`
-   line and, beside it for comparison with the first measurement (spike 1,
-   [`app-updates.md`](app-updates.md) §10.6: once the app's process was gone the stub released the
-   exe in 0.22–0.27 s and exited in 0.42–0.62 s; it exited 0.70–0.77 s after WM_CLOSE), its
-   `rename_ok` and `stub_exit` lines.
+   a scratch profile, and deletes nothing). The exe it measures is its copy in the scratch drive
+   root: when a file of that name is already there (an earlier run's, with the same name after such
+   a bump) and its sha256 differs from `-Exe`'s, the script stops with exit 5 and replaces nothing;
+   use a new `-WorkDir`. Each run of the script writes a log folder of its own,
+   `<WorkDir>\logs\hold-<UTC start time>\`, whose `run.log` records both sha256 values. **Pass**
+   (the script prints `PASS` and exits 0) = in every run the probe reads "held" while the app runs,
+   the unpack folder is absent when the probe first reads free, and the probe reads free at most
+   1.5 s after the window was closed (WM_CLOSE); the `PASS` line names that rule and marks a limit
+   other than 1500 ms. Record the run log's `probe_free_end` line and, for comparison with the
+   first measurement, its `app_exit`, `rename_ok` and `stub_exit` lines. **Which starting point
+   each number has:** every line of the run log counts from WM_CLOSE. Spike 1's published numbers
+   ([`app-updates.md`](app-updates.md) §10.6) count from the moment the app's process was gone:
+   the stub released the exe 0.22–0.27 s after it and exited 0.42–0.62 s after it. So compare
+   `rename_ok` − `app_exit` with the first pair and `stub_exit` − `app_exit` with the second.
+   Only spike 1's third number, the stub's exit 0.70–0.77 s after WM_CLOSE, compares with a log
+   line (`stub_exit`) as it stands. Two limits of the reading: in each poll the rename is tried
+   after the probe's `cmd` call, so `rename_ok` is later by about that call's time than in spike
+   1's poll, which had no probe; and the unpack folder is looked at a few milliseconds after the
+   probe's open, when `cmd` has returned.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import * as ts from 'typescript'
 import { parse as parseYaml } from 'yaml'
@@ -512,6 +512,10 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
     ['launchers', 'scripts', join('apps', 'desktop', 'scripts'), join('.github', 'workflows')].flatMap((root) =>
       filesUnder(join(REPO_ROOT, root), /./)
     )
+  // Every `extraMetadata` in a text that is not `extraMetadata.version`, with the up to 24 characters behind it. The
+  // lookahead consumes nothing, so a second override inside those characters is matched too.
+  const extraMetadataOverrides = (text: string): string[] =>
+    [...text.matchAll(/extraMetadata(?=(.{0,24}))/g)].filter((m) => !/^\.version\b/.test(m[1]!)).map((m) => `${m[0]}${m[1]}`)
 
   it('(i) apps/desktop/package.json is named @hilbertraum/desktop', () => {
     expect(desktopPkg.name).toBe(PROFILE_NAME)
@@ -526,14 +530,22 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
     const extra = (builderConfig().extraMetadata ?? {}) as Record<string, unknown>
     expect(Object.keys(extra).filter((key) => key !== 'version')).toEqual([])
     const texts = [join(REPO_ROOT, 'package.json'), join(DESKTOP_ROOT, 'package.json'), ...scriptFiles()]
-    const offenders = texts.flatMap((path) =>
-      [...readFileSync(path, 'utf8').matchAll(/extraMetadata(.{0,24})/g)]
-        .filter((m) => !/^\.version\b/.test(m[1]!))
-        .map((m) => `${rel(path)}: ${m[0]}`)
-    )
+    const offenders = texts.flatMap((path) => extraMetadataOverrides(readFileSync(path, 'utf8')).map((found) => `${rel(path)}: ${found}`))
     expect(offenders, 'only extraMetadata.version may be set').toEqual([])
   })
 
+  // The scan above judges every `extraMetadata` in a text, also a second one right behind an allowed one: a build
+  // command that already sets the version is where a name override would be added.
+  it('(ii) the scan reads every extraMetadata override on a line, not only the first', () => {
+    expect(extraMetadataOverrides('electron-builder --win portable -c.extraMetadata.version=$V')).toEqual([])
+    expect(extraMetadataOverrides('electron-builder -c.extraMetadata.version=$V -c.extraMetadata.name=x')).toEqual(['extraMetadata.name=x'])
+    expect(extraMetadataOverrides('"-c.extraMetadata.version=$v" "-c.extraMetadata.productName=X"')).toEqual([
+      'extraMetadata.productName=X"'
+    ])
+    expect(extraMetadataOverrides('electron-builder -c.extraMetadata.versionName=1')).toEqual(['extraMetadata.versionName=1'])
+  })
+
+  const PROFILE_PATH_NAMES = ['userData', 'appData', 'sessionData']
   it("(iii) src/main moves userData only for a dev run, never renames the app, and takes the lock at module top level after that", () => {
     const sources = filesUnder(join(DESKTOP_ROOT, 'src', 'main'), /\.ts$/).map((path) =>
       ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
@@ -551,8 +563,10 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
       if (ts.isCallExpression(n)) {
         const name = calleeName(n)
         const first = n.arguments[0]
-        // A setPath whose first argument is not a plain string cannot be judged, so it counts as one for userData.
-        if (name === 'setPath' && !(first !== undefined && ts.isStringLiteralLike(first) && first.text !== 'userData')) setPathCalls.push(n)
+        // Three path names move the profile: `userData` itself, `appData` (userData is derived from it, `<appData>\<name>`,
+        // when first asked for) and `sessionData` (Local Storage and the caches). A setPath whose first argument is not
+        // a plain string cannot be judged, so it counts as one of them.
+        if (name === 'setPath' && !(first !== undefined && ts.isStringLiteralLike(first) && !PROFILE_PATH_NAMES.includes(first.text))) setPathCalls.push(n)
         if (name === 'setName') renames.push(where(n))
         if (name === 'requestSingleInstanceLock') lockCalls.push(n)
       }
@@ -573,12 +587,16 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
 
     expect(renames, 'app.setName(...) and app.name = ... move the profile').toEqual([])
 
-    // The one setPath('userData', ...): `if (isDev) app.setPath(...)`, a statement of main/index.ts itself, where `isDev`
-    // is `!app.isPackaged`. A packaged build never takes it.
+    // The one setPath of a profile path: `if (isDev) app.setPath('userData', ...)`, a statement of main/index.ts itself,
+    // where `isDev` is `!app.isPackaged`. A packaged build never takes it. `appData` and `sessionData` are never set,
+    // not even there. A move made after the lock is one only this row sees: the lock's file is already at the old path
+    // then, so release.yml's start of the built exe still finds it.
     expect(setPathCalls.map((c) => rel(c.getSourceFile().fileName))).toEqual(['apps/desktop/src/main/index.ts'])
     const setPath = setPathCalls[0]!
     const index = setPath.getSourceFile()
     const guard = setPath.parent.parent
+    const moved = setPath.arguments[0]
+    expect(moved !== undefined && ts.isStringLiteralLike(moved) ? moved.text : moved?.getText(), `${where(setPath)} sets`).toBe('userData')
     expect(
       ts.isExpressionStatement(setPath.parent) &&
         ts.isIfStatement(guard) &&
@@ -614,15 +632,30 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
   // dev tools pass a scratch one on purpose, so that a measurement never opens the computer's real profile.
   const PROFILE_SWITCH_TOOLS = ['scripts/verify-mac-build.sh', 'scripts/check-netlog.mjs', 'scripts/release/run-hold.ps1']
   it('(iv) no start file, script, workflow or app source passes the app a profile switch', () => {
-    const scanned = [
-      ...scriptFiles().filter((path) => !PROFILE_SWITCH_TOOLS.includes(rel(path))),
-      ...filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx|html)$/)
-    ]
+    const scanned = scriptFiles().filter((path) => !PROFILE_SWITCH_TOOLS.includes(rel(path)))
     for (const tool of PROFILE_SWITCH_TOOLS) expect(existsSync(join(REPO_ROOT, tool)), tool).toBe(true)
     const switches = scanned.flatMap((path) =>
       [...readFileSync(path, 'utf8').matchAll(/--user-data-dir|--profile-directory/gi)].map((m) => `${rel(path)}: ${m[0]}`)
     )
     expect(switches).toEqual([])
+    // What goes into the build or runs inside it: the build config (`linux.executableArgs` is the AppImage's start
+    // line), the npm scripts of both package.json files, and the app's own source. There the switch's bare name is
+    // refused, so `appendSwitch('user-data-dir', ...)` counts too.
+    const pkgScripts = (path: string): Array<[string, string]> =>
+      Object.entries((JSON.parse(readFileSync(path, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {}).map(
+        ([name, command]): [string, string] => [`${rel(path)} scripts.${name}`, command]
+      )
+    const builderConfigs = readdirSync(DESKTOP_ROOT).filter((name) => /^electron-builder\b/.test(name))
+    expect(builderConfigs).toEqual(['electron-builder.yml'])
+    const built: Array<[string, string]> = [
+      ...[...builderConfigs.map((name) => join(DESKTOP_ROOT, name)), ...filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx|html)$/)].map(
+        (path): [string, string] => [rel(path), readFileSync(path, 'utf8')]
+      ),
+      ...pkgScripts(join(REPO_ROOT, 'package.json')),
+      ...pkgScripts(join(DESKTOP_ROOT, 'package.json'))
+    ]
+    expect(built.filter(([label]) => label.includes(' scripts.')).length, 'the scan found the npm scripts').toBeGreaterThan(10)
+    expect(built.flatMap(([label, text]) => [...text.matchAll(/user-data-dir|profile-directory/gi)].map((m) => `${label}: ${m[0]}`))).toEqual([])
     // The start files' other way to move it: the folder the profile is derived from (`%APPDATA%`, `$XDG_CONFIG_HOME`,
     // `$HOME`) set for the app they start.
     const envMoves = filesUnder(join(REPO_ROOT, 'launchers'), /./).flatMap((path) =>
@@ -652,8 +685,12 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
     interface Step {
       run?: string
       env?: Record<string, string>
+      if?: unknown
+      'continue-on-error'?: unknown
     }
-    const workflow = parseYaml(repoText('.github', 'workflows', 'release.yml')) as { jobs: Record<string, { steps: Step[] }> }
+    const workflow = parseYaml(repoText('.github', 'workflows', 'release.yml')) as {
+      jobs: Record<string, { steps: Step[]; needs?: string | string[]; if?: unknown; 'continue-on-error'?: unknown }>
+    }
     const steps = workflow.jobs['build-win'].steps
     const profile = `'${PROFILE_NAME.replace('/', '\\')}'`
     const found = steps.filter((s) => (s.run ?? '').includes(`Join-Path $env:APPDATA ${profile}`))
@@ -663,5 +700,11 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
     const artifact = (builderConfig().portable?.artifactName ?? '').replace('${version}', '*')
     expect(step.run).toContain(`apps/desktop/release/${artifact}`)
     expect(step.env?.HILBERTRAUM_DRIVE_ROOT).toMatch(/^\$\{\{ runner\.temp \}\}./)
+    // The step blocks the release: it always runs, its failure fails build-win, and the job that publishes waits for
+    // build-win.
+    expect(step.if, 'the step has no if:').toBeUndefined()
+    expect(step['continue-on-error'], 'the step has no continue-on-error').toBeUndefined()
+    expect(workflow.jobs['build-win']['continue-on-error'], 'build-win has no continue-on-error').toBeUndefined()
+    expect([workflow.jobs.release.needs].flat()).toContain('build-win')
   })
 })
