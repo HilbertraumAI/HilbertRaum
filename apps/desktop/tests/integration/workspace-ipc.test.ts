@@ -1533,6 +1533,38 @@ describe('the update.log unlock line (app-update T3.10)', () => {
     }
   })
 
+  // T3.10 review 1, M-1: the open got past the stamp and the unlock's own settings write failed (here a full drive at
+  // `seedSettings`, #844's recipe), so the line still names the stamp the open found. Without `writer` it would read
+  // "the open never got as far as the stamp" (the golden's writer rule), and the next unlock overwrites that stamp.
+  it('a settings write that fails after the stamp: the vault_open_failed line still names the stamp found', async () => {
+    const drive = lineDrive()
+    setStampAppVersion('0.1.66')
+    const full = Object.assign(new Error('database or disk is full'), {
+      code: 'ERR_SQLITE_ERROR',
+      errcode: 13,
+      errstr: 'database or disk is full'
+    })
+    let seed: { mockRestore: () => void } | undefined
+    try {
+      const ctrl = startedOn(lockedVault('wsipc', PW)) // the create's open stamps `0.1.66;interim`
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+      seed = vi.spyOn(settingsModule, 'seedSettings').mockImplementationOnce(() => {
+        throw full
+      })
+      try {
+        expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_open_failed' })
+        expect(unlockLines(drive)).toEqual([
+          unlockLine(`result=vault_open_failed user_version=${SCHEMA_VERSION} writer=0.1.66 applied=interim err=SQLITE_13`)
+        ])
+      } finally {
+        ctrl.shutdown()
+      }
+    } finally {
+      seed?.mockRestore()
+      setStampAppVersion('')
+    }
+  })
+
   // Finding 1 of the T3.10 sheet: the contexts register without a drive for the line. They must stay quiet: no line
   // anywhere, and no "line skipped" notice in app.log for every unlock of the suites.
   it('without the hook nothing is written and nothing is skipped', async () => {
