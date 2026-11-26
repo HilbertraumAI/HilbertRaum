@@ -819,7 +819,10 @@ process on every start (architecture.md "In-app model downloader"):
    commercial), so the user toggle below is the effective gate on prepared drives too. A drive
    builder who wants a download-locked drive hand-edits `config/policy.json` to
    `allow_model_downloads: false`. Policy only restricts, never expands — and update checks +
-   telemetry remain **always denied** in every posture (the app never phones home).
+   telemetry remain **always denied** in every posture (the app never phones home):
+   `allow_update_checks` is `false` in each, and the `updates.allow_online_check: true` a Kit's
+   policy also carries is a reserved name this version of the app never reads
+   ([`security-model.md`](security-model.md) "Policy precedence").
 2. **User setting** — the spec §3.6 Settings checkbox ("Allow internet access for model
    downloads and updates"), **default ON** for a fresh DIY/developer install
    (`DEFAULT_SETTINGS.allowNetwork: true`); the policy ceiling in gate 1 still wins — on a drive

@@ -576,7 +576,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. `-Kit`/`--kit` (only `build-commercial-drive` passes it) adds the Kit's reserved `"updates": {"allow_online_check": true}` to `policy.json` and leaves the release record to the builder. At its end it writes `config/drive-release.json` when node 22.18 or later is on `PATH` (app-update W-20; without node, one line and exit 0). A read-only root app is refused before anything is written, a dry run included (exit 1, W-33). **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model (exit 2 when no manifest has that id, or its manifest declares no `download:` block, #767); `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Half a download pair (a top-level `download:` without one on `mmproj` or a `files:` member, or the other way round, which the app refuses) → `BLOCK` with the validator's message, nothing of that model fetched, exit 1 (#767). Idempotent (present + verified → skip). A manifest the checkout's app cannot use (a `role` it does not know, or a `min_app_version` above `apps/desktop/package.json`'s version, by the app's own rule) is skipped with `SKIP   <id>: needs a newer HilbertRaum (<why>)` and counted in the summary (`| for a newer HilbertRaum <n>`); `--only` naming a model only such a manifest carries exits 2 (app-update W-62 (b), [`app-updates.md`](app-updates.md) §6.11). |
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades). An engine **newer** than the drive's pin — one the app's in-app update installed while the drive's yaml stayed behind — is **kept**, whatever its backend, with a line naming both versions (#873; the app's `compareRuntimeVersions` order, so `3.10.0` is newer than `3.8.1`; a version that cannot be ordered re-fetches as before). `-AllowDowngrade`/`--allow-downgrade` replaces it anyway, and `-Commercial`/`--commercial` always does (a sold drive carries its app's pin; the commercial match stays exact); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1; no runtime, or a runtime/format pair the app does not run → *UNSUPPORTED*, #767). `-Generate`/`--generate` writes `config/checksums.json` (`entries: []` when there is no manifest, #767). `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). A manifest for a newer HilbertRaum (as for `fetch-models`) is skipped with its `SKIP` line: none of its files is judged (so `--strict` ignores its weight), `--generate` leaves it out of `checksums.json`, the count is printed, and `--kit` fails on any skip, since a Kit ships only manifests its own app can use (the canonical gate refuses the same drive). Both twins find a manifest whose extension is in any case (`.YAML`). |
@@ -665,7 +665,9 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
 > 100% offline by default; the in-app downloader is triple-gated (policy ceiling ∧ user setting ∧
 > per-download confirmation) and downloads are policy-permitted in both `prepare-drive` postures —
-> update checks + telemetry stay denied, matching the commercial final check below (gate
+> update checks + telemetry stay denied (`allow_update_checks: false`; the Kit builder's `-Kit` adds
+> only the reserved `updates.allow_online_check: true`, which this version never reads), matching
+> the commercial final check below (gate
 > semantics: [`model-policy.md`](model-policy.md) "The in-app downloader"). This does not weaken
 > the offline guarantee.
 
@@ -775,8 +777,9 @@ record what the drive was built with   # un-numbered, the build's last writes (W
                                   # (--support-end, written once per Kit), then config/drive-release.json (the
                                   # apps, start files and engines now on the drive), by two node helpers
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
-             commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied)
-             + the Kit's updates key ("updates": {"allow_online_check": true}) and no junk install key (T3.8)
+             commercial posture (encrypted, no phone-home — downloads OK, allow_update_checks false, no telemetry)
+             + the Kit's reserved updates key ("updates": {"allow_online_check": true}, never read by
+               this version) and no junk install key (T3.8)
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234),
                every further file a marker records is there with its bytes (#998), and
@@ -901,7 +904,9 @@ also reads what release 1 reads on every Kit, each refusal one line with its way
   apps carry, judged by the same root-app rule the record's helper uses (`rootArtifactOf`): missing,
   unreadable, damaged, without a version, or naming another one is refused, and the line says to write
   the record again (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>`),
-  then check again (`-VerifyOnly` writes nothing).
+  then check again (`-VerifyOnly` writes nothing); a folder or a link at the record's name is deleted
+  first. Root apps of no single version (two versions, or a folder `.app` that carries none) get their
+  own line.
 - `config/kit-support.txt` must be the builder's 8 bytes (the month and one line feed); a hand edit's CR
   LF or byte-order mark is refused (delete the file on purpose and stamp it again with the builder).
   Its month is not range-checked here: that is the ship-time check's.
@@ -919,11 +924,18 @@ also reads what release 1 reads on every Kit, each refusal one line with its way
 
 The problems come in a fixed order: the policy (the Kit key after the posture), weights and reviews,
 user data, notices, the engines, the source bundle, OCR and skills, the apps and start files, then the
-record and the support end.
+record and the support end. None of these checks has a line in the builders' native pre-flight: the
+canonical gate in the same final step is their only check (the `.ps1` builder hands it the target
+with the same trim rule as the pre-flight). Two things it does not check: the record's `files[]`
+list is not compared with the files now on the drive, and an ACL that denies writing a root app is
+not seen, only the write bits and the read-only attribute
+([`known-limitations.md`](known-limitations.md)).
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
-but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
+but `network.allow_update_checks` is `false` and there is no telemetry; the Kit's reserved
+`updates.allow_online_check: true` beside it is a name this version never reads, so a Kit checks for
+no update) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
 that **no user data is present** (spec §12.2: `workspace/`, `logs/` and `updates/` hold nothing but empty folders,
 and `config/` holds no `workspace.json` or `working-copy-lost.json`, exact or with a `.<suffix>`, in any case; the gate names each leftover,
 OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a

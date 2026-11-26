@@ -429,9 +429,12 @@ password recovery — are documented in
   (`assertCommercialDrive`, which both builder scripts now call) refuses a hashless marker and
   `fetch-runtime --commercial` re-fetches it, so a newly built sold drive cannot carry one; a
   self-built DIY drive keeps the tolerance. A spawn-time refusal on commercial drives is wired but
-  switched **off** (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` in `binary-verifier.ts`) until the
-  owner rules on kits sold before this change (#234). Trust there still rests on drive provisioning +
-  filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
+  switched **off** (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` in `binary-verifier.ts`), and the
+  owner ruled on 2026-11-25 (#234) that it stays off for good: the check detects a copy that no longer
+  matches its own record, and it is no defence against whoever can write the engine folder (the record
+  lies beside the files, unsigned; [`security-model.md`](security-model.md) "What the check is, and
+  what it is not"). Trust there still rests on drive provisioning + filesystem integrity, the same
+  residual already accepted for on-drive sidecars and app skills.
 - **The pre-spawn check covers the files an engine's marker records, nothing more (#1012 — accept +
   document).** Since #1012 the verifier re-hashes every file the engine copy's own install marker records
   (the libraries beside the program included) before the first spawn of a session. Three things stay
@@ -452,7 +455,10 @@ password recovery — are documented in
      damaged" verdict (it is not damage), so the in-app reinstall is refused ("nothing to repair") and the
      chat runs on the demo runtime. The fix is outside the app: allow the file in the security product, or
      restore its permission. (A folder or another non-regular file at a recorded path is different: it
-     counts as missing, so it gets the "Install again" offer — code review round 5.)
+     counts as missing, so it gets the "Install again" offer — code review round 5. So, since the
+     update wave's T3.12, does a file the drive itself fails to read, `EIO`, and a marker it fails to
+     read. On Windows a failing stick may report an unmapped error instead, `UNKNOWN`, which stays
+     "try again": that way out may not reach a Windows user.)
 
   A follow-up proposes refusing an unrecorded library and starting the engines in their own folder.
 
@@ -491,7 +497,10 @@ password recovery — are documented in
   - An image question fails with "try again in a minute" and can be asked again at once (no cooldown).
   - A knowledge-pack tool file that cannot be read just now does not keep the packs down for the
     session: the next question that uses a pack tries again. A missing one does, until the pack set
-    changes.
+    changes. Since the update wave's T3.12 a file or a marker the drive fails to read (`EIO`) counts as
+    missing or damaged, so even a passing medium error during the first check of a session keeps the
+    packs off until the app restarts, where it used to clear at the next question (a lasting one is
+    the same as before).
 
   What an install marker that is there but damaged does (#1028, 2026-11-23: cut short by an interrupted
   copy, garbled, or recording a file under something other than its SHA-256):
@@ -527,13 +536,14 @@ password recovery — are documented in
     accepted (a later release may add one, data-contracts.md), so this cannot be told from a real hash-less
     marker. **For the engines,** a garble anywhere else is caught: a structural character or a field name
     makes the marker damaged, a hash makes its file changed, and a recorded name makes the program unrecorded
-    (damaged) or the named file missing (damaged files). One exception: a garble that turns the single key of
-    a marker written before #998 (it records the program alone) into a name under `cpu/` leaves a map that
-    records nothing of the copy, so the copy is not checked.
+    (damaged) or the named file missing (damaged files).
   - **Residual — the knowledge-pack tools and a garbled name.** A garble in the name of a file that is neither
     their program nor a library (`kiwix-search`, a licence text) — or one that turns a library's name into a
     name that is neither (`icuuc74.dlm`) — reads as that file missing. The tools start on `missing-other` (owner
     call on #1012), and the real file under the true name is not checked: a changed library then runs.
+    The library test is a closed list of endings (`.dll`, `.so`, `.so.N`, `.dylib`), so the same holds for a
+    later tools copy whose loadable code has another ending: with such a file gone the tools still start
+    (update wave T3.12 review 1, m-5).
   - **Residual — a second top-level `binaries`.** `JSON.parse` keeps the last of two same-named fields, so a
     marker that carries a map and then `"binaries":{}` reads as hash-less and its copy is not checked. Only
     someone who can write the marker writes that (no damage makes a second field), and that person can also
@@ -3646,7 +3656,11 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **`gpuAutoDisabled` travels with the workspace, not the machine.** The auto-disable flag (and
   `gpuLastError`) is a plain workspace setting with no `machineKey` stamp, unlike `gpuProbe`: a
   GPU failure persisted on one computer keeps the next computer on the CPU rung until "Try GPU
-  again". Seen as a risk in the #330 round trip (the flag was never set there).
+  again". Seen as a risk in the #330 round trip (the flag was never set there). Since the update
+  wave's W-70 the flag carries the **engine build** it was set under (`gpuAutoDisabledEngine`), still
+  no machine stamp: another engine build at a session start re-arms the card (an engine update, or a
+  Kit that moves between a Mac and a Windows or Linux computer), the same build on another computer
+  does not ("App updates: support log, policy keys and drive record" below).
 - **The unlock-time device probe could lose a race with the auto-start — FIXED 2026-09-08
   (#380).** `prepareFirstBenchmark` used to fire the session's one `--list-devices` probe in the
   same tick as the active model's auto-start. Under the concurrent weight upload the probe took
@@ -4652,8 +4666,10 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
   row, switched off (re-check R1-n2).
 - The skill export and the loader follow a stored row's folder name unchecked, for reads only: exporting a
   row another program wrote reads the folder it names (re-check R1-n3; follow-up candidate FU-P2-7).
-- Until P3 builds W-70, the Home screen shows "Getting ready…" and the badge "Starting" for an active
-  model this version cannot use; pick another on the AI Model screen (R2 m-1).
+- An active model this version cannot list (a newer version chose it before a "Go back") is never
+  started: since P3 (W-70) the unlock's notice says so once and Home shows "Choose a model" instead of
+  "Getting ready…" / "Starting"; pick another on the AI Model screen (R2 m-1; P3's limits of it are in
+  the next section).
 
 **The security round (T2.7)**
 - The worst case inside the lowered password-hardening limits (argon2id at 1 GiB of memory and 8 passes)
@@ -4679,3 +4695,126 @@ short form, and the duties later versions keep are its §6.11 and §7.7.
   `binaries` map is nested in a marker (round 3).
 - A pretty-printed engine marker is fetched again by the `.sh` twin with `--commercial` and kept by the
   `.ps1` twin; no writer writes one (round 2).
+
+## App updates: support log, policy keys and drive record ([`app-updates.md`](app-updates.md) §6.7, §7.7, §8)
+
+The update wave's third phase (P3) built what release 1 must already know for support and for later
+versions: the policy keys, the drive's plaintext support log `updates/update.log`, the drive-release
+record and the support-end stamp, the engine stamp on the GPU flag and the notice for an active model this
+version cannot list, the sell gate's new checks, and the review fixes to the pre-spawn check. What its
+reviews accepted as built is below, grouped by part.
+
+**The pre-spawn check (W-84; T3.12, T3.12a)**
+- **No defence against whoever can write the engine folder** (owner on #234, 2026-11-25: tolerate and
+  document). The check finds a copy that no longer matches its own record. Removing the marker, removing
+  or emptying its `binaries`, or cutting the map down to the program switches it off for that copy
+  without any warning, on a Kit too, and rewritten hashes pass; the sell gate refuses each shape only
+  when the Kit is built ([`security-model.md`](security-model.md) "What the check does not cover").
+- **Holds and unknown codes stay "try again"**: a file held or denied (`EBUSY`, `EPERM`, `EACCES`), a
+  process limit (`EAGAIN`, `EMFILE`, `ENFILE`) and any code the check does not know, Windows' `UNKNOWN`
+  for a bad sector included, refuse the attempt with no repair offer, at every start while they last.
+- **The cost grows with the copy**, with no bound and no progress shown: the first spawn of a session
+  waits about 2.5–3.2 s on a USB 2 stick and 0.55–1.2 s on a USB 3 stick for today's 52 files (94.5 MB),
+  never under about 0.3 s, and a 1 GB copy would wait about 26 s on USB 2 in silence (follow-up candidate:
+  a progress state for a long first check). kiwix-serve and kiwix-manage each hash the whole tools copy once.
+- **The session cache outlives a repair made outside the app and a re-plugged stick** (SEC-4 in
+  [`security-model.md`](security-model.md)): a `fetch-runtime` run while the app is open can leave a cached
+  `mismatch` until a restart, and a stick pulled and put back with the app open keeps its cached `ok`.
+- **A reinstall of the same engine build during a first check** (the #532 "Install again" while a first
+  check of the session is still hashing, seconds on USB 2) can mix old and new files in that one check: its
+  caller may report damaged files for the copy just repaired. The verdict is never kept; the spawn gate
+  makes the window narrow.
+- **A long recorded name reads differently by system**: on Windows a single name of 256–300 characters
+  reads as a missing file (only a path over 32,767 characters reads as a refused name), on macOS and Linux
+  as a refused name, `marker-damaged`. For the engines both refuse the copy with the "Install again"
+  offer. No writer writes such a name.
+- **A healthy file the file system refuses by name** (`ELOOP`, `ENAMETOOLONG`, `EINVAL`), should a driver
+  ever answer so, makes the copy `marker-damaged`: the engines refuse it with the "Install again" offer,
+  the knowledge-pack tools stop.
+- **The knowledge-pack tools** keep a passing medium error until a restart, and a later tools copy whose
+  loadable code has a library ending the check does not list starts with that file gone ("Security &
+  privacy" above).
+- **A locally compiled macOS or Linux voice engine** (`runtime/whisper.cpp/{mac,linux}`, built by the Kit
+  builder) has no install marker, so neither the pre-spawn check nor the sell gate looks at it (follow-up
+  candidate: a marker for a locally compiled engine).
+
+**The update log, `updates/update.log` (W-14; T3.2, T3.10)**
+- **Anyone holding the drive can read when it was started and when someone tried to unlock it**, wrong
+  passwords included, without the password; the lines hold versions, fixed words and codes only
+  ([`PRIVACY.md`](../PRIVACY.md), "Encryption").
+- **On Windows a link planted between the check of the name and the open is followed** (Windows has no
+  `O_NOFOLLOW`): the line is appended to the file the link names. Only the content-free line can land
+  there, and exFAT, a Kit's file system, holds no links.
+- **A folder named `Updates/` (another case) on macOS gets no line**: its real path differs from the
+  one asked for, so the writer takes it for a link.
+- **A line another writer appends during a trim can be lost.** At the 64 KiB cap a trim keeps 32 KiB,
+  which with today's lines comes about every 200 starts.
+- **Two app instances writing to one drive at once** (two user accounts on one computer, each with its
+  own single-instance lock) can lose a line to each other's trims.
+- **The log's own `O_NONBLOCK`** is a belt no test can prove: on Linux an open for reading and writing of
+  a named pipe never blocks anyway, and the macOS behaviour is unchecked.
+- **A version over 24 bytes** (valid SemVer up to 64) is logged as `version=unknown` or
+  `release=unreadable`: the cap keeps the startup line within 256 bytes.
+- **Some values are written by others**: the drive record's version and format, `drive.json`'s format, the
+  workspace file's `user_version` and its `last_writer` stamp. Each is bounded by its rule, but a version
+  in SemVer's shape (`1.0.0-peter`) or the stamp's 16-byte applied-through token can carry a word someone
+  wrote there; only someone holding the workspace key writes the stamp.
+- **No line if the unlock handler's error path itself throws**: the line is written after the attempt
+  returns, and nothing in that path throws today, but no structure guarantees it.
+- **Refusals before the password cost nothing to repeat**: no vault yet, a missing or unreadable key file,
+  a newer format, a blocked recovery. A hostile or broken window could write about 1,300 such lines and
+  trim every older line out of the file, the startup line included (unless an update is being applied).
+  Forty ordinary unlock attempts already push the startup line out of the file's last 40 lines.
+
+**The drive-release record, `config/drive-release.json` (W-20; T3.3a)**
+- **A `config/` folder that is itself a link is followed**, as for `policy.json` and `drive.json`.
+- **A link swapped in at the moment of the open** reads as "unreadable" on macOS and Linux, not as
+  damaged; both mean no constraint. A file cut to 0 bytes in that moment reads as not JSON.
+- **Release 1's helper keeps unknown fields only as `JSON.parse` / `JSON.stringify` keep them**: an
+  integer beyond ±(2^53 − 1) is rounded, `1e400` becomes `null`, `-0` becomes `0`, and a duplicate key
+  keeps its first place with its last value. A damaged existing record is replaced, its unknown fields
+  lost.
+- **The root apps are matched by exact name**, while the Windows start file matches without case: a
+  lower-case app name can make the record's `systems` wrong (the version rule stays safe; the update
+  wave's P6 decides the case rule).
+
+**The update policy, `policy.json`'s `updates` block (W-13; T3.1)**
+- **A junk value blocks, while a damaged file allows** (G-14's exception, deliberate): an administrator's
+  block holds only while the file can be read, so a short-lived read error or an editor saving the file
+  in place at that moment lifts it for that one read (shown as "unreadable").
+- **A `policy.json` with a UTF-8 byte-order mark**: the update policy reads past it, but `loadPolicy`
+  (the privacy and network keys) reads such a file as malformed and falls back to its base policy (strict
+  on a packaged build's prepared drive). Windows PowerShell 5.1 writes one; the drive scripts do not.
+
+**The GPU flag and the unavailable-model notice (W-70; T3.11)**
+- **The GPU is tried again whenever the engine build differs, also between systems on one Kit** (owner
+  2026-11-25: the Mac gets its GPU back). A flag a Windows PC set (`vulkan`) is cleared on a Mac (`metal`);
+  back on the Windows PC its failing card is tried once more and the workspace falls back to the
+  processor by itself, after every visit to the Mac. The real fix is a per-computer flag (follow-up
+  candidate). The flag still carries no machine stamp ("GPU acceleration" above).
+- **A flag with no engine stamp is never re-armed**: one set by a version before release 1, or while the
+  own build was unknown (no readable marker), keeps the processor until "Try GPU again". After a "Go
+  back" a card that had already failed under release 1's own build is tried once more (one failed start).
+- **The notice may not show**: on a plaintext workspace's start it may be sent before a window listens;
+  the notice bar has one slot, so a later notice replaces it; and an engine that heals in the same session
+  removes it with every other AI Model notice. Home's "Choose a model" still shows in each case.
+- **No notice while any model definition on the drive is broken**: an active model that no definition
+  names gets the notice only when the definitions folder was read without errors, or the model is listed
+  as needing a newer version; otherwise it takes the ordinary start path (a definition that cannot be
+  read just now must not stop a listed model for the session).
+- **With the auto-start switched off**, Home shows "Choose a model" for such a model and no notice says
+  why. The notice names the model by its id, not its display name.
+- **An unreadable definitions folder is read again at every status poll** (one failed folder read each,
+  not kept).
+
+**The sell gate (W-33's M1 half; T3.8)**
+- **An empty `updates/` folder passes**, like an empty `logs/`.
+- **The record's `files[]` list is not compared with the files on the drive**; the gate checks the
+  record's `app_version` only.
+- **The record is not compared with `--app-version` on its own line**: an app of another version has its
+  own line.
+- **Not seen by the engine walk**: files under a top-level `cpu*/` folder of a copy whose family has no
+  such build, a link to a folder, and a dangling link (no installer records them either).
+- **"Read-only" means the write bits or the Windows read-only attribute**: an ACL that denies writing a
+  root app is not checked.
+- **The gate follows a link at `updates/`** (the app refuses one); exFAT holds no links.

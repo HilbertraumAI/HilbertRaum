@@ -264,7 +264,11 @@ words per second" and "faster than you can read". There is nothing to install or
   answering, and where it runs, without leaving the conversation.
 - If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
   (processor only — works on every machine) and tells you with a one-line note. After a driver
-  update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.
+  update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card. The app also
+  remembers which build of the AI engine was running when it switched: after the drive's AI engine
+  changes (an engine update, or the drive moves between a Mac and a Windows or Linux computer, which
+  run different engine builds), it tries the graphics card once more on its own, and switches back to
+  compatibility mode by itself if the trouble returns.
 - If a particular model cannot be loaded on your computer at all, you get a note naming that
   model and its replies are simulated until you pick another one — compatibility mode is *not*
   switched on by it, so every other model keeps using your graphics card as usual. The app

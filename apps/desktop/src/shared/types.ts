@@ -307,7 +307,11 @@ export interface PrivacyPolicy {
  */
 export interface PolicyStatus {
   policy: PrivacyPolicy
-  /** A `config/policy.json` was found + parsed. */
+  /**
+   * A `config/policy.json` was found and read: `true` for a malformed one too (its parse falls back to the base
+   * policy), `false` when it is missing or the read failed. Not "the policy parsed": the update policy's "policy file
+   * unreadable" comes from `readUpdatePolicy`'s `file`, never from this field.
+   */
   policyFilePresent: boolean
   /** A `config/drive.json` was found + parsed. */
   driveFilePresent: boolean

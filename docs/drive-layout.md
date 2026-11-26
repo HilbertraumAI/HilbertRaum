@@ -43,6 +43,10 @@ From the root, these paths are derived and created (idempotently) on first run:
 │                          #   projector; translation = the TranslateGemma GGUF, its own sidecar)
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
+├── updates/               # on a prepared drive only (config/drive.json there), made by the first line:
+│   └── update.log         #   the plaintext, content-free support log, readable before unlock: one line
+│                          #   per start, failed start and unlock attempt (app-updates.md §8.2); over
+│                          #   64 KiB the app keeps the newest 32 KiB through update.log.tmp + a rename
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
                            #   drive-release.json: what the drive was built with (apps, start files,
                            #   engines; written by the drive scripts, app-updates.md §8.5)
@@ -135,9 +139,11 @@ HILBERTRAUM/
 │                                                #   zim-transient/ are fine (#893)
 ├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
 │                                                #   drive, by the same sell-gate rule (#893)
-├── updates/                                    # update.log (written at every start on a prepared drive, app-updates.md
-│                                                #   §8.2) — none on a sold drive: the sell gate refuses any entry in it
-│                                                #   (a Kit that was started; app-update W-33, T3.8); an empty one passes
+├── updates/                                    # update.log (a line per start, failed start and unlock attempt on a
+│                                                #   prepared drive; update.log.tmp only during a trim, or left by a
+│                                                #   failed one; app-updates.md §8.2) — none on a sold drive: the sell
+│                                                #   gate refuses any entry in it (a Kit that was started; app-update
+│                                                #   W-33, T3.8); an empty one passes
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}  # + drive-release.json (the record of the apps, start
                                                 #   files and engines, the build's last write; on a DIY
@@ -175,9 +181,10 @@ HILBERTRAUM/
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
 > criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
-> plaintext off, models must verify, no phone-home — model downloads are a permitted user action, but
-> update-checks + telemetry are denied) with the Kit's `updates.allow_online_check: true`, and contains
-> **no user data** and no `updates/` entry (it was never started) — built + asserted
+> plaintext off, models must verify, no phone-home — model downloads are a permitted user action;
+> `network.allow_update_checks` is `false` and there is no telemetry) plus the Kit's reserved
+> `"updates": {"allow_online_check": true}` (a name this version never reads, so it checks for no
+> update; below), and contains **no user data** and no `updates/` entry (it was never started) — built + asserted
 > by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). Its root
 > carries the macOS app as its zip, never an extracted `.app`, and no app there is read-only (release
 > 1's Windows start file would read a read-only app as running at every start). See
@@ -290,10 +297,33 @@ drive, copies the three **root license/attribution notices** (`LICENSE`, `THIRD-
 `DRIVE-NOTICES.md` — LIC-1, full-audit 2026-07-12b; unconditional, dev drives get them too), and
 generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
 (no-phone-home posture — model downloads permitted, update-checks + telemetry denied; `--dev`/`-Dev`
-for a plaintext developer drive). `DRIVE-NOTICES.md` is a committed, GENERATED file
+for a plaintext developer drive; `--kit`/`-Kit`, which only `build-commercial-drive` passes, adds the
+reserved `updates` block below). `DRIVE-NOTICES.md` is a committed, GENERATED file
 (`node scripts/generate-drive-notices.mjs` — derived from `model-manifests/**` + the pinned texts
 under `licenses/`); the commercial sell gate fails a drive where any of the three is missing or
 empty (see [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md)).
+
+**The `updates` block of `config/policy.json`** (app-update F-8, frozen: release 1 and every later
+version read these names this way; [`app-updates.md`](app-updates.md) §8.1). A DIY or developer
+drive has no `updates` key, its `policy.json` byte for byte what it was before the block existed; a
+Kit's has `"updates": {"allow_online_check": true}`. The update policy has its own reader
+(`readUpdatePolicy`, `services/policy.ts`), read from disk at each call; in this build only the sell
+gate calls it, since the in-app update it governs is not built yet.
+
+| Key | Written by | Meaning |
+|---|---|---|
+| `updates.allow_online_check` | the Kit builder only, `true` (`prepare-drive --kit`) | a reserved name: this version reads no value of it, junk included, and never adds it to the network ceiling or the status line; `network.allow_update_checks` stays `false` |
+| `updates.allow_user_install` | an administrator, by hand | absent or `true`: installing a signed update is allowed; `false`: every install is blocked ("managed"), whatever `max_version` says; any other value, `null` included: blocked as an invalid value |
+| `updates.max_version` | an administrator, by hand | absent: no cap; a strict SemVer 2.0.0 version (at most 256 characters, ASCII, no `v`, no spaces, no leading zeros): updates up to and including it, in SemVer order; any other value: blocked as invalid |
+
+A present `updates` that is not an object blocks as invalid; `"updates": {}` means every key absent;
+unknown keys inside are ignored, and key names are exact (a typo blocks nothing). A **missing
+`policy.json` on a prepared drive, or a damaged one** (empty, not JSON, not an object, a folder, a read
+error, over 1 MiB, saved as UTF-16), **leaves installing allowed** and is reported as "unreadable", while a
+junk *value* blocks: a blocked update is a management control, and a damaged policy must never block
+the signed repair ([`security-model.md`](security-model.md) "Policy precedence"). A later writer
+never widens the `max_version` grammar and never changes the types of `allow_user_install` or of
+`updates`: release 1 would read the new form as invalid and block every install.
 
 At its end `prepare-drive` writes **`config/drive-release.json`**, the record of what the drive was
 built with: the version of the apps at the root (only when exactly one app per system is there and all

@@ -153,12 +153,12 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 | F-5 | The `updates/` layout and staging: one commit marker, at most one staged update, the start-up sweep, no import while an update is in progress | §4.2, §4.5, §4.6 | P6 | planned; values approved |
 | F-6 | The hand-off from the app to the apply script after a clean lock: `handoff.txt`, the scripts' copies, the `finish-<n>` cap, the spawn and its acknowledgement, the removal of a finished or dead `updates/applying/` | §5.3, §5.4 | P7 | planned; values approved (the Linux spawn measured by spike 4a; the macOS spawn pending spike 3, §5.4) |
 | F-7 | The rules of release 1's start files: resume an interrupted apply (rule 1), the launch counter and its fallback, restore from `updates/previous/` (rule 2), refuse two apps (rule 3), every path ending in one parsed block, and the lines they print | §5.6 | P7 | planned; values approved (`start-hilbertraum.sh`'s rule 1 measured by spike 4a; the `.command`'s rule 1 provisional until spike 3; the Windows in-flight probe can reopen on P11a's Defender row, §5.6) |
-| F-8 | Policy key names, and what an absent key, a junk value and a missing or damaged `policy.json` mean (the install half) | §8.1 | P3 | planned |
+| F-8 | Policy key names, and what an absent key, a junk value and a missing or damaged `policy.json` mean (the install half) | §8.1 | P3 | as built in P3 (T3.1 and its fix round), golden `f8-policy/`; first Fable review sound with limits, the second (T3.7) pending |
 | F-9 | The vault-format guard: a descriptor, journal, frame or working copy from a newer version reads as "newer", never as damage, and nothing is written | §7.2 | P2 | as built on master, with P2's fix rounds (T2.9, T2.16, T2.7's security round) as built |
 | F-10 | The `schema_meta` table's shape, the `last_writer` stamp, and the keys the migration framework writes | §7.4 | P2, P10 | the table and the stamp as built in P2 (T2.2); the framework's keys planned (P10) |
-| F-11 | The `update.log` line grammar, content-free | §8.2, §5.3 | P3 | planned; the line frame's values approved (§5.3) |
+| F-11 | The `update.log` line grammar, content-free | §8.2, §5.3 | P3 | the line frame's values approved (§5.3); the app's writer and its three events as built in P3 (T3.2 and its fix round, T3.10), golden `f11-update-log/`; first Fable reviews sound with limits, the second (T3.7) pending; P6's and P7's events planned |
 | F-12 | The support-end and age-reminder computation and its inputs | §8.4, §5.10 | P6 | planned; the build-date file approved (§5.10) |
-| F-13 | The `drive-release.json` read contract and the write-once `config/kit-support.txt` | §8.5, §8.4, §5.10 | P3 | planned; the reader's types approved (§5.10) |
+| F-13 | The `drive-release.json` read contract and the write-once `config/kit-support.txt` | §8.5, §8.4, §5.10 | P3 | the reader's types approved (§5.10); both readers and the builders' writers as built in P3 (T3.3a and its fix round, T3.3b), golden `f13-drive-release/`; the record reader's first Fable review sound with limits; T3.7's review of both halves pending; P8's in-app writer planned |
 | F-14 | The update channels callable while the workspace is locked, also after a failed start, and the content-free text that "Copy details for support" copies | §3.5 (the hand-off channel: §5.4; the copied text: §5.9) | P6, P7 | planned; the copied text approved (§5.9) |
 | F-15 | Released migration step ids and their source hashes | §7.8 | P10 | planned |
 | F-16 | The update file container: the ustar subset read in process, the reserved `HRUPDATE` prefix | §4.3 | P1 (table), P6 (reader), P5 (writer) | planned; table A approved |
@@ -169,10 +169,10 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 | F-21 | The refusal on a root that is not a prepared drive, and the two drive-awareness fixes | §3.6 | P6 (the refusal, the macOS notice), P7 (the static AppImage runtime, T7.12) | planned (the Linux `APPIMAGE` lookup is on master and found the root in every start mode, spike 4a) |
 | F-22 | `updates/unconfirmed.txt`, the `updates/confirmed/<v>_<os>` files and the start confirmation | §5.3, §5.7 | P7 | planned; values approved |
 | F-23 | The model-manifest old-reader contract | §6.11 | P2 (goldens, reviews) | as built on master, frozen in P2's goldens (T2.10), with the scripts' skip rule (W-62 (b)) and T2.7's fix round as built |
-| F-24 | The AI engine contract: pins, install marker, version relation, release 1's own staged swap | §6.7, §6.11 | P2 (goldens, reviews) | as built on master, frozen in P2's goldens (T2.10), with T8.5c's fix rounds as built |
+| F-24 | The AI engine contract: pins, install marker, version relation, release 1's own staged swap | §6.7, §6.11 | P2 (goldens, reviews) | as built on master, frozen in P2's goldens (T2.10), with T8.5c's fix rounds as built; the pre-spawn check with T3.12's two Fable reviews and two fix rounds as built in P3 (golden `f24-markers/copy-shapes.json`) |
 | F-25 | The skills contract | §6.11 | P2 (goldens, reviews) | as built on master, frozen in P2's goldens (T2.10), with W-65 (T2.14) and T2.7's fix round as built; P8 restates the reader (G-40 (b)) |
 | F-26 | Persisted message values | §7.6 | P2 | as built in P2 (T2.12) |
-| F-27 | Duties of every later writer of workspace data | §7.7 | P2 | written in P2 (T2.11, T2.D) from the code as built; frozen at M1 |
+| F-27 | Duties of every later writer of workspace data | §7.7 | P2 | written in P2 (T2.11, T2.D) from the code as built, with W-70's settings duty from P3 (T3.11); frozen at M1 |
 
 ---
 
@@ -455,8 +455,9 @@ other modules answer before unlock by design.
    test is `isPreparedDrive`, never `HILBERTRAUM_DRIVE_ROOT` (that variable wins without a marker
    check).
 2. **The policy**, read again from disk (§8.1): `updates.allow_user_install: false` refuses before
-   anything is read ("Updates are managed by your organization"); `updates.max_version` is applied once
-   the file's version is known.
+   anything is read ("Updates are managed by your organization"), and so does a junk value of either
+   key ("the update policy on this drive has an invalid value"); `updates.max_version` is applied once
+   the file's version is known. The reader is built (P3, `readUpdatePolicy`); P6 calls it here.
 3. **An update already in progress** (`updates/applying/` exists, after release 1 has removed a
    finished or dead one, §5.4): the import is refused (`UPD-IN-PROGRESS`) and the screen offers
    "Continue the update" instead (§4.5, §5.7).
@@ -664,7 +665,8 @@ version's notice: the hand-off (F-6), the apply script and its journal, the star
 "Continue the update" (F-19), the outcome codes and notices (F-20, G-37, G-39) and
 `updates/unconfirmed.txt` (F-22). The frozen values come from the protocol table B._
 
-_Status: planned (P7; the confirmation also ships in release 1, T7.5a). Table B below is the decided
+_Status: planned (P7; the confirmation also ships in release 1, T7.5a), except the app's own
+`update.log` lines in §5.3, as built in P3 (and `update.log.tmp`, §5.2). Table B below is the decided
 contract. Its evidence: spike 1 (`budget 30`), spike 8 (the profile and lock facts), spike 10 (the
 spawn, rule 1, the lock, the cmd rules) and the method review of those spikes (T1.11, its finding ids
 `S1-n`, `S8-n`, `S10-n`, `C-n`), the addenda spike 1b and spike 10b, and spike 4a for the Linux half (the
@@ -736,7 +738,8 @@ All paths are relative to the drive root; names are exact, case included. `<os>`
 | `updates/starting-<os>` | later start files' in-flight record (W-7 (d)) | later start files | later start files | Scripts |
 | `updates/last-result.txt` | the outcome lines (F-20, §5.3, §5.8) | the apply, start files, R1 app | R1 app, every later app | R1 |
 | `updates/last-result.seen` | the line R1 showed last (§5.3) | R1 app on dismissal; later apps in the same form | R1 app | R1 |
-| `updates/update.log` | the support log (§8.2); table B's writers' lines in §5.3 | R1 app, R1 start files, later start files, the apply | support, `/check`, "Copy details for support" | R1 |
+| `updates/update.log` | the support log (§8.2); table B's writers' lines in §5.3 | R1 app, R1 start files, later start files, the apply; only an app trims it (§5.3) | support, `/check`, "Copy details for support" | R1 |
+| `updates/update.log.tmp` | the trim's temporary copy: the newest part of `update.log`, flushed, then renamed over it (§5.3); a file or link at the name when a trim starts is removed by its name, never followed (a folder there fails the trim), and a failed trim removes the copy it made | R1 app (T3.2) | nobody (renamed over `update.log`) | R1 (the name is R1's) |
 
 ### 5.3 Grammars (table B.2)
 
@@ -827,6 +830,118 @@ at every start (accepted, W-51).
   L2-10). "Copy details for support" replaces every byte outside 0x20–0x7E in a copied line by `?`.
 - Every writer appends an empty line first (G0). A write failure is ignored (`2>nul`; bash
   `2>/dev/null || true`); it never stops a start file or an apply.
+
+**The app's lines (`r1-app`), as built in P3** (F-11; T3.2 and its fix round, T3.10;
+`main/services/updates/update-log.ts`; golden `tests/fixtures/readers/f11-update-log/`). Release 1's
+app writes the file through one appender, `appendUpdateLogLine`, which takes only a registered event.
+- **The frame.** Every app line is `r1-app <os> <event> <key>=<value> … t=<YYYY-MM-DDTHH:MM:SSZ>`,
+  written as one append of LF, the line, LF; tokens of bytes 0x21–0x7E, one space between tokens, at
+  most 256 bytes without the two LFs; never a CR, never `d="…"`. `<os>` is `process.platform` when it
+  matches `[a-z0-9]{1,8}`, else `unknown`. An event matches `[a-z][a-z0-9-]{0,31}`, a key
+  `[a-z][a-z0-9_]{0,31}`; a value is 1 to 64 bytes of `[0-9A-Za-z._+-]`; `t` is the writer's own key. A
+  field that fails, or a second field with the same key, is dropped; an invalid event, or a line still
+  over 256 bytes, is not written (skipped and counted). The time is UTC to the second, the milliseconds
+  dropped, never rounded; it is left out when it fails
+  `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`.
+- **Registered events only** (Δ-66). The frame alone does not make a line content-free: a one-word file,
+  host or account name passes the value rule. So the appender writes only the events of the frozen
+  table `UPDATE_LOG_EVENTS`, each with its keys in a fixed order and each key with one token rule (with
+  only the sentinels that key admits) or a closed list of words. An unregistered event is no line
+  (skipped and counted, on any root); a key the event does not name, or a value its key's rule refuses,
+  never reaches the file. A later event (P6's, P7's) is registered in that module as data: every key
+  with a token rule or a closed list (the `UPD-*` code as a closed list of table B.9's codes), a key
+  whose value comes from a file another program or build wrote named in the module's header as
+  data-fed, and a new token rule numeric-shaped or a closed list, which is a golden change (CF-41).
+- **The token rules.** V: a SemVer 2.0.0 version (T3.1's parse) of at most 24 bytes. P: an engine pin
+  `[0-9A-Za-z][0-9A-Za-z._+-]{0,15}` that holds a digit. I: `[0-9]{1,6}`, from JSON only as an integer.
+  S: the SQLite version `[0-9]{1,3}(\.[0-9]{1,3}){2,3}`. E: an error code `E[A-Z0-9]{1,30}`,
+  `ERR_[A-Z0-9_]{1,36}`, `SQLITE_[0-9]{1,5}` or the literal `UNKNOWN` (libuv's code for a Windows error it
+  does not map, seen on failing USB media), at most 40 bytes. C: a bare system call of at most 16 bytes.
+  N (T3.10): a signed integer `-?[0-9]{1,10}`. A (T3.10): the `last_writer` stamp's applied-through
+  token `[0-9A-Za-z._-]{1,16}`, used only for `applied`. The sentinels `unknown`, `absent`,
+  `unreadable` and `none` hold no digit; every real version, pin, integer and SQLite version holds one,
+  so a sentinel never passes for a value.
+- **Word-shaped rules and data-fed keys.** P and C admit a word (`Steuer_2026.xlsx` is a pin by shape,
+  `peter` a system call), V and E admit one in their own shapes (`1.0.0-peter`, `EMMA`), and A is
+  word-shaped outright; they cannot be tightened without changing frozen golden lines. So such a key is
+  filled only from its own source (the pins from the app's own bundled `runtime-sources.yaml`, a system
+  call from a thrown error's `syscall`), or it is named as data-fed: `startup`'s `release` (V) and
+  `release_format` (I) from `config/drive-release.json` and `drive_format` (I) from `config/drive.json`;
+  `unlock`'s `writer` (V) and `applied` (A) from the workspace's `last_writer` stamp, and `user_version`
+  (N) and `found` (I) from its header or a newer-format refusal. Each is bounded by its rule. `applied`
+  is release 1's one word-shaped data-fed key, the exception to CF-41's rule; only a build holding the
+  workspace key, or a person with the password, writes the stamp. P10's T10.3 chooses a token that
+  passes A, or `applied` is left out of release 1's lines for ever. Every later registration is
+  reviewed against this paragraph.
+- **256 bytes per an event's actual fields.** `startup` and `start-failed` fit by their whole schema
+  (their longest golden lines: 252 bytes, `s46`, the worst case, and 179 bytes, `f14`). `unlock` fits per
+  result: its nine keys at their caps would come to about 290 bytes, but no result carries them all,
+  and its longest real line is 210 bytes (golden `u61`).
+- **The 24-byte version cap.** V's cap keeps the startup line under 256 bytes, so a valid version of 25
+  to 64 bytes is logged as `version=unknown` (the app's own), `release=unreadable` (the record's) or
+  `writer=unreadable` (the stamp's): `release=unreadable` reads "unreadable, or longer than 24 bytes"
+  (T3.2's review, m-4).
+- **`startup`** (T3.2; W-14, W-68), in order: `version` (V: `app.getVersion()`, else `unknown`);
+  `llama`, `whisper`, `kiwix` (P: the pins of the app's own bundled `runtime-sources.yaml`; `absent` for
+  no file or no block, `unreadable` for a read error, text that does not parse or validate, or a pin
+  that fails P); `release` (V: the drive-release reader's `app_version`, §8.5; `absent` for no file or no
+  valid `app_version`, `unreadable` for a read that failed, a damaged file or a version over 24 bytes);
+  `release_format` (I: only when the record was read and its `format` is valid and passes I);
+  `drive_format` (I: `config/drive.json`'s `drive_format_version`; `absent` when the key is missing or
+  not an integer, `unreadable` for no file, a read error, text that is no JSON object, a file over
+  65,536 bytes or an integer that fails I); `sqlite` (S: `process.versions.sqlite`, else `unknown`); `t`.
+  Written once per start, in `initBackend` after logging exists and before the policy and the
+  workspace's start.
+- **`start-failed`** (T3.2; W-82), in order: `version` (V, else `unknown`); `cause`
+  (`drive_not_writable`, `drive_full` or `other`; anything else is `other`); `err` (E: the start gate's
+  code when it passes E; when the gate shows none and the thrown value's code is libuv's `UNKNOWN`,
+  `UNKNOWN`; else left out); `syscall` (C: bare, else left out); `t`. Written in the start runner's catch
+  (`backend-start.ts`); never a message, a path or SQLite's text.
+- **`unlock`** (T3.10; CF-23): after every unlock attempt, a success and every refusal, one line
+  `r1-app <os> unlock result=<token> [<field>…] t=<UTC>`. `result` is `ok` or the answer's reason
+  (`wrong_password`, `vault_damaged`, `workspace_schema_unreadable`, `vault_open_failed`,
+  `vault_missing`, `vault_descriptor_missing`, `vault_descriptor_unreadable`, `vault_recovery_blocked`,
+  `workspace_newer`); any other value is `error`. The fields follow in the order
+  `result user_version writer applied damage what found err syscall`, only the result's own: `ok`
+  `user_version`, `writer`, `applied`; `vault_damaged` `user_version`, `damage` (`failed-authentication` or `not-a-database`);
+  `workspace_schema_unreadable` `user_version`; `vault_open_failed` `user_version`, `writer`,
+  `applied`, `err`; `vault_recovery_blocked` `err`; `workspace_newer` `user_version`, `what`
+  (`database`, or the vault format's `descriptor`, `kdf`, `frame` or `journal`, refused before the
+  password, with no `user_version`), `found`; `error` `user_version`, `writer`, `applied`, `err`,
+  `syscall`; every other refusal the result alone. `user_version` (N) is the workspace file's own, read
+  from its SQLite header after the decrypt and before the migrations (only when the header starts with
+  SQLite's magic), or a newer database's version. `writer` is the `last_writer` stamp found before the
+  overwrite, through `parseLastWriter`: `none` when there is no stamp, `unreadable` when it does not
+  parse or its version is no SemVer of at most 24 bytes, otherwise the version, with its second field as
+  `applied` when that passes A; `writer` is left out when the open never got as far as the stamp. `err`
+  is SQLite's result code as `SQLITE_<n>` when the error carries one (node:sqlite reports the extended
+  code, such as `SQLITE_1811`), else the error's code. What the line means, and when none is written:
+  §8.2.
+- **Where.** Lines only on a prepared drive (`config/drive.json` exists), never through a link:
+  `updates/` must be a real folder at its name (`folderContainment`; made with one plain `mkdir` when it
+  is missing), and `update.log` absent or a regular file with one name, opened once and checked on its
+  descriptor (on macOS and Linux also opened with `O_NOFOLLOW` and `O_NONBLOCK`). A skip or a failure is
+  swallowed, counted and reported in `app.log` as "Update log: line skipped" with the event, a fixed
+  reason, the error's code and system call and the count, never a path; nothing throws. The reasons and
+  the `app.log` text are not part of F-11.
+- **The cap and the trim.** The cap is 65,536 bytes. After an app append that takes the file over it,
+  and only while `updates/applying/` is proven absent, the app keeps the newest 32,768 bytes from the
+  byte after the first LF in them, copied as bytes and never decoded, through `update.log.tmp`, a flush
+  and a rename (§5.2); a failed trim is counted and tried again at the next app append. The kept part
+  fits the 65,536-byte window every reader takes from an append-only file (G0). Start files and apply
+  scripts only append; readers accept any size.
+- **Not written.** No quit line and no line for C09 (§7.6). Release 1 parses no writer token or event; a
+  later app writes its own writer token, not `r1-app` (an open item for the first release after release
+  1).
+- **Residuals** (T3.2's review, N-4 and m-3; also in [`known-limitations.md`](known-limitations.md)): on
+  Windows, which has no `O_NOFOLLOW`, a symbolic link planted between the `lstat` and the open is
+  followed, so only a content-free line can land at its target; the log's own `O_NONBLOCK` is a belt no
+  row can prove (an `O_RDWR` open of a pipe never blocks on Linux); a line another writer appends while
+  the app trims can be lost (a trim comes once per 32 KiB of appends: about every 200 starts where
+  startup lines are all a drive writes, sooner with unlock lines); a case-variant `Updates/` folder on
+  macOS gets no line; two app instances writing one drive's log are not coordinated. Whether a reader
+  keeps an `update.log` line over 1,024 bytes (as above) or ignores it (G0) is P6's support copy's to
+  settle (CF-34); the app's own lines are at most 256 bytes.
 
 ### 5.4 The hand-off (table B.3; F-6, F-14's hand-off channel)
 
@@ -1138,7 +1253,8 @@ was left.
 **Reference codes** (G-37 (a), W-51 (b)). Each frozen update message has one code, never reused for
 another message: `UPD-` followed by upper-case words of `[A-Z0-9]` joined by `-`, at most 32 characters.
 The app shows it as the muted last line "Reference: UPD-…" inside "Details for support"; `update.log`
-records it as `code=UPD-…`; the project page has one anchor per code. Each message has two copy keys,
+records it as `code=UPD-…` (P6 and P7 register `code` as a closed list of this table's codes, §5.3,
+CF-41); the project page has one anchor per code. Each message has two copy keys,
 `<prefix>.text` (the message) and `<prefix>.help` (its in-app "What you can do" paragraph, G-37 (c));
 their texts are copy deck part 2's (T1.10; the English sources of the outcome codes are in the plan's
 working papers). The start files' three codes have no copy key: their text is §5.6's.
@@ -1167,16 +1283,16 @@ working papers). The start files' three codes have no copy key: their text is §
 | `UPD-CONTINUE` | an update in progress: "Continue the update" | `updates.offer.continue` |
 | `UPD-IN-PROGRESS` | an import while an update is in progress | `updates.import.inProgress` |
 | `UPD-OLDER-THAN-DRIVE` | this drive was updated to version {n}; start it on the drive | `updates.offer.olderThanDrive` |
-| `UPD-POLICY-MANAGED` | updates are managed by your organization | `updates.policy.managed` |
-| `UPD-POLICY-INVALID` | the update policy on this drive has an invalid value | `updates.policy.invalid` |
-| `UPD-POLICY-UNREADABLE` | the policy file is unreadable (the import stays allowed) | `updates.policy.unreadable` |
+| `UPD-POLICY-MANAGED` | updates are managed by your organization (`readUpdatePolicy`'s `install: managed`, §8.1) | `updates.policy.managed` |
+| `UPD-POLICY-INVALID` | the update policy on this drive has an invalid value (`install: invalid`) | `updates.policy.invalid` |
+| `UPD-POLICY-UNREADABLE` | the policy file is unreadable (the import stays allowed; `file: unreadable`: missing on a prepared drive, or damaged; a root with neither `policy.json` nor `drive.json` reads `none` and shows nothing) | `updates.policy.unreadable` |
 | `UPD-NOT-AN-UPDATE` | not an update file | `updates.import.notAnUpdate` |
 | `UPD-NOT-GENUINE` | the signature doesn't verify | `updates.import.notGenuine` |
 | `UPD-TOO-NEW` | `UpdateTooNew`: a newer format or container, over a cap, the `HRUPDATE` prefix (§2.3, §4) | `updates.import.tooNew` |
 | `UPD-UNKNOWN-SIGNER` | signed with a newer key: install the in-between update first | `updates.import.unknownSigner` |
 | `UPD-NEEDS-IN-BETWEEN` | `min_upgrade_from` above the running version | `updates.import.needsInBetween` |
 | `UPD-SAME-OR-OLDER` | the same or an older version than this one, or below the drive's version (F-4) | `updates.import.sameOrOlder` |
-| `UPD-ABOVE-MAX-VERSION` | above `updates.max_version` | `updates.import.aboveMaxVersion` |
+| `UPD-ABOVE-MAX-VERSION` | above `updates.max_version` (`updateInstallVerdict`'s `above-max`) | `updates.import.aboveMaxVersion` |
 | `UPD-OS-TOO-OLD` | this computer is below the update's OS floor (G-24) | `updates.import.osTooOld` |
 | `UPD-CANT-CHECK-LINUX-FLOOR` | this update's Linux requirement can't be checked: its `linux` floor doesn't parse, or, on Linux, this computer's glibc version can't be read (G-24, fail closed, §2.4) | `updates.import.cantCheckLinuxFloor` |
 | `UPD-WRONG-CHANNEL` | not a release for this drive (G-22) | `updates.import.wrongChannel` |
@@ -1217,9 +1333,9 @@ through the log redaction, and a row asserts it comes back unchanged (W-16).
 | `System` | `<os> <process.getSystemVersion()> <process.arch>` |
 | `Apps on the drive` | `<os>=<version>` for each root artifact (R1's globs, §5.7), joined by `, `; a root `*.app` is `darwin=unknown`; none: `none` |
 | `Start files` | `Start HilbertRaum.cmd=<s>, Start HilbertRaum.command=<s>, start-hilbertraum.sh=<s>, READ ME FIRST.txt=<s>`, `<s>` = `same`, `different` or `missing` against the payload of `updates/applied/<running version>.dsse.json`, or `not checked` when that file is absent or does not verify (§2.3). Release 1 reads `install_as` here only (§2.4); on release 1 itself, before any update, the value is always `not checked` (L1-28) |
-| `Drive release record` | `drive-release.json`'s `app_version`, `absent` or `unreadable` |
-| `Support end` | `config/kit-support.txt`'s `YYYY-MM`, `absent` or `unreadable` |
-| `Update policy` | `allowed`, `managed`, `max <version>`, `invalid value` or `unreadable` |
+| `Drive release record` | `drive-release.json`'s `app_version`, `absent` or `unreadable` (from `readDriveRelease`'s four kinds, §8.5; P6 builds the copy) |
+| `Support end` | `config/kit-support.txt`'s `YYYY-MM`, `absent` or `unreadable` (from `readKitSupport`: `unreadable` for a failed read and for a damaged stamp, §8.4) |
+| `Update policy` | `allowed`, `managed`, `max <version>`, `invalid value` or `unreadable` (from `readUpdatePolicy`'s `install`, `maxVersion` and `file`, §8.1; P6 builds the copy) |
 | `Staged update` | the staged version or `none` |
 | `Update in progress` | `no`, or `yes version=<v> launches=<0-3> hand-offs=<0-3> started=<yes or no>` (from `handoff.txt`, `launch-<n>`, `finish-<n>`, `started`) |
 | `Unconfirmed` | `unconfirmed.txt`'s version, `damaged` or `none` |
@@ -1233,8 +1349,9 @@ through the log redaction, and a row asserts it comes back unchanged (W-16).
 | Value | Exact value | Source | Frozen since |
 |---|---|---|---|
 | The build-date file | `apps/desktop/src/main/services/updates/build-date.json`, beside `keys.json`; generated by the build, never committed (git-ignored); one JSON object `{"commit_date":"<YYYY-MM-DDTHH:MM:SSZ>"}`, the release commit's committer date in UTC; embedded into the main bundle at build time, and the release guard checks the packed value against the tag (§2.7). Read only by the build that carries it; a later version may change its own. Missing or malformed: the age reminder and the support notices stay silent | W-17, W-3 | R1 (its own reading) |
-| `drive-release.json`, the reader's types | UTF-8 JSON, one leading byte-order mark removed, one object, at most 1,048,576 bytes (larger = malformed = absent; §8.5's writer records a `files[]` list of the drive's apps, start files and engines, ~150 bytes per file, so 64 KiB would be reached near 430 files; L1-21); `app_version` a SemVer string, else absent; `format` an integer ≥ 1, logged only, else ignored; `highest_version_seen` a SemVer string, reserved (§8.5); every other field, `systems` and `files[]` included, never read by R1 | F-13 | R1 |
-| `drive-release.json`, every writer | UTF-8 without a byte-order mark, LF; unknown fields kept; `app_version` as §8.5 says | F-13 | R1 (later writers keep it) |
+| `drive-release.json`, the reader's types | UTF-8 JSON, one leading byte-order mark removed, one object, at most 1,048,576 bytes (larger is damaged, `too-large`, and never opened; exactly 1,048,576 bytes is read; §8.5's writer records a `files[]` list of the drive's apps, start files and engines, ~150 bytes per file, so 64 KiB would be reached near 430 files; L1-21); `app_version` a SemVer 2.0.0 string, ASCII, at most 64 bytes, compared byte for byte and never trimmed, else `invalid` (counts as absent); `format` a safe integer ≥ 1 (`1.0` reads as 1), logged only, else `invalid`; `highest_version_seen` a SemVer string of at most 64 bytes, reserved (§8.5); own fields only, the last of a duplicate key; every other field, `systems` and `files[]` included, never read by R1. The reader's four kinds and its other rules: §8.5 (as built in P3) | F-13 | R1 |
+| `drive-release.json`, every writer | UTF-8 without a byte-order mark, LF, two-space indent; the writer's own fields first, then every kept field in `JSON.parse`'s order; never over 1,048,576 bytes; a later writer's own fields survive a round trip through an IEEE double parser (big integers and wide values in strings, no duplicate keys, no meaning in key order, number spelling or whitespace); an older helper may rewrite `format`, `app_version`, `systems` and `files` in release 1's shape, so a later shape takes new field names; a damaged record is replaced and its unknown fields lost; `app_version` as §8.5 says | F-13 | R1 (later writers keep it) |
+| `config/kit-support.txt` | one month `YYYY-MM`; the builder writes the month and one LF (8 bytes); a reader accepts a regular file of at most 64 bytes with one leading byte-order mark or none, the month, then nothing, LF or CR LF (§8.4) | F-13 | R1 |
 
 ### 5.11 Cases the tables were checked against
 
@@ -1318,9 +1435,10 @@ the Linux legs of P11a's spike 4b (§10.6).
 
 ## 6. Drive content, engines, first start
 
-_Status: planned (P8), except the parts marked as built on master. Release 1 carries P8, so the
-precedence of §6.2, the ownership rule of §6.3, the engine-folder rules of §6.6 and the notice of §6.4
-ship in the oldest sold version and freeze there._
+_Status: planned (P8), except the parts marked as built on master, and the pre-spawn check's record
+in §6.7 and §6.11, as built in P3 (T3.12's two reviews and fix rounds, T3.12a's measurement). Release 1
+carries P8, so the precedence of §6.2, the ownership rule of §6.3, the engine-folder rules of §6.6 and
+the notice of §6.4 ship in the oldest sold version and freeze there._
 
 ### 6.1 What freezes here
 
@@ -1454,9 +1572,12 @@ updates — design record" §6):
   `<os>/cpu.old` inside the live folder; the start recovery touches only those exact names, so the
   pin folders of §6.6 are a different name it never touches;
 - **the pre-spawn check covers every recorded file** (G-44 (a), #1012, PRs #1029 and #1035): before the
-  first spawn of a session it hashes every file the copy's own marker records, the program first; a
-  changed or missing file refuses the start with the reinstall offer; a damaged marker is its own
-  verdict, never a fallback to the folder above;
+  first spawn of a session it checks every file the copy's own marker records, the program first; a
+  changed file, or a missing one, refuses an engine's start with the reinstall offer (the knowledge-pack
+  tools start on a missing file that is neither their program nor a library); a damaged marker is its
+  own verdict, never a fallback to the folder above; what the check is and is not, its tolerance of a
+  hash-less marker, its read-error classes, its cache and its measured cost: "The pre-spawn check, as
+  built" below (P3);
 - **not built, a documented residual** (G-44 (b)): starting a complete copy in place on a drive that
   cannot be written after an interrupted swap. Such a drive starts no engine until it is writable
   again; an encrypted workspace cannot be opened on it either. The same holds for a start whose one
@@ -1509,8 +1630,80 @@ Recorded limits of the install as built (T8.5c dispositions; also in
   a file held for a moment while the stage is hashed fails the install after the download (R2 m-2 to
   m-6).
 
+**The pre-spawn check, as built** (W-84, G-44 (a), #1012; `main/services/binary-verifier.ts`; T3.12's
+two Fable reviews, both "sound with limits", and its two fix rounds, P3; the owner's ruling on #234,
+2026-11-25; the golden `f24-markers/copy-shapes.json`, added beside the locked `vectors.json`):
+- **What it is.** It detects a copy that no longer matches its own record: a copy cut short, bit rot, a
+  file replaced while the marker is left alone. It is **no defence against whoever can write the engine
+  folder**: the record lies beside the files and is not signed, so the same writer can rewrite the
+  hashes or the marker ([`security-model.md`](security-model.md), "Re-hash sidecar binaries before
+  spawn", "What the check does not cover"). A packaged build enforces it; a developer build skips it
+  (`skip-dev`).
+- **What it checks.** Before the first spawn of a session it walks up from the program's folder to the
+  first marker file (the program's own folder, then the one above, for a `cpu/` net without a marker
+  of its own) and covers every key of that marker but a nested net's (`cpu/`, `cpu.new/`, `cpu.old/`),
+  the program first. A key that leaves the copy's folder is `mismatch` before anything is read. Each
+  recorded file is first looked at with one `stat`: a missing program or library (a name ending `.dll`,
+  `.so`, `.so.<n>` or `.dylib`) refuses with **nothing hashed** (`missing`). Then the present files are
+  hashed one at a time, stopping at the first difference (`mismatch`).
+- **The hash-less tolerance, frozen** (owner: #234 tolerated and documented;
+  `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` stays `false` for ever, §11.4): a copy with no marker,
+  a marker without `binaries` or with an empty map starts with nothing checked (`skip-legacy`), and a
+  map that records only the program has the program alone checked, on a Kit too. A marker in the
+  program's own folder whose map holds files but not the program, also one whose every key lies under
+  a nested net's folder, is `marker-damaged` (T3.12's fix round). The sell gate refuses a Kit without
+  full maps at build time (§9.5).
+- **Gone files by kind.** Any other recorded file gone is `missing-other`. The engines refuse it as
+  damaged files too, at once and with nothing (more) hashed: at the `stat` pass, or at the first read
+  that finds a file gone (fix round 2). The knowledge-pack tools, which have no repair in the app,
+  **start on `missing-other`** (owner, Q2 (b)), after hashing every present file, so that a changed one
+  still wins (`startsOnMissingOther`).
+- **Read errors by class** (the fix rounds). `ENOENT` and `ENOTDIR` mean a gone file. **`EIO`** (a worn
+  stick, a bad sector; logged by its code) counts as a gone file, by the file's kind, so the engines
+  show their damaged-files verdict with "Install again", never "try again in a minute". A name the OS
+  refuses (`ERR_INVALID_ARG_VALUE`, `ENAMETOOLONG`, `ELOOP`, `EINVAL`) is `marker-damaged` (fault
+  `name-refused`); so is the marker's own `EIO` (fault `drive-read-failed`) and a refused marker name.
+  A hold (`EBUSY`, `EPERM`, `EACCES`, `EAGAIN`, `EMFILE`, `ENFILE`) and any code nothing here knows stay
+  `unreadable`: no verdict, this attempt refused, the next one reads again. A throw nobody foresaw ends
+  the check as `unreadable`, never as a rejected answer kept for the session, and the graphics probe
+  then gives no answer, never "no graphics card". On Windows a single name of 256 to 300 characters
+  gives `ENOENT` (`ENAMETOOLONG` only beyond 32,767), so there it reads as a gone file, where macOS and
+  Linux read it as `marker-damaged` (T3.12's Q2, kept).
+- **What is cached** for the session, per resolved program path: `ok`, `skip-*` and `mismatch` stick, and
+  so does the knowledge-pack tools' `missing-other` (under its own key); `unreadable`, `missing`, an
+  engine's `missing-other` and `marker-damaged` are evicted, so the next spawn or "Check again" reads the
+  copy as it is then. The in-app engine installer evicts both entries of every program it puts in place
+  (`invalidateBinaryVerification`), and P8's pin folders must do the same (CF-35). A copy whose marker
+  changed while the check ran is `unreadable`, not a tamper.
+- **The cost, measured** (T3.12a, Δ-60: the real `verifyBinaryBeforeSpawn` on a 52-file, 92.5 MB
+  stand-in copy, a fresh process per run, its pages purged first): the first engine spawn of a session
+  waits about 2.5 s on a USB 2 stick when the antivirus already knows the files, and 3.0–3.2 s at
+  Norton's first look at them on that computer; on a USB 3 stick of about 190 MB/s, about 0.55–0.6 s
+  and 1.1–1.2 s the same two ways; about 0.31 s with every page cached (Node's SHA-256 alone); then nothing for the rest
+  of the session. The plan's "0.28 s on USB 3" was too low. Not measured: Electron's main process,
+  Defender active, Norton offline, b12110 itself (52 files, 94.5 MB, about 2 % more bytes), the
+  kiwix-tools and whisper.cpp copies (T11.3a).
+- **Its recorded limits** (T3.12's reviews; [`known-limitations.md`](known-limitations.md)): a cached
+  `mismatch` outlives a repair made outside the app (a `fetch-runtime` run while the app is open), and
+  the session cache outlives a re-plugged stick, so only a restart reads again (R1 m-1, R2 m-3); a hold,
+  a lasting deny-read and an unknown code stay "try again", and Windows may report a bad sector as
+  `UNKNOWN`, so the `EIO` way out may not reach it there; files the marker does not record (a library
+  it lacks, #1025, or one the loader finds in the working directory) are not checked at a start; the
+  library test is a closed list of endings, so a later tools copy whose loadable code has another ending
+  starts with that file missing (R1 m-5); the cost grows with the copy and shows no progress: a 1 GB
+  copy would wait about 26 s on USB 2 in silence (R1 m-6, a follow-up candidate); the "copy changed"
+  guard cannot see a reinstall of the same pin across the swap's narrow window (R2 m-2); the
+  knowledge-pack tools' refusals have no repair in the app and are latched until the pack set changes or
+  the app restarts, and since the fix rounds a passing medium error on their marker or a library is
+  latched the same way (R1 m-7, N-3; beside #1013); if a file-system driver ever gave `ELOOP`,
+  `ENAMETOOLONG` or `EINVAL` for a healthy file, that copy would be refused with "Install again". The
+  rows that need real media or a real antivirus (holds, quarantines, cut-short markers, name case across
+  systems, medium read errors and their codes, a write-protected stick, the cost under Defender and on
+  macOS and Linux) are T11.3a's.
+
 The five duties a later version keeps for this install (leftover names, links and marker files under
-`runtime/`) are in §6.11, "Release rules for the AI engine".
+`runtime/`), and the three the pre-spawn check relies on, are in §6.11, "Release rules for the AI
+engine".
 
 The frozen marker rules for every later writer are in [`data-contracts.md`](data-contracts.md) (the
 engine install marker): `binaries` stays a map of relative path to lower-case SHA-256 hex of every
@@ -1764,6 +1957,18 @@ install relies on** (T8.5c's reviews, F-24's amendment): a later version
 4. puts no `cpu/…` keys in a main marker;
 5. leaves no marker that release 1 would read as damaged in `<os>/` beside a leftover.
 
+**Three more duties the pre-spawn check relies on** (T3.12's two reviews, Δ-61; §6.7 "The pre-spawn
+check, as built"; also in [`data-contracts.md`](data-contracts.md)). A later version
+1. puts no key into `binaries` that names anything but a file: release 1 counts a recorded folder or
+   other non-file as a missing file, so the engines refuse that copy at every start;
+2. puts no file under `cpu/`, `cpu.new/` or `cpu.old/` into a main marker, for every family (duty 4
+   above, widened): release 1 sets those keys aside as a nested net's, so a main copy's own file there
+   would never be checked;
+3. records the program under exactly the name release 1 resolves for it (lower case, as
+   `llama-server.exe`), and spells every key as the archive spells it: release 1 compares names case
+   for case, while a Kit's file system may not (a map that spells the program otherwise is
+   `marker-damaged`).
+
 **Release rules for skills (F-25).** The new version bundles its app skills and never rewrites the drive's
 `app-skills/` (W-24, §6.2), so release 1 always meets the skills its Kit shipped. A skill of a new
 `kind` reaches release 1 only as a user skill; one that declares a well-formed
@@ -1956,8 +2161,9 @@ As built in P2 (T2.2, in `main/services/db.ts`; CF-3 answered at P2's entry, Δ-
 - **Frozen for every later version:** `schema_meta`'s columns, primary key and constraints never change,
   and no later version puts a trigger on it; later versions add tables of their own. The golden fixture
   `tests/fixtures/schema-meta/` holds the table text, the row shape and the value grammar.
-- The unlock line of `update.log` (P3, §8.2) passes the value found before the overwrite (`previous`)
-  through `parseLastWriter` and logs only the parsed, bounded fields (a carried fact for P3).
+- The unlock line of `update.log` (as built in P3, T3.10; §5.3, §8.2) passes the value found before the
+  overwrite (`previous`) through `parseLastWriter` and logs only the parsed, bounded fields (`writer`,
+  `applied`): the unlock now opens through `openDatabaseWithStamp` (CF-23's P3 half).
 
 ### 7.5 The database version number and the oldest workspace (M-D1, M-D2)
 
@@ -1971,14 +2177,14 @@ As built in P2 (T2.2, in `main/services/db.ts`; CF-3 answered at P2's entry, Δ-
 ### 7.6 Old-reader behaviors that only release 1 can provide
 
 Each one ships in the oldest sold version because only that version meets the case. As built in P2,
-except W-70 (P3) and the parts of W-68 marked P3 and P11b.
+except W-70 and W-68's startup-line half, as built in P3, and the part of W-68 marked P11b.
 
-The ids C01–C08 and X01–X03 name texts of the app-update copy deck (a working paper outside the repo)
+The ids C01–C09 and X01–X03 name texts of the app-update copy deck (a working paper outside the repo)
 by their catalog keys: C01 `main.workspace.schemaUnreadable`; C02 `common.newerVersionText`; C03 and
 C04 `packs.state.newerFormat` and `packs.state.newerFormatTitle`; C05 `packs.addFailed.newerFormat`; C06
-and C07 `skills.reconcile.needsNewerApp.one` and `.other`; C08 `analysis.newerExtractorNote`; X01
-`main.workspace.newer`; X02 `models.newerApp.hint`; X03 `skills.incompatible.title` (the same text as
-`main.skills.incompatible`).
+and C07 `skills.reconcile.needsNewerApp.one` and `.other`; C08 `analysis.newerExtractorNote`; C09
+`main.models.activeUnavailable` (P3); X01 `main.workspace.newer`; X02 `models.newerApp.hint`; X03
+`skills.incompatible.title` (the same text as `main.skills.incompatible`).
 
 - **A user skill for a newer version says so** (W-65, T2.14): a skill that fails validation while its
   frontmatter parses and carries a well-formed `compatibility.minAppVersion` above the running version
@@ -2000,10 +2206,11 @@ and C07 `skills.reconcile.needsNewerApp.one` and `.other`; C08 `analysis.newerEx
   (`openPlaintext`, a developer workspace) opens its database outside `openFailure`, so a malformed
   schema there never reaches C01 (T2.14 decision 6); damage inside a schema row's own text reads the
   same way (the deck's accepted point 1); the classifier's proving row runs on vitest's SQLite, so the
-  phase exit's real-app unlock is its proof on Electron's (R1-7). **Still planned:** release 1's SQLite
-  version in the startup line (§8.2, P3) and in the frozen register at the Kit tag, and from the first
-  update on a per-pull-request check that runs every `CREATE` and `ALTER` text of the database code on
-  exactly that SQLite (P11b).
+  phase exit's real-app unlock is its proof on Electron's (R1-7). **As built in P3**: release 1's SQLite
+  version is in the startup line (`sqlite=`, from `process.versions.sqlite`, T3.2, §5.3), and the unlock
+  line records a `workspace_schema_unreadable` refusal (T3.10, §8.2). **Still planned:** that version in
+  the frozen register at the Kit tag, and from the first update on a per-pull-request check that runs
+  every `CREATE` and `ALTER` text of the database code on exactly that SQLite (P11b).
 - **Persisted message values** (W-69, F-26, T2.12): `shared/persisted-messages.ts` holds the keys whose
   English the workspace stores, an append-only alias table (`PERSISTED_ALIASES`, empty today) and the
   parser. The committed fixture `tests/fixtures/display-map/values.json` holds every English value each
@@ -2012,11 +2219,59 @@ and C07 `skills.reconcile.needsNewerApp.one` and `.other`; C08 `analysis.newerEx
   percent-encoded values), maps a key it knows, and shows C02 ("This text comes from a newer version of
   HilbertRaum, and this version can’t show it.") for one it does not (`renderer/lib/displayMap.ts`).
   Release 1 originates no code. The grammar and the duties are in §7.7 ("Stored messages").
-- **"Go back" leaves release 1 a state it can read** (W-70, P3, planned): release 1 stores with
-  `gpuAutoDisabled` the engine build it was set under and tries the graphics card again when its own
-  engine differs; its unlock names an active model it cannot list instead of failing silently (also the
-  Home screen's row and headline, which until then show "Getting ready…" and the badge "Starting" for
-  such a model; T2.7's F-23 review 2, m-1).
+- **"Go back" leaves release 1 a state it can read** (W-70, as built in P3: T3.11 and its fix round,
+  with the owner's rulings of 2026-11-25; T2.7's F-23 review 2, m-1, found the Home half):
+  - **The stamp.** With `gpuAutoDisabled` release 1 stores the engine build it was set under:
+    `gpuAutoDisabledEngine` = `{ version, backend }` from the install marker of `runtime/llama.cpp/<os>/`,
+    or `null` when that is unknown; written before the flag in the same write, and rewritten on every
+    set (`createGpuFailureRecorder`, `ownEngineBuild`, `runtime/gpu-failure.ts`). The own build is what
+    that folder holds, not what the app pins.
+  - **The re-arm.** At every session start (unlock, create, the plaintext start, after a healed "Check
+    again"), after the #530 clear, release 1 clears a set flag, with its stamp and `gpuLastError`, when
+    its own build differs from the stamp in `version` or `backend`, as exact text, not F-24's order
+    (`healEngineLoadState`, `rearmGpuForOtherEngine`, `engine-health.ts`). A wrong re-arm costs one
+    failed GPU start, which sets the flag again with this build's stamp.
+  - **When the flag stays:** a missing or unreadable stamp, which is every workspace flagged before
+    release 1 (owner: kept, so no GPU failure surprises the first start after the update; "Try GPU
+    again" still clears it); an unknown own build (no marker the app can read, an `unreadable` one
+    included, or a developer binary outside the folder); no engine.
+  - **The clears.** "Try GPU again" and the #530 clear also clear the stamp, with no audit event. Every
+    clear writes the flag first and the stamp last (the settings store writes key by key, with no
+    transaction), so a write cut short leaves at worst a stamp beside a false flag, never a set flag
+    without its stamp, which would never re-arm (T3.11's review R1-2).
+  - **One Kit on two systems** (owner, 2026-11-25: "the Mac gets its GPU back"): the same engine version
+    built for another system is another build (Metal against Vulkan), so a flag set on a Windows or Linux
+    computer is re-armed on a Mac and the other way round; back on the first computer the card is tried
+    once more, fails, and the workspace falls back to the processor by itself, after every visit to the
+    other system. A known limit, pinned by a row; the stamp keeps its two fields and names no system; a
+    per-computer flag would be the real fix (a follow-up candidate).
+  - **C09.** After unlock, create or the plaintext start, the auto-start names an active model this
+    version cannot list with C09 in the notice bar (`main.models.activeUnavailable`: "{model} isn’t
+    available in this version of HilbertRaum, so it wasn’t started. Choose another model on the AI Model
+    screen.", with "Go to AI Model"), once per unlocked session. "Cannot list" means that no entry of
+    `discoverManifests().manifests` has the id (an id listed only under "Needs a newer HilbertRaum"
+    included) and that the walk can say so: the id is in the walk's `unsupported` list, or the walk
+    reported no error at all (`activeModelUnlisted`, `registerModelIpc.ts`). The auto-start then starts
+    nothing, keeps `activeModelId` byte for byte and writes nothing: no settings row, no audit event, no
+    `update.log` line.
+  - **Not C09:** a listed model whose file is missing or whose role is another, a missing or unreadable
+    definitions folder, a stored id that is not a string, and every manual start (today's behaviour:
+    `main.models.unknown` for a manual start). The "no errors" rule is the conservative one (T3.11's S-1,
+    accepted): the walk does not tell a read error from a parse, validation or duplicate error, so an id
+    that no definition names gets no C09 while any other definition on the drive is invalid or a
+    duplicate; the `unsupported` clause keeps the "Go back" case. With the auto-start switch off there
+    is no notice at all, while Home still shows its no-model state (T3.11's fix round, S-3).
+  - **Home.** For such a model Home shows its existing no-model state ("No model selected yet", the badge
+    "Needs a model" and "Choose a model") instead of "Getting ready…" and the badge "Starting", from
+    `AppStatus.activeModelUnavailable`, worked out once per unlocked session and model id (owner,
+    2026-11-25: no new copy).
+  - **Recorded limits** (also in [`known-limitations.md`](known-limitations.md)): on the plaintext start
+    (developer builds only) C09 may reach no window, since the notice channel is not replayed, while
+    Home's state still shows (T3.11's S-3); a C09 banner is dropped, like every `'models'` notice, when the
+    chat engine's verdict heals in the same session; the flag carries an engine stamp, still no machine
+    stamp. The data contracts are `AppSettings.gpuAutoDisabledEngine: EngineBuildStamp | null`
+    (main-owned) and `AppStatus.activeModelUnavailable?: boolean`
+    ([`data-contracts.md`](data-contracts.md)); the later-writer duty is in §7.7 ("Settings").
 - **A knowledge pack in a newer ZIM format says so** (W-71, T2.14): release 1 reads the ZIM major version
   (a `uint16` at offset 4; `readZimHeader`, `zimFormatTooNew`, `ZIM_MAX_READABLE_MAJOR = 6`,
   `zim/identity.ts`). Above 6 a file is never handed to `kiwix-manage` or `kiwix-serve`: Add refuses it
@@ -2835,12 +3090,16 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
 
 - **A value under one of release 1's settings keys is one release 1 could have written.** Release 1
   reads each row of a key it knows as stored, with no check (only its own writes are checked): the same
-  JSON type, and for `gpuMode`, `theme` and `workspaceMode` one of release 1's values. The exception is
-  `uiLanguage`: a language release 1 does not know reads like `system`, and the row is kept. "Could
+  JSON type, and for `gpuMode`, `theme` and `workspaceMode` one of release 1's values. The exceptions are
+  `uiLanguage`, where a language release 1 does not know reads like `system` and the row is kept, and
+  `gpuAutoDisabledEngine` (P3), which is read through `engineBuildStampOf`: any other shape reads as no
+  stamp (below). "Could
   have written" includes the bounds release 1 applies only when it writes, since it uses a stored
   number as it is: `contextTokens` and `contextTokensOverride` from 2,048 to 131,072; `ragTopKInitial`
   and `ragTopKFinal` from 1 to 200; `ragMaxContextTokens` from 256 to 131,072; `ragMinSimilarity` from
-  0 to 1; `localApiPort` from 1,024 to 65,535; a model id of at most 512 characters, `gpuLastError` of
+  0 to 1; `localApiPort` from 1,024 to 65,535; a model id of at most 512 characters (`activeModelId`
+  stays a manifest id string: release 1 names it in C09 when it cannot list it, §7.6), the GPU engine
+  stamp's `version` and `backend` of at most 128 each (below), `gpuLastError` of
   at most 4,096, a list of at most 10,000 texts, and an object of at most 256 KB as JSON. A new
   meaning, or a wider range, is a new key: release 1 ignores a key it does not know and leaves its row.
   Code: `main/services/settings.ts` `getSettings`, `updateSettings`, `RETRIEVAL_TUNING_BOUNDS`.
@@ -2869,6 +3128,30 @@ answers, default titles, the benchmark warnings (§7.6, F-26).
   `main/services/local-api/lifecycle.ts`; `main/ipc/registerLocalApiIpc.ts`. Proof:
   `unit/local-api-token.test.ts`, "re-mints over a tampered/malformed stored row instead of serving it
   as a credential". [F-27 R2 M-9]
+- **A GPU auto-disable carries the engine build it was set under** (W-70, P3). Release 1 keeps a set
+  `gpuAutoDisabled` unless `gpuAutoDisabledEngine` names a build other than the one in its own
+  `runtime/llama.cpp/<os>/` (`version` or `backend` differs, as exact text); a flag with no stamp it
+  can read stays on the processor (§7.6). A later version therefore:
+  1. whenever it writes `gpuAutoDisabled: true`, writes `gpuAutoDisabledEngine` in the same step and
+     before the flag: `{ "version", "backend" }` copied from the install marker of the engine folder
+     that ran (its own `<os>@<pin>/`, or release 1's while it still runs that one), or `null` when it
+     does not know; it never leaves an older stamp beside a flag it set;
+  2. keeps `gpuAutoDisabled` a JSON boolean, and `gpuAutoDisabledEngine` either `null` or a plain
+     object whose `version` and `backend` are non-empty strings of at most 128 characters; anything more
+     goes into a new key (release 1 reads only those two fields, ignores others, and drops them when it
+     writes the key);
+  3. may clear the flag for its own reasons (after an engine install of its own, say); the stamp may
+     then stay or be `null` (release 1 does not read it while the flag is false);
+  4. keeps the marker's `version` and `backend` as F-24 has them (the stamp is compared with them as
+     exact text).
+  Code: `main/services/runtime/gpu-failure.ts` `createGpuFailureRecorder`, `ownEngineBuild`;
+  `main/services/engine-health.ts` `healEngineLoadState`, `rearmGpuForOtherEngine`;
+  `main/services/settings.ts` `engineBuildStampOf`. Proof: `integration/engine-health.test.ts`,
+  "healEngineLoadState: a GPU flag set under another engine build is tried again (W-70)";
+  `integration/gpu-failure.test.ts`, "createGpuFailureRecorder: the engine build the flag was set under
+  (W-70)"; `unit/settings-write-gate.test.ts`, "gpuAutoDisabledEngine accepts only { version, backend }
+  …"; `integration/db-settings.test.ts`, "a GPU engine stamp of another shape reads as none …". [W-70;
+  T3.11]
 
 **Search**
 
@@ -3090,44 +3373,87 @@ are not repeated: the engine install's (§6.7), G-43 (c) and the salvage behind 
 
 ## 8. Policy keys, `update.log`, the drive-release record
 
-_Status: planned (P3; the support-end notices and the update rows of the support details P6). The
-names, grammars and read contracts below freeze in release 1. Absent keys and an absent record mean
-today's behavior._
+_Status: as built in P3 on the phase branch (PR-3 pending; the second Fable review of F-8, F-11 and
+F-13, T3.7, pending): the policy keys and their reader (§8.1), the app's `update.log` writer and its
+startup, failed-start and unlock lines (§8.2), the drive version in the Copy report (§8.3),
+`config/kit-support.txt` (§8.4), the `drive-release.json` reader and the builders' helper (§8.5), the
+pins (§8.7). Planned: the support-end and age notices and the update rows of the support details (P6),
+the readers' callers at the import and the hand-off (P6, P7), their `update.log` events (P6, P7), the
+audit events (§8.6), the in-app writer of `drive-release.json` (P8). The names, grammars and read
+contracts below freeze in release 1. Absent keys and an absent record mean today's behavior._
 
 ### 8.1 Policy keys (F-8, G-14 (c) built the simple way, U1 (b))
 
+As built in P3 (T3.1 and its fix round): the reader `readUpdatePolicy` and the verdict
+`updateInstallVerdict` in `main/services/policy.ts`, the SemVer 2.0.0 grammar and order in
+`main/services/updates/version.ts` (no imports, so P4's release tools load it through type stripping;
+P4's T4.2 extends it, CF-28), and the golden `tests/fixtures/readers/f8-policy/`. Both functions answer in
+tokens only: `install` is `allowed`, `managed` or `invalid`, `file` is `read`, `none` or `unreadable`,
+and the verdict for one version adds `above-max`. Frozen:
+
 | Key | Meaning in release 1 |
 |---|---|
-| `updates.allow_user_install` | absent = allowed; `false` blocks every install ("Updates are managed by your organization") |
-| `updates.max_version` | optional; see the table below |
-| `updates.allow_online_check` | a **reserved name**: the Kit builders write `true` explicitly (U1 (b)); its meaning belongs to the online-check version after release 1, which may refine it; release 1 does not act on it |
+| `updates.allow_user_install` | absent or `true` allows; `false` blocks every install ("Updates are managed by your organization", `managed`), whatever `max_version` says; any other value, `null` included, blocks as "the update policy on this drive has an invalid value" (`invalid`) |
+| `updates.max_version` | absent: no cap; a strict SemVer 2.0.0 string allows versions up to and including it, in SemVer 2.0.0 order (pre-releases ordered, build metadata ignored); strict means at most 256 characters, ASCII, no `v`, no blanks, no leading zeros; any other value blocks as invalid; an update version that does not parse is above every cap |
+| `updates.allow_online_check` | a **reserved name**: the Kit builders write `true` explicitly (U1 (b)); release 1 reads no value of it, junk included, and never ORs it into the network ceiling or the status line; its meaning belongs to the online-check version after release 1, which may refine it |
 | `network.allow_update_checks` | unchanged: `false` everywhere, and the sell gate's refusal of `true` stays as it is |
 
 The `updates.max_version` table:
 
 | `allow_user_install` | `max_version` | Result |
 |---|---|---|
-| `false` | anything | every install blocked |
+| `false` | anything | every install blocked (`managed`) |
 | absent or `true` | absent | allowed |
-| absent or `true` | a version X | versions up to X allowed (semver order, pre-releases included) |
-| absent or `true` | a junk value | blocked: the update policy on this drive has an invalid value |
+| absent or `true` | a version X | versions up to and including X allowed (SemVer 2.0.0 order, pre-releases included); a version above X is `above-max` |
+| absent or `true` | a junk value | blocked: the update policy on this drive has an invalid value (`invalid`) |
+| a junk value | anything | blocked as invalid |
 
-- **A missing or damaged `policy.json` in a packaged build** keeps the signed import **allowed** and shows
-  "policy file unreadable" in Settings → Updates and in Diagnostics, so an administrator's typo that
-  lifted a block is visible. This is a deliberate exception to "a damaged policy never fails open"
-  (a blocked import is a management control, not a security boundary: updates are signed, and a damaged
-  policy must not block the signed repair); [`security-model.md`](security-model.md) records it (P3's
-  docs).
-- What a junk value of `updates.allow_user_install` itself means is fixed by P3's parse matrix (absent,
-  `true`, `false`, junk, per posture) before F-8 freezes.
-- **When it is read**: from disk at the import, at "Restart and update" (also from a later start), so an
-  administrator's edit needs no restart. **Once `updates/applying/` exists the policy no longer stops
-  it**: the start files parse nothing and resume, and "Continue the update" is not gated, because a
-  half-done swap must finish. The admin section says so: block before the hand-off, or remove the staged
-  update.
-- The Kit builders write `updates.allow_online_check: true` and keep
-  `network.allow_update_checks: false`; the install keys stay absent unless a managed Kit asks for them. On a Kit the old key no
-  longer governs a later online check, so the admin section names `updates.allow_online_check`.
+- **The `updates` block.** A present `updates` that is not an object is invalid; `"updates": {}` means
+  every key absent; unknown keys inside it are ignored; key names are exact and case-sensitive, so a
+  misspelt key blocks nothing. Precedence: `managed` before `invalid`, both known before the update file
+  is read; `above-max` needs the update's version. `maxVersion` is reported only while installs are
+  allowed: it is null for `managed` and `invalid` (T3.1's D-1, confirmed).
+- **A missing or damaged `policy.json`** keeps the signed import **allowed** and reports
+  `file: unreadable`, so an administrator's typo that lifted a block is visible: missing on a prepared
+  drive (`config/drive.json` there), or damaged on any root (empty, malformed, a top level that is not an
+  object, a folder, a read error, over 1,048,576 bytes, not UTF-8, UTF-16 included); a root with neither
+  file reports `none` and shows nothing. One leading UTF-8 byte-order mark is skipped (`loadPolicy`
+  still reads such a file as malformed); invalid UTF-8 inside a string becomes U+FFFD; with a duplicate
+  key the last one wins; a link at the name is followed, as `loadPolicy` follows it, so a dangling link
+  reads as a missing file and a folder as `unreadable`. "Policy file unreadable" in Settings → Updates
+  and in Diagnostics (P6) comes from this `file: unreadable`, never from
+  `PolicyStatus.policyFilePresent`, which is `true` for a malformed file (CF-29).
+- **A junk value blocks while a damaged file allows**, on purpose: a junk value is an administrator's
+  edit, shown as invalid, while a damaged file must not block the signed repair. This is a deliberate
+  exception to "a damaged policy never fails open" (G-14: a blocked import is a management control, not
+  a security boundary, and updates are signed); [`security-model.md`](security-model.md) records it.
+  Its cost: a read error of a moment, or an editor's save caught half-written, lifts a block for that one
+  read (T3.1's review, R1-2; [`known-limitations.md`](known-limitations.md)).
+- **Two readers, two answers for a missing file.** `loadPolicy` (the privacy and network posture) fails
+  safe: on a provisioned drive a packaged build's missing or malformed file gives the strict defaults.
+  `readUpdatePolicy` is a reader of its own, not a `PrivacyPolicy` field, and answers a missing file the
+  opposite way ("allowed, unreadable"), because the `updates` keys are a management control, not a
+  ceiling a lost file may loosen. Neither changes the other's answer; the typed `PrivacyPolicy`
+  literals are unchanged.
+- **When it is read**: from disk at every call, outside `loadPolicy`'s cache (the full audit's F-30,
+  §12.4), so an administrator's
+  edit counts without a restart, even one that keeps the file's size and time; a developer build and a
+  packaged one read it alike. Its callers are P6's import and P7's "Restart and update" and "Continue
+  the update" (CF-31 aligns the moments' names); in P3 only the sell gate reads it (§9.5). **Once
+  `updates/applying/` exists the policy no longer stops it**: the start files parse nothing and
+  resume, and "Continue the update" is not gated, because a half-done swap must finish. The admin
+  section says so: block before the hand-off, or remove the staged update.
+- **The writers.** A Kit's policy is the DIY posture plus `"updates": {"allow_online_check": true}`,
+  written only through `prepare-drive -Kit` (`--kit`), which only `build-commercial-drive` passes at its
+  step 1 (`buildPolicyJson({ kit: true })`; `script-drift.test.ts` pins the Kit literal in both twins).
+  DIY and developer drives get no `updates` key, and their `policy.json` bytes are unchanged (pinned
+  per twin and posture). `network.allow_update_checks` stays `false`; the install keys stay absent
+  unless a managed Kit asks for them (a builder switch is a follow-up). On a Kit the old key no longer
+  governs a later online check, so the admin section names `updates.allow_online_check`. The sell gate
+  requires the Kit's key and refuses a junk install key (T3.8, §9.5).
+- **Later-writer duty** (T3.1's review, R1-3): a later writer never widens the `max_version` grammar and
+  never changes the types of `allow_user_install` (a boolean) or `updates` (an object): release 1 reads
+  any other value as invalid and blocks every install.
 
 ### 8.2 `updates/update.log` (F-11, W-14)
 
@@ -3137,29 +3463,73 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
   `cmd` carries the raw `%date% %time%` as an opaque field and may carry no ISO time (both are formatted
   by the locale, and `wmic` is gone from current Windows 11). The OS tokens, the line frame and the time
   field: §5.3 (table B.2); the events of the hand-off, the apply and the start files: §5.4–§5.6;
-- **content-free by grammar**: tokens, versions, codes and counts; no free text, no placeholders, no
-  paths. The app's writer reports an error as its errno code and bare system call, never a message. The
+- **content-free by each event's typed fields** (as built in P3, Δ-66): tokens, versions, codes and
+  counts, no free text, no placeholders, no paths; the app writes only registered events, each key
+  with one token rule or a closed list (§5.3). The app's writer reports an error only by its code (when
+  it passes the token rule E) and its bare system call (`bareSyscall`), never by a message: never
+  `failureForLog`'s `message`, nor `causeFailure`'s `sqlite` or `kind`, which carry free text. The
   redaction of `app.log` (#975) covers `app.log` only on its way out of the app, never this file, which
   `cmd` and bash write too;
-- every message the user is shown is logged with its `UPD-*` reference code (§5.7, §5.8);
-- **the startup line**: the app version, the engine pins, `drive-release.json`, `drive_format_version`
-  and the app's SQLite version;
-- **the unlock line**: the workspace's `user_version` and the `last_writer` stamp (both unreadable
-  before unlock), the stamp found before the overwrite passed through `parseLastWriter`, so only its
-  parsed, bounded fields are written (T2.2, a carried fact for P3); and a refused unlock's failure
-  reason as a token, `workspace_schema_unreadable` (W-68, T2.14) included as a must: the app log and the
-  audit line of a session spent at the unlock screen do not outlive the quit, so this line is the only
-  durable trace of that refusal (T2.14 R2-6);
-- **a failed start**: the failure's class, written in the guarded start runner's catch (`failure.cause`
-  and `failure.code` only, §7.3);
+- every message the user is shown is logged with its `UPD-*` reference code (§5.7, §5.8): P6's and P7's
+  events, with `code` registered as a closed list (CF-41);
+- **the startup line** (T3.2): the app version, the engine pins of the app's own bundled
+  `runtime-sources.yaml`, the drive record's `app_version` and `format`, `drive_format_version` and the
+  app's SQLite version (W-68), once per start of a prepared drive;
+- **a failed start** (T3.2): the app version, the failure's cause, its code and its bare system call,
+  written in the guarded start runner's catch (§7.3);
+- **the unlock line** (T3.10; CF-23): one line after every unlock attempt, a success and every refusal,
+  with the result and only that result's fields (§5.3): the workspace file's own `user_version` (read
+  from its header before the migrations, which would make it this build's `SCHEMA_VERSION`) and the
+  `last_writer` stamp found before the overwrite, passed through `parseLastWriter`, so only its parsed,
+  bounded fields are written; for a refusal its reason as a token, `workspace_schema_unreadable` (W-68,
+  T2.14) included. **It is the only durable trace of a refused unlock**: the app log and the audit line
+  of a session spent at the unlock screen do not outlive the quit (T2.14 R2-6). It is also the only
+  write a refused unlock makes: `workspace/` and `config/` stay byte for byte;
+- **how to read the unlock line** (T3.10's review, m-2 and m-5):
+  - `result=error` with a `writer` key means that the open finished: inside the vault every failure
+    after the stamp is another result, so a step after the open threw. That session ran (the database is
+    open, migrated and stamped again), and the next attempt finds the workspace open and writes no line,
+    so the log shows one `error` and no `ok` for it;
+  - no line is written for an unlock of a workspace that is already open, or for a password that is not
+    a string; a create writes none;
+  - a stamp stored as a BLOB or a number reads `writer=none`, not `unreadable`;
+  - in developer builds only, the plaintext workspace's open writes the same line at the start, after
+    the startup line (`ok`, or `workspace_newer` for a newer database left closed). Its newer-database
+    line has no `found` key, while an unlock's has one; a plaintext start whose open fails for another
+    reason writes no unlock line (its `start-failed` line covers it); and the plaintext header is read
+    without its `-wal`, so after a session that ended uncleanly its `user_version` can lag;
+- the file so holds the time of every start and of every unlock attempt, wrong passwords included,
+  readable without the password. Example lines, from T3.10's real-app run on a scratch drive (a wrong
+  password, then the right one):
+
+  ```
+  r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=absent drive_format=absent sqlite=3.53.4 t=2026-11-26T00:35:50Z
+  r1-app win32 unlock result=wrong_password t=2026-11-26T00:35:52Z
+  r1-app win32 unlock result=ok user_version=1 writer=0.1.66 applied=interim t=2026-11-26T00:35:52Z
+  ```
+- the unlock line's other recorded limits are in [`known-limitations.md`](known-limitations.md): a
+  throw inside the unlock handler's own catch would write no line; the refusals before the key
+  derivation write a line at no cost, so a hostile renderer could flush the log; and forty attempts push
+  the startup line out of the support copy's last 40 lines, so P6's copy takes the newest `startup` line
+  on its own (CF-40);
 - a write failure is swallowed and counted, so a read-only or full drive never breaks the start; the
-  file has a size cap that P3 sets;
-- `PRIVACY.md` says the file is content-free and lives on the drive (P3's docs).
+  cap is 64 KiB, trimmed by the app to its newest 32 KiB from a line boundary, never while
+  `updates/applying/` exists (§5.3);
+- `PRIVACY.md` says the file is plaintext, content-free and on the drive.
 
 ### 8.3 "Copy details for support" and the Copy report (W-16)
 
 - **The Copy report** in Settings → Diagnostics gains the app version, the drive content version, the last
-  update and the staged update (P3 the versions, P6 the update rows).
+  update and the staged update (P3 the versions, P6 the update rows). As built in P3 (T3.5): the app
+  version was already in the "App & runtime" card and the report; the card gains the row "Version
+  recorded on the drive" right under "App version", always shown, and the report the same line right
+  after the app-version line. Its value is the record's `app_version` as written (a technical value,
+  never translated), "not recorded" when the drive has no valid one (a root that is no prepared drive
+  included), or "unknown" when the drive status could not be read. It comes from a main-side field,
+  `DriveStatus.driveAppVersion`, which `buildDriveStatus` fills at every call, with no cache, from
+  `driveAppVersion(readDriveRelease(root))` on a prepared drive only (§8.5;
+  [`data-contracts.md`](data-contracts.md)). The labels are `diag.app.driveVersion` and
+  `diag.app.driveVersionNone`, in all ten catalogs.
 - **"Copy details for support"** is a frozen, content-free button on the unlock screen's sheet (§3.4), in
   Settings → Updates and on every update refusal and outcome notice, callable while locked (§3.5). It
   copies: the reference code of the notice it sits on; the app version and OS; the root apps per system
@@ -3178,12 +3548,40 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
 ### 8.4 Support end and age (G-13 (b), G-29 (a), F-12, W-17)
 
 - **The support end date is per Kit**: `config/kit-support.txt`, one line `YYYY-MM`, written only by the
-  Kit builder, once; the builder refuses to overwrite an existing one, and nothing else rewrites it
-  (`config/` is outside the reconcile). A later extension is an owner action, never an app write. The
-  plan's reading, which counsel checks (U10): the support period runs per unit placed on the market, so
-  a Kit sold later gets a later date; the value comes after counsel, and no Kit can be built until it
-  is set.
-- The app shows the date only when the file is present; a DIY drive shows only the age reminder.
+  Kit builder, once (`config/` is outside the reconcile). A later extension is an owner action, never
+  an app write. The plan's reading, which counsel checks (U10): the support period runs per unit placed
+  on the market, so a Kit sold later gets a later date; the value comes after counsel, and the builder
+  refuses to build a Kit without one.
+- **Frozen, as built in P3** (F-13's write-once half; T3.3b; the reader `readKitSupport` in
+  `main/services/updates/kit-support.ts`; golden `tests/fixtures/readers/f13-drive-release/kit-support.json`):
+  - the file holds one month, `YYYY-MM`: four ASCII digits, a hyphen, two ASCII digits from 01 to 12
+    (ISO 8601's calendar month);
+  - only the Kit builder writes it, once per Kit; `prepare-drive`, the app and every later version never
+    write, rewrite or delete it, and it is byte-identical after an update, a fallback and "Go back";
+  - what every reader accepts: a regular file (by `lstat`: a link of any kind, a folder or a pipe at the
+    name is damaged, never followed or opened; a `config/` that is itself a link is followed, as for
+    `drive-release.json`), at most 64 bytes, holding one leading UTF-8 byte-order mark or none, then the
+    month, then nothing, one LF or one CR LF;
+  - anything else is damaged (`not-a-file`, `empty`, `too-large`, `not-a-month`) and never guessed at;
+    a failed read is `unreadable` with its errno token only; no file (`ENOENT`, `ENOTDIR`) is `absent`.
+    `readKitSupport` is synchronous, never throws, caches nothing and logs nothing;
+  - the reader checks the form only, never a range: whether the month is past is the support
+    computation's (F-12). P6's T6.4a computes from the parsed month and adds no parse of its own (CF-37);
+  - the builder's bytes: the month and one LF, 8 bytes, ASCII, no byte-order mark, created exclusively
+    (never through or over a link or an existing file). The sell gate accepts only these bytes (§9.5).
+- **What the app shows** (P6): the date only when the file holds a month. "Copy details for support" shows
+  the month, `absent` or `unreadable`, and a damaged stamp as `unreadable` (§5.9); a drive without one
+  (a DIY drive) shows no support date, only the age reminder.
+- **The writer, as built** (replaceable): `build-commercial-drive -SupportEnd <YYYY-MM>`
+  (`--support-end` in the `.sh` twin) is required on every run but `-VerifyOnly`, a dry run included: an
+  exact `YYYY-MM`, not before the building computer's current UTC month, with no upper bound. The month
+  is echoed in words before step 1 ("kit-support.txt: support ends December 2031 (2031-12)"). Write-once
+  as built: the same month in the builder's bytes is kept untouched; another month, a file that is not
+  the builder's 8 bytes (a hand edit's CR LF or byte-order mark included), a link or a folder is refused
+  (exit 1) before step 1; unsold stock is stamped again by deleting `config/kit-support.txt` on purpose.
+  The builders run the helper `scripts/lib/write-kit-support.mjs` as `node --no-warnings`, right before
+  the drive record (§8.5). The check at dispatch (the stamp not earlier than the dispatch month plus the
+  declared period) is the Kit ritual's (P11c, CF-37), not the builder's.
 - **The build date** has one source: the release commit's committer date, written at build time into a
   generated JSON beside `keys.json` and pinned by the release guard (§2.7); never a file's modification
   time, which a copy to exFAT resets. Its name and shape: §5.10 (table B.11).
@@ -3203,28 +3601,115 @@ A plaintext, content-free log on the drive, readable before unlock, for support:
 
 ### 8.5 `config/drive-release.json` (F-13, W-20)
 
+As built in P3 (T3.3a and its fix round, T3.3b): the reader `readDriveRelease` in
+`main/services/updates/drive-release.ts`, the helper `scripts/lib/write-drive-release.mjs`, the golden
+`tests/fixtures/readers/f13-drive-release/` (whose `read` and `noCache` groups are F-13's; its
+`artifacts`, `tree` and `writes` groups follow the replaceable helper and P6's freeze of the root names).
+
 **What release 1 reads, frozen:**
-- `app_version` (for the version rule, §2.5); `format` is logged, never acted on, so a later `format`
-  bump never stops release 1; a breaking layout takes a new file name;
-- `highest_version_seen` is a reserved name release 1 does not act on;
-- an absent file or field means no constraint; a malformed file, 0 bytes or a wrong-typed field counts
-  as absent and is logged (the field types, the byte-order mark and the size limit: §5.10, table B.11);
-- release 1 never writes the file.
+- the reader returns one of four kinds: `absent` (no file: `ENOENT`, `ENOTDIR`); `unreadable` (it is
+  there, but the read failed just now: its errno token only, no constraint for that read only, nothing
+  cached); `damaged`, with one fault (`not-a-file`, `empty`, `too-large`, `not-json`,
+  `not-an-object`); or `record`, holding `appVersion`, `format` and `highestVersionSeen`, each
+  `absent`, `invalid` or `valid` with its value;
+- only `app_version` reaches a decision (the version rule, §2.5, through `driveAppVersion`): its valid
+  value, otherwise null, no constraint. `format` and `highest_version_seen` are returned for the log
+  only and never acted on: a record with `format` 2 or 99 has its `app_version` read as usual, so a
+  later `format` bump never stops release 1, and a breaking layout takes a new file name;
+  `highest_version_seen` is a reserved name. The startup line is where "logged" happens (`release`,
+  `release_format`, §5.3);
+- anything but a regular file at the name (a folder, a named pipe, a symbolic link or junction, to a
+  record or to nothing) is `damaged not-a-file`, never opened or followed; 0 bytes is `damaged empty`;
+  over 1,048,576 bytes is `damaged too-large` and never opened; exactly 1,048,576 bytes is read;
+- one leading UTF-8 byte-order mark is removed; a second one, or one after any other byte, makes the
+  file no JSON. The text is decoded leniently: bytes that are not UTF-8 inside an unknown field do not
+  damage the record; inside `app_version` they make it invalid;
+- only own fields count (a field under an own `__proto__` key is no field); with a duplicate key the
+  last one counts; keys are compared byte for byte (`Format` and `"app_version "` are unknown), with
+  JSON escapes in keys decoded;
+- `app_version` and `highest_version_seen` are valid only as SemVer 2.0.0 (T3.1's parse), ASCII, at most
+  64 bytes, compared byte for byte and never trimmed; anything else, `null` included, is `invalid`: it
+  counts as absent and is logged as invalid;
+- `format` is valid as a safe integer of at least 1 (`1.0` reads as 1); anything else (0, −1, 1.5,
+  `1e400`, 2^53 + 1, `"1"`, `null`) is invalid;
+- no cache: a rewrite of the same size and time is seen at the next read; the reader never throws and
+  logs nothing;
+- the open (the fix round): one `lstat` first, then an open that adds `O_NOFOLLOW` and `O_NONBLOCK` on
+  macOS and Linux, then a check on the descriptor that a regular file was opened, else
+  `damaged not-a-file`. What remains of the window between the `lstat` and the open: on Windows a link
+  put at the name then is followed to the file it names; on macOS and Linux it fails the open as
+  `unreadable` (`ELOOP`), not `damaged`, both no constraint (kept as built); a file cut to 0 bytes then
+  reads as `not-json`;
+- **a `config/` that is itself a link is followed** (a recorded residual, the #1047 class shared with
+  `policy.json` and `drive.json`: whoever can place the link can write the file; pinned by a read
+  vector);
+- release 1 never writes the file. (Release 1 also carries P8's in-app writer, §6.9, §6.10, under
+  G-40 (b), so P8's T8.2 sheet settles this sentence and T3.7's review checks it: CF-32.)
 
 **What every writer keeps:**
-- unknown fields are kept;
+- the bytes: UTF-8 without a byte-order mark, LF, a two-space indent; the writer's own fields first
+  (`format`, `app_version`, `systems`, `files`), then every other field of an existing record in
+  `JSON.parse`'s own-key order (an own `__proto__` and `highest_version_seen` included); never a record
+  over 1,048,576 bytes;
+- **unknown fields are kept, as far as a double holds them** (T3.3a's review, M1): release 1's helper
+  rewrites a record through `JSON.parse` and `JSON.stringify`, so a later writer's own fields must
+  survive a round trip through an IEEE double parser: integers beyond ±(2^53 − 1) and wide values go in
+  strings; no duplicate keys; no meaning in key order, number spelling or whitespace. A golden `writes`
+  vector pins what the helper does to such a record (2^53 + 1 becomes `9007199254740992`, `1e400`
+  `null`, `-0` `0`, `1.0` `1`; a duplicate keeps its first place with the last value);
+- **the owned fields**: an older builder's helper may rewrite `format`, `app_version`, `systems` and
+  `files` at any time, in release 1's shape and with `format` back to 1, so a later shape takes new
+  field names and no later reader infers its own fields from `format`; `format` stays informational;
+- **a damaged record is replaced**: the helper writes a fresh one (with one warning line, exit 0), and
+  the damaged record's unknown fields are lost; a folder or a link at the name is refused instead;
 - `highest_version_seen`: the highest version that confirmed a start on this drive, written only after a
-  confirmation (P8 fixes the rule, T8.2); release 1 never acts on it (§2.5);
+  confirmation (P8 fixes the rule, T8.2); release 1 never acts on it (§2.5), and the helper never writes
+  it;
 - `app_version` = the version of the apps at the root after the writer's operation: the confirmed new
-  version after an update, the target after "Go back", unchanged after an automatic fallback. A writer
-  that did not place the apps itself (`prepare-drive` on a DIY drive, which copies none) writes it only
-  if exactly one app per system is at the root and all carry one version, and otherwise omits it;
+  version after an update, the target after "Go back", unchanged after an automatic fallback; valid up to
+  64 bytes (P4 refuses a longer payload version, CF-36). A writer that did not place the apps itself
+  (`prepare-drive`, the Kit builder's last writing step) writes, as built (the kept rule): the one
+  version when every root app carries it (one version for all means one app per system, since the
+  version is part of the name); otherwise an existing valid value that a root app still carries by its
+  exact name, so a re-run never drops a lagging system's floor and the kept value is never ahead of the
+  root (a root `*.app` never carries one); otherwise it omits the field, which means no constraint;
+- `systems` lists the systems with an app at the root, sorted; `files` lists the path and lower-case
+  sha256 of the root app files, the four start files (`Start HilbertRaum.cmd`,
+  `Start HilbertRaum.command`, `start-hilbertraum.sh`, `READ ME FIRST.txt`) and every regular file under
+  `runtime/`: links are never followed (`runtime/` itself included), `._*` and `.DS_Store` are skipped,
+  nothing comes from `config/`, `models/`, `docs/`, `logs/`, `workspace/` or `updates/`, and paths are
+  sorted by UTF-16 code unit. The bytes depend on the tree alone, so both builder twins write the same
+  record by running the one helper;
+- the root names (not frozen here: F-18 is P6's, CF-33): an app carries a version by its exact,
+  case-sensitive name, never by a prefix; a folder `*.app` that does not start with a dot is a macOS app
+  of no known version; a file named `*.app`, a folder named like an app file and a link are no app. P6
+  decides the case rule (the Windows start file's glob matches without case);
 - the support end is **not** in this file (§8.4).
 
-**Who writes it**: one node helper, `scripts/lib/write-drive-release.mjs`, as the **last** step of
-`build-commercial-drive` (after the start files, apps and engines are copied) and of `prepare-drive`
-when node is on `PATH`; it also records the systems and a `files[]` list (path, sha256) as evidence. The
-new version rewrites it after its confirmation and before "Go back" (§6.9, §6.10).
+**Who writes it**: the node helper `scripts/lib/write-drive-release.mjs`
+(`--target <drive root> [--dry-run]`), which loads the app's own reader module through Node's type
+stripping (Node 22.18 or later), so the read, the version check, the root-name rule and the serializer
+have one definition. It refuses a target that is not a prepared drive, a `config/` that is not a real folder, an existing
+record it cannot read just now, and a folder or link at the record's name; it writes through
+`drive-release.json.tmp`, a flush and a rename, then reads the record back (exit 1 with "the record was
+written but could not be read back as written; check the drive" when that fails); a reader that cannot
+be loaded gives one line and exit 1, nothing written. Every line it prints starts with
+`drive-release.json`.
+- `build-commercial-drive`: as **the last writing step, before the final check**: an un-numbered block
+  after `verify-models --generate` (step 6) and before the gate (step 7), inside the verify-only guard,
+  right after the support-end stamp (§8.4); the seven step numbers are unchanged. `-VerifyOnly` writes
+  neither file; `-DryRun` plans both and writes neither; `-SkipPackage` writes the stamp and a record
+  without `app_version`. After apps copied by hand, the record is written again
+  (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive>`) before `-VerifyOnly`, or the
+  builder is run again with `-AppArtifact`. Both builder twins run the helpers as `node --no-warnings`
+  (Node's type-stripping warning would print a local path), show only the lines that start with the
+  helper's file name, and stop the build on a non-zero exit; `node` 22.18 or later on `PATH` is checked
+  before step 1;
+- `prepare-drive`: at its end when `node` is on `PATH`, on every run (`-Force` or not; unknown fields
+  kept); without `node`, or when the helper fails, one line and exit 0; under `-Kit` it leaves the record
+  to the builder; it never writes `kit-support.txt`;
+- the new version rewrites it after its confirmation and before "Go back" (§6.9, §6.10; P8).
+
 `config/drive.json`'s `drive_format_version` and `config/checksums.json` are written by the drive scripts
 (`prepare-drive` writes `drive_format_version`; `verify-models --generate` writes `checksums.json`) and
 read by no rule; release 1 only logs `drive_format_version` (§8.2).
@@ -3238,20 +3723,50 @@ records the existing `engine_install_*` events with its own `trigger`.
 
 ### 8.7 Pins on the user's computer (W-15)
 
-The user-data folder is shared by every version and every Kit on one computer, so:
-- `appId`, the app scheme and the name the user-data folder derives from are pinned by a hygiene test,
-  as spike 8 found them (§10.6), and never changed: on Windows the folder is
-  `%APPDATA%\@hilbertraum\desktop`, named by the `name` of the app's `package.json`, which carries no
-  `productName`; a check on the packaged build asserts the path itself (P3);
-- an allow-list pins the renderer's `localStorage` keys: Chromium recreates a store it cannot open, so
-  nothing whose loss changes behavior may live there.
+The user-data folder is shared by every version and every Kit on one computer, so (as built in P3,
+T3.4):
+- `appId`, the app scheme and the name the user-data folder derives from are pinned, as spike 8 found
+  them (§10.6), and never changed: on Windows the folder is `%APPDATA%\@hilbertraum\desktop`, named by
+  the `name` of the app's `package.json`, which carries no `productName`. The pins are
+  `packaging.test.ts`'s "the user-data folder's name never moves": (i) `apps/desktop/package.json` is
+  named `@hilbertraum/desktop`; (ii) it carries no `productName` and no `build` object, and
+  electron-builder's `extraMetadata` sets nothing but `version`; (iii) `src/main` moves `userData` only
+  for a developer run, never renames the app (`setName`, `app.name =`), and takes the single-instance
+  lock at module top level after that move; (iv) no start file, script, workflow or app source passes
+  `--user-data-dir` or `--profile-directory` (three developer tools that pass a scratch one on purpose
+  are named: `scripts/verify-mac-build.sh`, `scripts/check-netlog.mjs`, `scripts/release/run-hold.ps1`),
+  and no start file sets `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `XDG_CONFIG_HOME` or `HOME` for the
+  app; (v) `appId` `space.hilbertraum.app`, the scheme `hilbertraum`, and `productName` and
+  `executableName` `HilbertRaum` stay. A move of the folder above it (`app.setPath('appData', …)`) is not
+  pinned yet (T3.4's S-a): T3.4's review fix round is to add it to (iii);
+- **a check on the packaged build asserts the path itself** (T1.11 S8-1; T3.4's Q1): the step "Check
+  the packaged app's user-data folder (app-update W-15)" in `release.yml`'s `build-win` leg starts the
+  portable exe just built the way a user does (a scratch drive root, no profile switch) and waits for
+  `%APPDATA%\@hilbertraum\desktop\lockfile`, which exists only while an instance holds that profile; it
+  fails when none appears there within 5 minutes or when the start leaves a lockfile anywhere else. It
+  runs on every `v*` tag and every dispatch of the workflow (its first run is a dispatch on the branch
+  before PR-3, with the owner's OK), the release job needs it, and P11c's T11.15 runs it on the release
+  head; a `packaging.test.ts` row pins its wiring;
+- an allow-list pins the renderer's `localStorage` keys (`repo-hygiene.test.ts`): Chromium recreates a
+  store it cannot open, so nothing whose loss changes behavior may live there. The list holds four UI
+  preferences that fall back to a default when lost (`hilbertraum.uiLanguage`,
+  `hilbertraum.chat.listCollapsed`, `hilbertraum.docs.railCollapsed`,
+  `hilbertraum.docs.locationsMoreOpen`); nothing is kept in IndexedDB; the screenshot harness
+  `renderer/preview/`, which never ships, is left out;
+- `portable.unpackDirName: true` joins these pins once #1043's fix reaches the integration branch (an
+  open item for the phase running then);
+- for every electron-builder, NSIS or Electron major bump, P11c re-runs two checks that
+  [`packaging.md`](packaging.md)'s pre-ship checklist holds as items 14 and 15: the name inside each
+  built `app.asar`, and the portable stub's hold on the drive-root exe, measured by
+  `scripts/release/run-hold.ps1` (moved from the spike's working papers with its `lib.ps1` and
+  `T11Native.cs`, every path a parameter).
 
 ---
 
 ## 9. Release side and ritual
 
-_Status: planned (P5; release 1 itself is P11c). The release tools are replaceable; the published
-assets and the keys are permanent._
+_Status: planned (P5; release 1 itself is P11c), except the sell gate's M1 half, as built in P3
+(§9.5). The release tools are replaceable; the published assets and the keys are permanent._
 
 ### 9.1 The deploy stop and the integration branch
 
@@ -3339,18 +3854,73 @@ gate, which both builders call, also:
 - takes the release's `.dsse.json`, verifies it with the production keys, and requires every root app's
   sha256 to match it, so a local or walk build can never become a Kit;
 - refuses an empty key set;
-- requires `drive-release.json` with `app_version` equal to the apps, and `config/kit-support.txt`;
+- requires `drive-release.json` with `app_version` equal to the apps, and `config/kit-support.txt`
+  (as built in P3, below);
 - requires every root start file and `READ ME FIRST.txt` to match the sha256 the signed payload lists;
 - requires the drive's `runtime-sources.yaml` to equal the Kit app's bundled copy, and
   `DRIVE-NOTICES.md` to be generated from it;
-- refuses any file in `updates/` (a Kit ships with no `updates/` folder; a smoke start is made on a copy);
-- refuses a root app with the read-only attribute, and `prepare-drive` gains the same check (W-33,
-  Δ-37; neither exists at `95e05214`): release 1's launch counter would never count on such an app
-  (§11.3);
-- refuses to release a Kit for dispatch when `kit-support.txt` is earlier than the dispatch month plus
-  the declared period, and repeats the timestamp-countersignature check on the Kit's exe;
+- refuses any file in `updates/` (a Kit ships with no `updates/` folder; a smoke start is made on a copy;
+  as built in P3);
+- refuses a root app with the read-only attribute, and `prepare-drive` has the same check (W-33,
+  Δ-37; as built in P3): release 1's launch counter would never count on such an app (§11.3);
+- repeats the timestamp-countersignature check on the Kit's exe; the check at dispatch that
+  `kit-support.txt` is not earlier than the dispatch month plus the declared period is the Kit ritual's
+  (P11c's checklist, CF-37), since the builder refuses only a past month (§8.4);
 - from P8 on: the manifests and pins match the app version, and a pin folder (§6.6) is checked like the
   live one.
+
+**As built in P3** (T3.8, the M1 half of W-33, `commercial-drive.ts`; replaceable tooling, nothing here
+is frozen; its review is pending). The gate's `checks` gain `kitUpdatesKey`, `releaseRecordCurrent` and
+`supportEndStamped` (19 in all), and it:
+- requires `policy.json` to hold an own `updates` object whose own `allow_online_check` is `true`, read
+  by a private reader of the gate's own (never through `policy.ts`, never fed into the network ceiling),
+  so U1 (b) is enforced at sale (T3.1's review R1-1; this answers CF-30 for every Kit built since); and
+  refuses a Kit whose `readUpdatePolicy` answers `invalid` (a junk `allow_user_install` or
+  `max_version`), since release 1 would block every import on it for good (owner, 2026-11-26), while
+  `managed`, a deliberate `false`, passes; a non-object `updates` gets the Kit-key line alone;
+- requires `config/drive-release.json` to read as a record whose valid `app_version` equals the one
+  version the root's apps carry (`rootArtifactOf`, `chooseAppVersion`'s `single`, §8.5). An absent,
+  unreadable or damaged record, one with no valid `app_version` or another version, and apps of no single
+  version each get one line that names the way out: write the record again with
+  `node --no-warnings scripts/lib/write-drive-release.mjs`, then check again, since `-VerifyOnly` writes
+  nothing (a folder or link at the name is deleted first);
+- requires `config/kit-support.txt` to read as a month whose bytes are exactly the builder's 8
+  (`readKitSupport`, `formatKitSupport`): a hand edit's CR LF or byte-order mark, or a missing line
+  feed, is refused; there is no range check (above). Its lines name `build-commercial-drive -SupportEnd`;
+- refuses a Kit with any entry in `updates/` ("this drive was started: delete the updates/ folder"):
+  `updates` joins `USER_DATA_DIRS` and both builders' own lists; an empty `updates/` passes, like an empty
+  `logs/`;
+- fails `runtimeHashed` (`optionalRuntimesConsistent` for the knowledge-pack tools) for a file in an
+  engine folder that the copy's map does not record, found by exactly `installedFileKeys`' walk (never the
+  marker, a top-level `cpu/`, `cpu.new/` or `cpu.old/`, macOS `._*`, `.DS_Store` or `__MACOSX/`; a link
+  counts only when it resolves to a file; a folder that cannot be listed fails closed), checked only
+  over a map that hashes every required file, with the names #729 reported left out. This closes #1025's
+  unrecorded library at the moment of sale (T3.12's review, M-2). The line names deleting the file, or
+  the engine folder and building again: `fetch-runtime --commercial` skips a copy whose map hashes the
+  required files;
+- judges the root apps by `rootArtifactOf`, the helper's one classifier (§8.5), and refuses an extracted
+  `*.app` folder, a hidden one included (owner, 2026-11-26: a Kit ships the macOS app as its zip; this
+  reverses #233's earlier acceptance, since a folder carries no version the record could name), a name
+  whose version segment is no version, any other root file named `hilbertraum-*` in any case (the
+  Windows start file matches without case; the classifier itself stays case-exact until P6, CF-33), and
+  a root app with no write bit (`mode & 0o222`; on Windows the read-only attribute);
+- and both `prepare-drive` twins refuse a root app (the three root globs, any case) with no write bit
+  before they write anything, in a dry run too: one line per app, exit 1 (W-33, T1.11 P3-3).
+
+The problems are listed in this order: posture, the Kit key, weights, reviews, user data, notices,
+engines, source bundle, OCR, skills, platform matrix, apps, start files, record, support end. The `.ps1`
+builder hands the gate its own target (`$NodeTarget`, one trim rule); neither builder adds a native
+pre-flight line of its own for the record, the stamp, the Kit key or the engine walk.
+
+Limits as built (also in [`known-limitations.md`](known-limitations.md)): a locally compiled macOS or
+Linux voice engine (`runtime/whisper.cpp/mac`, `…/linux`) has no marker, and no gate check looks at it
+(a follow-up candidate: a marker for a locally compiled engine); the engine walk does not see files under
+a top-level `cpu*/` folder of a copy whose family has no such build, a link to a folder, or a dangling
+link (no installer records them either); `drive-release.json`'s `files[]` is not checked for freshness
+(T5.10 hashes the apps and start files against the payload); "read-only" means the write bits or the
+read-only attribute, not an access list that denies writing (§11.3's other case); the gate follows a
+link at `updates/` (the app refuses one; exFAT holds no links); and the record is not compared with
+`--app-version` on its own line (an artifact of another version gets its own line).
 
 ### 9.6 The fix line (G-16, W-54)
 
@@ -3519,7 +4089,7 @@ covered later, by the walk (§10.4) and the owner's legs (§10.5).
 | 1b (T1.1b) | Is the drive-root exe held for the whole start, from the double-click to the window, also while the antivirus sandboxes a never-seen build? (F-7 (d)'s write-open probe against a rename test) | Holds: the write-open probe reads "held" from the stub's process creation to its exit, 2,457 of 2,457 samples over 18 starts (both stubs, NTFS and exFAT USB 3, two never-seen first starts that Norton sandboxed for 71.7 s and 77.9 s); "free" only before the stub's process exists (21–143 ms after the start request); a rename test is no probe ("free" for 0.57–9.8 s while the stub has not opened its exe); a failed cmd redirection leaves ERRORLEVEL unchanged | the in-flight probe and its `if exist` guard (§5.6); the Windows wait by the same probe (§5.5); the `\|\|` / `if exist` rule (§5.6); spike 1's order, 18 of 18 | the time before the stub's process exists measured under Norton only (P3-1); the wait not run inside an apply (P3-4); a read-only root exe silences the counter (P3-3); no USB 2 | PC D's row (Defender, a never-seen build, timed from the click through the start file; it can reopen §5.6's text before the M1 commit) and a USB 2 root: P11a (T11.3a); the probe wait and the first move's retry in a real apply: P7 (T7.2); the two-start race: accepted (§11.3) |
 | 4a (T1.6) | The static-runtime AppImage on a stock Ubuntu 24.04 (WSL2) without libfuse2, with and without `APPIMAGE_EXTRACT_AND_RUN=1`; replacing it while it runs on exFAT; this computer's glibc read as the `linux` floor will read it; the detached bash hand-off from the packaged AppImage | Holds: the static runtime (`toolsets.appimage: "1.0.3"`, type2-runtime `dd6cebe`) starts without libfuse2, normally and under extract-and-run (3 of 3 each; the legacy runtime fails 3 of 3), with `APPIMAGE` absolute and `APPDIR` holding the exe in every start; a running image is renamed and replaced in ≤ 14 ms on ext4, FUSE exFAT and drvfs while it keeps reading its own bytes and the new one starts beside it; table B's spawn holds 52 of 52 (its own session, outlives the app and the old mount, renames 67–224 ms after the app's exit; dash only: `started` 1 of 1); glibc reads `"2.39"` from `glibcVersionRuntime`. Three Scripts and rule-1 faults, fixed by measured forms: rule 1 as a terminal's session leader (0 of 4 → 6 of 6), the bash final step (an empty `applying/` on FUSE exFAT and drvfs, a bad cwd → 5 of 5), a zombie's wait (24 s → 63 ms). The static runtime needs fuse3's `fusermount3` (else exit 127), keeps its extract-and-run folder, and no AppImage starts from `noexec` | G-6 (a)'s runtime and F-21's `APPIMAGE` lookup (§3.6); `requires.linux` (§2.4); the macOS and Linux spawn, Linux half (§5.4); the wait's `stat` test, the bash final step and the bash rules (§5.5); `start-hilbertraum.sh`'s rule 1 and the `.command`'s `trap` line, provisional (§5.6) | not method-reviewed (T1.11 read the Windows spikes); the spike's own limits: WSL2 Ubuntu 24.04 only; exFAT through FUSE and drvfs, no kernel exFAT; the probe app, so the real app's `comm` `HilbertRaum` is inferred; a pseudo-terminal, not a terminal emulator's window; `boot` at rest only | kernel exFAT (udisks2's options, `showexec`, the final step with an open `apply.sh`), fuse3 on stock Ubuntu 24.04/25.10 and Fedora desktops, an extract-and-run folder planted by another user, a real terminal's window close, `boot` after a sleep and a clock step, the real app's AppImage, `/bin/sh` that is bash (Fedora): P11a (spike 4b, T11.3a); macOS (`comm`, `stat`, `nohup` and a closed Terminal window, the `.command`'s rule 1): P11a (spike 3); a second instance, a stale lock, `sync` per step: P7 (T7.2); an unplug mid-apply: P11a (the reduced spike 5) |
 | 7 (T1.5) | One history fixture from tag v0.1.50 built with that tag's own toolchain: do the full-text-search shadow rows restore under `defensive: true`? | The binary holds: v0.1.50's own toolchain still installs (`npm ci` 25.5 s, 814 MB) and made the fixture (`user_version` 0, 38 tables, two FTS5 tables with 10 shadow tables); HEAD's `openDatabase` opens it with `defensive: true` and migrates it to `user_version` 1 in Node 24.13, Electron 37 and the packaged Electron 43: no release-1 defect. A `.dump` text **fails** under `defensive: true`, at `INSERT INTO sqlite_schema`, not at the shadow rows (through one `exec()` it leaves an empty file that HEAD opens as a fresh workspace with no error); "content tables + `'rebuild'`" gives an empty FTS index that passes `integrity-check`; the logical form (the FTS rows inserted through the virtual table with their rowids) holds under both settings. `node:sqlite`'s `defensive` default differs by runtime (absent on Node 22.21.1, off on 24.13.0, on on 24.22.1 and in Electron 43); a dump that renumbers implicit rowids silently breaks `covers_through_rowid` | no frozen value: the fixture recipe of T10.6a (logical SQL text, every implicit rowid kept, never a shadow table or `writable_schema`, loaded with an explicit `{ defensive: true }` in one `exec()`; accepted by the orchestrator, Δ-40), T10.7's normalisation list (row counts, the rowid links), and an explicit `{ defensive: true }` in `openDatabase` (P2, T2.2) so that tests run as the app does (§7.8) | not method-reviewed; the spike's own limits: one tag, a plaintext workspace only (no `.enc`), NTFS on Windows only; CI's current Node 22.x patch not measured; the logical form does not reproduce the physical FTS segment layout | chained fixtures, the other tags, regeneration that is byte-identical and the `.enc` form: P10 (T10.6b, T10.5); CI's Node 22.x legs and generation and loading on macOS and Linux: P10 (T10.7); the migration time on a large workspace: P10; a later step that touches FTS internals (`'optimize'`, `'merge'`, a tokenizer change) needs a fixture made from a binary: unowned |
-| 8 (T1.2) | What `app.getPath('userData')` and the single-instance lock derive from in a packaged build, what changes them, and whether `--user-data-dir` redirects them | Holds: the profile is `%APPDATA%\@hilbertraum\desktop`, named by the `name` of the asar's `package.json` (it has no `productName`); the exe's name, folder and drive letter, `version`, `appId` and electron-builder's `productName` do not move it; the lock (a message window titled with the path, `<userData>\lockfile`, a startup mutex) separates two builds; `--user-data-dir` redirects it; two starts of one build shared the stub's `%TEMP%` folder (#1043, found here) | W-15's pins (§8.7, P3); why the apply waits for the stub (§5.5; the times are spike 1's, S8-6) | the pins check names, not the runtime path, and nothing re-measures per Electron major (S8-1, S8-2); the shared-folder text describes build A, not release 1's build B (S8-3); Windows only | a packaged-build check of the runtime path: P3 (T3.4), re-run in P11c (T11.15); a cross-version lock row per Electron major: P11c (T11.5c); macOS, Linux and a clean Windows account: P11a (T11.8); a redirected or roaming `%APPDATA%`: a known limitation (P7, T7.D) |
+| 8 (T1.2) | What `app.getPath('userData')` and the single-instance lock derive from in a packaged build, what changes them, and whether `--user-data-dir` redirects them | Holds: the profile is `%APPDATA%\@hilbertraum\desktop`, named by the `name` of the asar's `package.json` (it has no `productName`); the exe's name, folder and drive letter, `version`, `appId` and electron-builder's `productName` do not move it; the lock (a message window titled with the path, `<userData>\lockfile`, a startup mutex) separates two builds; `--user-data-dir` redirects it; two starts of one build shared the stub's `%TEMP%` folder (#1043, found here) | W-15's pins (§8.7, P3); why the apply waits for the stub (§5.5; the times are spike 1's, S8-6) | the pins check names, not the runtime path, and nothing re-measures per Electron major (S8-1, S8-2); the shared-folder text describes build A, not release 1's build B (S8-3); Windows only | a packaged-build check of the runtime path: built in P3 (T3.4: `release.yml`'s `build-win` step, §8.7), re-run in P11c (T11.15); a cross-version lock row per Electron major: P11c (T11.5c); macOS, Linux and a clean Windows account: P11a (T11.8); a redirected or roaming `%APPDATA%`: a known limitation (P7, T7.D) |
 | 9 (T1.3) | Can the in-process strict ustar reader read a ~450 MB update file in one pass, hashing while it writes, in Electron's main process, and at what cost in time, memory, event-loop stalls and free space on NTFS, exFAT USB 3 and USB 2? | Holds (G-5 (c)): 450.6 MB staged in 1.6–2.6 s on NTFS and 15.1–15.9 s on USB 2; one reused 1 MiB buffer keeps the stalls ≤ 43 ms and memory at +6.4–9.8 MB (a read stream: 66–155 ms, +73–89 MB); exFAT allocates about 32 × the write size ahead of the data; a cut file is refused in 31–75 ms, before any write; no file left after 414 refusals; a rename to an `.exe` name costs 240–391 ms on a stick (S-P1-14) | table A's header and end rules (§4.3); the reads, staging under the final name in `.incoming-<v>/`, the free-space formula's last term and the progress rule (§4.5). Not the caps: 4 MiB, 64 signatures and 4,096 members follow F-1 and what a later file carries (S9-1, C-12; §4.3) | no cap was approached (S9-1); the run-ahead measured on one driver (S9-3); every file warm in the cache (S9-9); known hashes and stand-in archives (S9-8); one file size (S9-5) | a cold source and a cold re-hash: P11b (spike 6), P11a (O22); Defender (rename retries, the close scan) and the peak free bytes on macOS and Linux exFAT and the Kit SSD: P11a (T11.3a); a 2 GiB run and the `ENOSPC` and `EFBIG` rows: P6; FAT32: P11a's VHD leg; an unplug while staging: P11a, P11b (spike 5) |
 | 10 (T1.4) | Does a detached `cmd.exe` spawned by packaged Electron 43.8.10 outlive the app and its stub, with the exact argument list, environment and working folder, under 12 awkward drive roots and a `subst` letter on NTFS and exFAT; the start file's resume line; the apply lock; a working folder at the path-length limit; a parent inside a job? | Holds: 72 of 72 hand-offs; spawning the `.cmd` itself gives `EINVAL`; rule 1 resumes and counts under 11 of 12 roots (never under a root holding `%PATH%`, a limit of every `.cmd` start file); the handle lock excludes and releases; a working folder of 259 characters or more gives `ENOENT` 2 ms after `spawn()`; inside a kill-on-close job the apply dies with the job (S-P1-11) | the Windows spawn, its environment and the failed-spawn classes (§5.4); rule 1's text (§5.6, with spike 10b's prefix); the cmd lock and the cmd rules (§5.5) | the spike's working folder was the exe's folder, now the resolved drive root (S10-1, §5.4); batch-file locking (S10-2, closed by spike 10b); other system locales (S10-3); `LongPathsEnabled=1` only (S10-6); more root characters, other start forms, UNC roots (S10-7); known hashes (S10-5) | the Japanese-locale VM and a deep root with `LongPathsEnabled=0` (PC D): P11a (T11.3a); Windows 11 on ARM: P11a (T11.1); the extra root characters: P7 (T7.4a); UNC roots: a known limitation (P7, T7.D); the read-only marker failure: P11a (the read-only leg); an exFAT unplug: P11a, P11b (spike 5); the bash half: measured by spike 4a (row 4a); macOS: P11a (spike 3) |
 | 10b (T1.4b) | With `LockBatchFilesWhenInUse` = 1, and then at 0 again: does the apply still remove its own `applying\`, can a running start file be replaced, does rule 1's resume still resume and finish? | At 1 the planned self-delete fails (0 of 18: the new exe's stub inherits the running script's handle); removing first and starting last holds (34 of 34 at 1; the final text v7, 12 of 12 at 0); a resume could never replace its own start file at 1 (0 of 17) until rule 1's `(goto) 2>nul & ` prefix (4 of 4 at 1; at 0, 0 of 136 starts differ from spike 10); at 0 a start file replaced by rename reads on in the new file (12 of 12) | the apply's final line and the CE-1 order (§5.5); rule 1's prefix (§5.6); the start-file replacement's retry and deferral (§5.5); every path ending in one parsed block (§5.6); the cmd rules on locked scripts, `(goto)` and the Restart Manager, and the reason for the 10 s acknowledgement (§5.4, §5.5) | the final line measured at 1 by its parts only (pass 3); the value-1 spawn that ran no line is likely, not proven, the harness's query (P3-2); a lone `apply.cmd` held at the `rmdir` (P3-5, now §5.5 "Nothing to resume"); the prefix ends a calling batch file and a `cmd /k` console (P3-6, §11.3); one cmd build (P3-8) | the final line at 1, 40 value-1 spawns, the lone-`apply.cmd` resume: P7 (T7.2); the value and one self-delete run on each walk host and the Smart App Control PC: P11a (T11.8); `DelayedExpansion=1` with the lock on, start files on a network share: unowned |
@@ -3576,6 +4146,17 @@ None of §11.1's calls is decided yet. Decided in P1 by the owner (and, where ma
   update" (a staged update), "Continue the update" (`updates/applying/` exists) and "Go back to version
   {n}".
 
+Decided in P3 by the owner, 2026-11-25 and 2026-11-26, one line each:
+- #234's switch stays off for ever ("tolerate, document"): the pre-spawn check is no defence against
+  whoever can write the engine folder, and says so (§6.7, §11.4).
+- A GPU auto-disable flag without an engine stamp is kept (every workspace flagged before release 1);
+  the cross-system re-arm on one Kit is accepted ("the Mac gets its GPU back"; a known limit) (§7.6).
+- Home shows its existing "Choose a model" state for an active model release 1 cannot list, beside
+  the one-time C09 notice; no new copy (§7.6).
+- At sale, an unpacked macOS `.app` at a Kit's root is refused, reversing #233's acceptance, and so is
+  a junk update policy key; a deliberate `false` passes (§9.5).
+- The cost of the pre-spawn check was measured on a local stand-in copy of the same size (§6.7).
+
 Decided later, each in its own phase: G-10 (where the walk runs, P7), G-11 (the channel mechanics, P5:
 `prerelease: true` kept, the pre-publish check refuses a Kit release still flagged pre-release), G-25
 (how a fix line follows Electron's support window, P5, with counsel), M-D3 and M-D4 (P10), U5 (with the
@@ -3588,6 +4169,8 @@ online check after release 1).
   (G-44 (b), §6.7).
 - The limits P2's reviews recorded for the workspace guards, the readers and the engine install (§6.7,
   §7.9).
+- The limits P3's reviews recorded, each beside its rule: the update policy (§8.1), `update.log` (§5.3,
+  §8.2), `drive-release.json` (§8.5), the pre-spawn check (§6.7), W-70 (§7.6) and the sell gate (§9.5).
 - Spike 4a covers Ubuntu 24.04 in WSL2 only, with exFAT through FUSE and drvfs; the static AppImage
   runtime (and whether fuse3 comes with a stock desktop), the kernel exFAT driver and a real terminal's
   window close stay unproven on Ubuntu 25.10, Fedora and a real stick until spike 4b runs in P11a.
@@ -3602,8 +4185,9 @@ online check after release 1).
 - A root exe with the read-only attribute (or on a root the user may not write to) makes §5.6's
   in-flight probe read "in flight" at every start, so R1's counter never counts and a broken new
   version never falls back; the start file logs `counter-skip reason=in-flight`, and the sell gate and
-  `prepare-drive` will check that no root artifact is read-only (W-33, §9.5; T1.11 P3-3;
-  `known-limitations.md`, T7.D).
+  `prepare-drive` refuse a root artifact without a write bit or with the read-only attribute (as built in
+  P3, T3.8; W-33, §9.5; T1.11 P3-3; `known-limitations.md`, T7.D); a root the user may not write to by
+  its access list is not checked.
 - Rule 1's `(goto) 2>nul & ` prefix (§5.6) ends a batch file that `call`s the start file (its next line
   does not run, and it exits 0, not its own code) and a console kept open with `cmd /k`, while an
   update is in progress; the resume itself starts. No repo script or test `call`s the start file while
@@ -3689,14 +4273,14 @@ subsection at the end of its section, never by renumbering.
 | §5 | the hand-off, the apply script, the start files, "Continue the update", the outcome codes and notices (protocol table B) |
 | §5.1 | how to read table B: "frozen since", the system, version and token spellings, the common text rules G0 |
 | §5.2 | table B.1: every file and folder name of the hand-off, the apply and the start files |
-| §5.3 | table B.2: the grammars of `handoff.txt`, `journal.txt`, `unconfirmed.txt`, `launch-count.txt`, `last-result.txt`, `last-result.seen`, and the `update.log` line frame |
+| §5.3 | table B.2: the grammars of `handoff.txt`, `journal.txt`, `unconfirmed.txt`, `launch-count.txt`, `last-result.txt`, `last-result.seen`, the `update.log` line frame, and the app's own `update.log` lines (the registered events, the token rules, the trim) |
 | §5.4 | table B.3: the hand-off (order, the drive-app precondition, pre-check, the `finish-<n>` cap, the spawn per system, the environment, failed-spawn classes, the removal of a finished or dead `applying/`, the start acknowledgement, `budget`, "Continue the update", the kill-on-close residual) |
 | §5.5 | table B.4 and B.5: the apply script (arguments, lock, wait, nothing to resume, move order, the start files' replacement, the new app's start, the CE-1 rule, cmd and bash rules) and the journal states |
 | §5.6 | table B.6 and B.7: the start files (rule 1's exact text, the fall-through, the counter, rules 2 and 3, every path ending in one parsed block) and every line they print |
 | §5.7 | table B.8: the confirmation (F-22) and the offers at a start (F-19) |
 | §5.8 | table B.9: the `last-result.txt` codes and the `UPD-*` reference codes with their copy keys |
 | §5.9 | table B.10: the "Copy details for support" fields |
-| §5.10 | table B.11: the build-date file and the `drive-release.json` reader's types |
+| §5.10 | table B.11: the build-date file, the `drive-release.json` reader's types and every writer's rules, `kit-support.txt`'s form |
 | §5.11 | the cases table B was checked against |
 | §5.12 | table B's owner decisions and open values |
 | §6 | drive content, AI engines, the first start after an update, "Go back" |
@@ -3731,6 +4315,7 @@ branch are resolved by §12.3, and the model, surprise and method-review ids of 
 | `P2-<n>` | a finding of spike 10b's own second part (the runs at `LockBatchFilesWhenInUse` = 0; P2-5: the harness's Restart Manager query) | §12.5 |
 | `CF-<n>` | a carried fact in the wave's ledger: a fact one phase hands to a later one | — |
 | `R-<n>`, `V-<n>` (as "the T1.12 review R-5") | findings and value remarks of this record's independent review (T1.12) | the citing row |
+| an id after a task id, such as `R1-2`, `R1 m-1`, `M-2`, `N-4`, `S-1`, `Q2` or `D-1` (as "T3.12's review R1 m-1", "T3.11's S-1") | a finding of that task's reviews (`R1`, `R2`: the first and second reviewer; `M` major, `m` minor, `N` from a re-check), or a surprise (`S`), question (`Q`) or decision (`D`) of its report, in the wave's working papers; provenance, each closed or recorded by the row that cites it | the citing row |
 | a letter in brackets after a gate or call id (`G-19 (b)`, `G-21 (b')`, `U1 (b)`, `G-5 (c)`) | the option chosen in the plan; the decision is as §1.3 and §1.4 word it | §1.3, §1.4 |
 | "the orchestrator" | the session that ran the wave for the owner; its calls are marked as its own | §11.2 |
 | v5, v6, v7 | successive texts of the cmd apply's final line measured in spike 10b (v7 is §5.5's) | §5.5 |

@@ -7424,7 +7424,9 @@ all enforced in MAIN and re-checked per call:**
    file restricts — "policy only restricts" preserved; since 2026-07-01 `prepare-drive` also
    writes `true` in BOTH postures, so a prepared/sold drive lets the buyer add models on demand —
    still gated by the setting + a per-download confirmation, and update-checks + telemetry stay
-   denied so the drive never phones home).
+   denied so the drive never phones home: `allow_update_checks` is `false`, and
+   `updates.allow_online_check: true`, which only a Kit's policy carries, is a reserved name this
+   version never reads, `app-updates.md` §8.1).
 2. `settings.allowNetwork` — the spec §3.6 checkbox, **default on** for a fresh DIY/dev install
    (`DEFAULT_SETTINGS.allowNetwork: true`); gate 1's policy ceiling still wins — a `policy.json`
    hand-edited to deny keeps downloads off regardless of the toggle. A locked workspace reads as off.
@@ -7536,7 +7538,9 @@ policy-permitted (the latter per owner decision O3, local-api wave — both stil
 default-off settings/consent), everything else strict; see `security-model.md` "Fail-closed on a
 packaged build".) A prepared/commercial drive now writes
 `allow_model_downloads: true` (2026-07-01), so the setting + the per-download confirmation are the
-effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home.
+effective gate there; update-checks + telemetry stay hardcoded/denied so the drive never phones home
+(`allow_update_checks: false`; a Kit's reserved `updates.allow_online_check: true` is never read by
+this version, `app-updates.md` §8.1).
 A locked workspace still reads the setting as off.
 
 ### In-app engine installer (2026-06-13)

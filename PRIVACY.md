@@ -215,17 +215,28 @@ data key sealed under your password. None of these reveal your password or your 
 text, chunks, embeddings, settings — the **stored copies of your imported documents**
 (`workspace/documents/`), the **analyzed-image history** (`workspace/images/`), and the **local
 diagnostics log** (`logs/app.log.enc`) — all encrypted with the same vault key. The log never contains document contents or chat text, but may contain
-file names or paths, which is why it is encrypted too. (Lines written *before* you unlock are kept
-in memory only and never reach disk.) What you copy or save from Settings → Diagnostics shows the
+file names or paths, which is why it is encrypted too. (Lines of this diagnostics log written
+*before* you unlock are kept in memory only and never reach disk. The drive's support log below is
+the exception: it is written before you unlock, which is why it holds no file names, paths or text.)
+What you copy or save from Settings → Diagnostics shows the
 drive and your home folder as `<drive>` and `<home>`, this computer's account name as `<user>`
 wherever it appears, and account names in the usual folder paths from another computer as `<user>`
 too; the log on the drive keeps the full paths. A name in an unusual place can remain, for example
 in a folder you named yourself, so read a log before you share it.
 
-**What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
-the vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier, and
-password-wrapped data key — it must be readable before you unlock, and holds no password or
-plaintext data).
+**What is not encrypted:** the AI model files (public weights, not your data), the app itself, the
+vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier, and password-wrapped
+data key — it must be readable before you unlock, and holds no password or plaintext data), and the
+drive's support log `updates/update.log`. On a drive set up for HilbertRaum (a Kit, or a drive
+prepared with the drive scripts) the app adds one short line to that log at each start (the app
+version, the AI engine versions this app version installs, the app version and format the drive
+records, and the database engine's version), one when a start fails (why, as a fixed word, and the
+error code when there is one), and one after each attempt to unlock the workspace, wrong passwords
+included (the outcome as a fixed word, the workspace's format number and the app version that last
+opened it). Each line carries its time, to the second. A line never holds a file name, a path, your
+text, a password or a free-form error message, but anyone who holds the drive can read the log
+without your password, including when the app was started and when someone tried to unlock it. It
+stays on the drive, and the app never sends it anywhere.
 While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document or image exists briefly during
 re-indexing, when you open an image-analysis entry, or while a document is being translated); these

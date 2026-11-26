@@ -856,6 +856,13 @@ Everything keeps working; responses may just be a bit slower.
   in effect, so you can always tell — even days later, when the one-line note is long gone.
 - If you update your graphics driver later, open **Settings → Diagnostics (advanced) → Try GPU
   again** to let the app use the graphics card again.
+- The choice is kept together with the build of the AI engine that was running when it was made.
+  When the drive's AI engine is another build the next time the workspace is opened (after an
+  engine update, or when the drive moves between a Mac and a Windows or Linux computer, which run
+  different builds), the app tries the graphics card once more on its own. If the trouble comes
+  back, it switches to compatibility mode again by itself, as the first time. A drive used on both a
+  Mac and a Windows computer whose card fails can therefore show the compatibility-mode note once
+  after each visit to the other computer.
 - You can also turn acceleration off yourself under **Settings → Use GPU acceleration**
   (it is on by default).
 
@@ -929,10 +936,16 @@ If the message keeps coming back, the file is not just busy:
 - Something keeps refusing it, such as a security product that blocks the file without removing it, or
   a changed file permission. Allow the engine folder (`runtime/` on the drive) in that program, or
   restore the file's permission.
-- The app cannot repair this on its own: the engine's files are not damaged, only unreadable.
+- The app cannot repair this on its own: the engine's files are not damaged, only refused.
 
 If a file is missing instead, the AI Model screen offers **Install again** — see "The AI engine can't run
-on this computer" above.
+on this computer" above. The same happens when the drive itself fails to read one of the engine's
+files or its install record (a worn or failing USB stick, for example): that counts as damaged, not
+as busy, so this message does not come back at every start; the AI Model screen says the engine's
+files are damaged and offers **Install again**, which puts a fresh copy on the drive. If the drive
+keeps failing, it may be wearing out: copy what you need off it while it still reads (see also the
+section on Windows asking to scan and fix the drive, below). On Windows a failing drive can also
+report an error the app does not recognise; that still shows this message.
 
 ---
 
@@ -1520,9 +1533,15 @@ Everything is on the drive:
   (`<drive>\runtime\llama.cpp\win\llama-server.exe`). A name in an unusual place can remain, for
   example in a folder you named yourself, so read a log before you share it. The log on the drive
   keeps the full paths. On an encrypted workspace, the lines from before you unlock are kept in
-  memory only and are gone when the app closes without an unlock: no log reaches the drive before
-  you have typed your password.
-- `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
+  memory only and are gone when the app closes without an unlock: this log never reaches the drive
+  before you have typed your password.
+- `updates/update.log` — the drive's support log, in plain text: one short line per start, per start
+  that failed and per unlock attempt (wrong passwords included), each with its time. It holds
+  versions, fixed words and error codes only, never a file name, a path or your text, so it is
+  written before you unlock and anyone holding the drive can read it (`PRIVACY.md`, "Encryption").
+- `models/` — model weights. `config/` — drive settings/policy, `drive-release.json` (which app
+  version and files the drive was built with; Diagnostics shows it as "Version recorded on the
+  drive"), on a Kit `kit-support.txt` (the month its support ends), and `workspace.json`, which holds
   your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 
 See [`drive-layout.md`](drive-layout.md) for the full layout.
