@@ -46,8 +46,8 @@ import { sha256File } from './models'
 //   - PACKAGED → enforced. A binary WITH a recorded hash is verified (`ok`/`mismatch`); a
 //     binary with NO recorded hash (legacy drive, or one provisioned by an older
 //     fetch-runtime) is TOLERATED ⇒ `skip-legacy` (logged) so it still launches — on a
-//     COMMERCIAL drive that tolerance can be switched to a refusal (#234, see
-//     `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`).
+//     COMMERCIAL drive too: the owner ruled (2026-11-25) that this tolerance stays on for ever
+//     (#234: tolerate, document; `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` stays false).
 //
 // The result is SESSION-CACHED per resolved binary path: the GPU probe and the server
 // start race for the very same path (factory.ts kicks the probe concurrently with the

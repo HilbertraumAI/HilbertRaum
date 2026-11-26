@@ -48,7 +48,7 @@ interface Parse {
   time: { kind: 't'; value: string } | { kind: 'd' } | { kind: 'none' }
 }
 interface Golden {
-  accept: { vectors: Array<{ name: string; line?: string; bytes_b64?: string; parse: Parse | 'blank' | 'torn'; copied: string | null }> }
+  accept: { vectors: Array<{ name: string; line?: string; bytes_b64?: string; parse: Parse | 'blank' | 'torn' | 'long'; copied: string | null }> }
   emit: {
     startup: {
       yaml: Record<string, string>
@@ -123,8 +123,11 @@ function expectAsciiFrame(line: string): void {
  * The record's reading of one update.log line (5.1 G0, 5.3), written from its text and not from the writer: one CR
  * before the line end removed, spaces and TABs trimmed, the byte rule and the split stopping at ` d="`, fields split at
  * the first `=`, a token without `=` or with an empty key ignored, the first of two equal keys kept, a last `t=` the time.
+ * Any writer, OS and event token is read as it stands. A line over 1,024 bytes after the trimming is kept as the fixed
+ * placeholder with its length, never its bytes (5.3, 5.9: T3.7's fix round settled CF-34; P6's copy reader is built
+ * against golden `a11`).
  */
-function readLine(bytes: Buffer): { parse: Parse | 'blank' | 'torn'; copied: string | null } {
+function readLine(bytes: Buffer): { parse: Parse | 'blank' | 'torn' | 'long'; copied: string | null } {
   let b = bytes
   if (b.length > 0 && b[b.length - 1] === 0x0a) b = b.subarray(0, -1)
   if (b.length > 0 && b[b.length - 1] === 0x0d) b = b.subarray(0, -1)
@@ -134,6 +137,7 @@ function readLine(bytes: Buffer): { parse: Parse | 'blank' | 'torn'; copied: str
   while (end > start && (b[end - 1] === 0x20 || b[end - 1] === 0x09)) end--
   b = b.subarray(start, end)
   if (b.length === 0) return { parse: 'blank', copied: null }
+  if (b.length > 1024) return { parse: 'long', copied: `[line of ${b.length} bytes not shown]` }
   const copied = [...b].map((x) => (x >= 0x20 && x <= 0x7e ? String.fromCharCode(x) : '?')).join('')
   const opaque = b.indexOf(' d="')
   const head = opaque < 0 ? b : b.subarray(0, opaque)

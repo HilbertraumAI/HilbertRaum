@@ -23,8 +23,8 @@
     "rule": "Only the app trims. After an append, when the file is larger than max_bytes and updates/applying/ does not exist, the app keeps the newest keep_bytes from the byte after the first LF in them (no LF: nothing), as bytes, never decoded, written to update.log.tmp and renamed over update.log. A trim that fails keeps the file as it is and is tried again at the next append"
   },
   "accept": {
-    "reading": "The record's reading of a line (5.1 G0 and 5.3), which every reader of update.log follows: one CR before the LF removed; spaces and TABs trimmed at both ends; an empty line is `blank`; the byte rule and the field split stop at ` d=\"`, after which the bytes are opaque (`time.kind` `d`); a line holding a byte outside 0x20-0x7E or TAB before that is `torn` (no reader drops it); otherwise the tokens split at runs of spaces and TABs: writer, os, event, then fields `key=value` split at the first `=`, a token without `=` or with an empty key ignored, the first of two equal keys kept, and a last field `t=` is the time (`time.kind` `t`; none: `none`). `copied` is what \"Copy details for support\" shows of the line: the trimmed line, every byte outside 0x20-0x7E replaced by `?`, or null for a blank line (only non-empty lines are copied)",
-    "left_out": "a11, a line over 1,024 bytes: whether the support copy drops it (G0) or keeps it (5.3: no reader drops an update.log line) is P6's call (CF-34), so it joins this set then",
+    "reading": "The record's reading of a line (5.1 G0 and 5.3), which every reader of update.log follows: one CR before the LF removed; spaces and TABs trimmed at both ends; an empty line is `blank`; a line over 1,024 bytes after the trimming is `long` (G0's 1,024-byte rule drops no update.log line): never split and none of its bytes shown; the byte rule and the field split stop at ` d=\"`, after which the bytes are opaque (`time.kind` `d`); a line holding a byte outside 0x20-0x7E or TAB before that is `torn` (no reader drops it); otherwise the tokens split at runs of spaces and TABs: writer, os, event, then fields `key=value` split at the first `=`, a token without `=` or with an empty key ignored, the first of two equal keys kept, and a last field `t=` is the time (`time.kind` `t`; none: `none`). `copied` is what \"Copy details for support\" shows of the line: the trimmed line, every byte outside 0x20-0x7E replaced by `?`, or null for a blank line (only non-empty lines are copied), or for a `long` line the fixed placeholder `[line of <n> bytes not shown]`, `<n>` its length in decimal bytes after the trimming (5.3, 5.9). A line is read whatever its writer, os and event tokens are: a later writer's token (1 to 32 bytes of 0x21-0x7E without `=` and `\"`, 5.3) or a system release 1 does not run on is read and copied like a known one",
+    "left_out": "none since T3.7's fix round (2026-11-26): a11, a line over 1,024 bytes, joined the set once its rule was settled (record 5.3 and 5.9; CF-34)",
     "vectors": [
       {
         "name": "a1",
@@ -145,6 +145,13 @@
         "copied": null
       },
       {
+        "name": "a11",
+        "what": "a line over 1,024 bytes: a later start file's line whose one value runs to 983 bytes, 1,025 bytes in all (no conforming writer writes one: every app line is at most 256 bytes). G0's 1,024-byte rule drops no update.log line, and the support copy shows the fixed placeholder with the line's length, never its bytes (record 5.3, 5.9; T3.7's review F11-3, CF-34)",
+        "line": "lb win32 noted pad=01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012 t=2026-11-25T10:00:00Z",
+        "parse": "long",
+        "copied": "[line of 1025 bytes not shown]"
+      },
+      {
         "name": "a12",
         "what": "G0's trimming: leading and trailing spaces and TABs, runs of spaces and TABs between tokens, CR LF; 74 bytes",
         "bytes_b64": "IAlhcHBseS0xLjIuMAlkYXJ3aW4gICBtb3ZlZCBvcz1kYXJ3aW4gZGlyPW91dCAgdD0yMDI2LTExLTI1VDEwOjAwOjAwWiAJDQo=",
@@ -169,6 +176,45 @@
           "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
         },
         "copied": "lb win32 counted n=1 stray n=2 =x t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a14",
+        "what": "a later app's startup line: a writer token release 1 does not list (each later app writes its own, record 5.3) and a key release 1 does not know (T3.7's review F11-2)",
+        "line": "app-2.3.0 win32 startup version=2.3.0 release=2.3.0 release_format=2 sqlite=3.51.0 channel=stable t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "app-2.3.0",
+          "os": "win32",
+          "event": "startup",
+          "fields": { "version": "2.3.0", "release": "2.3.0", "release_format": "2", "sqlite": "3.51.0", "channel": "stable" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "app-2.3.0 win32 startup version=2.3.0 release=2.3.0 release_format=2 sqlite=3.51.0 channel=stable t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a15",
+        "what": "a later version's start file on a system release 1 does not run on: an OS token none of win32, darwin, linux and unknown (T3.7's review F11-2)",
+        "line": "lb freebsd launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "freebsd",
+          "event": "launcher-fallthrough",
+          "fields": { "reason": "no-script", "code": "UPD-LAUNCH-FALLTHROUGH" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb freebsd launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a16",
+        "what": "a line of exactly 1,024 bytes, nothing to trim: a11's line one byte shorter (its one value 982 bytes). Not over 1,024 bytes, so it is read and shown as is, never the placeholder (record 5.3, 5.9; the bound of a11)",
+        "line": "lb win32 noted pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "win32",
+          "event": "noted",
+          "fields": { "pad": "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb win32 noted pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 t=2026-11-25T10:00:00Z"
       }
     ]
   },

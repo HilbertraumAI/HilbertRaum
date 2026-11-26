@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, openSync, fstatSync, readSync, closeSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from './db'
 import { getSettings } from './settings'
@@ -373,13 +373,20 @@ export type UpdateInstallVerdict = UpdateInstallPolicy | 'above-max'
 /** A policy.json larger than this is never read whole, and reads as unreadable (O-4: the drive-release record's cap). */
 const UPDATE_POLICY_MAX_BYTES = 1_048_576
 
+/** Read only; on macOS and Linux also O_NONBLOCK, as the drive-release reader opens, so a named pipe put at the name
+ *  after the stat opens at once (the descriptor check then refuses it) instead of waiting for a writer, and the main
+ *  process with it (T3.7's review, F8-2). No O_NOFOLLOW: a link at the name is followed, as decided. Windows has no
+ *  such flag: O_RDONLY alone is the `'r'` this reader opened with before. */
+const UPDATE_POLICY_OPEN_FLAGS = constants.O_RDONLY | (process.platform === 'win32' ? 0 : (constants.O_NONBLOCK ?? 0))
+
 /** The bytes of policy.json, `'missing'`, or `'damaged'` (a folder, a read error, over the cap). Follows a link, as loadPolicy does. */
 function readUpdatePolicyBytes(policyPath: string): Buffer | 'missing' | 'damaged' {
   let fd: number
   try {
     // A stat before the open: opening a FIFO planted at the name would wait for a writer, and the main process with it.
+    // One swapped in after the stat opens non-blocking on macOS and Linux and fails the descriptor check below.
     if (!statSync(policyPath).isFile()) return 'damaged'
-    fd = openSync(policyPath, 'r')
+    fd = openSync(policyPath, UPDATE_POLICY_OPEN_FLAGS)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'damaged'

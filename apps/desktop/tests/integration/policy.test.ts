@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { EventEmitter } from 'node:events'
-import { writeFileSync, mkdirSync, rmSync, symlinkSync, utimesSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { writeFileSync, mkdirSync, rmSync, symlinkSync, utimesSync, lstatSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -30,6 +31,26 @@ import type { PrivacyPolicy } from '../../src/shared/types'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 import { repoText } from '../helpers/repo-files'
 import { allowReading, denyReading } from '../helpers/binary-fixtures'
+import { hangBudgetMs, testBudgetMs, within } from '../helpers/hang-budget'
+
+// One `statSync` of one path answers what is there, then `swap` changes the name before the reader's next call (the
+// F8-2 row below: a race cannot be timed portably). Every other call goes straight through.
+const statFault = vi.hoisted(() => ({ armed: null as null | { path: string; swap: () => void } }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const statSync = ((...args: Parameters<typeof actual.statSync>) => {
+    const fault = statFault.armed
+    if (fault === null || String(args[0]) !== fault.path) return actual.statSync(...args)
+    statFault.armed = null
+    try {
+      return actual.statSync(...args)
+    } finally {
+      fault.swap()
+    }
+  }) as typeof actual.statSync
+  const mocked = { ...actual, statSync }
+  return { ...mocked, default: mocked }
+})
 
 // ---- helpers --------------------------------------------------------------------
 
@@ -854,6 +875,51 @@ describe('F-8 golden: readUpdatePolicy reads the update policy keys as release 1
     expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true) // the cache still serves the old file
     expect(readUpdatePolicy(cfg).install).toBe('managed')
   })
+})
+
+// T3.7's review, F8-2 (macOS and Linux only: Windows has no named pipe at a file name). The reader stats the name, then
+// opens it; a named pipe put there between the two must not hold the main process at an open that waits for a writer.
+// The stat answers as the regular file there before the swap, and the name really holds the pipe the open meets. A
+// blocking open would stop this worker for good, so a rescue writer opens the pipe once the bound has passed: a read
+// that had to wait for it fails the row instead of hanging the run.
+describe.skipIf(process.platform === 'win32')('F-8: readUpdatePolicy opens policy.json without waiting (macOS and Linux)', () => {
+  /** Opens the pipe at HR_FIFO for writing after HR_AFTER_MS, which frees a reader blocked at its open. */
+  const RESCUE = [
+    "const fs = require('node:fs')",
+    'setTimeout(() => fs.closeSync(fs.openSync(process.env.HR_FIFO, fs.constants.O_WRONLY)), Number(process.env.HR_AFTER_MS))'
+  ].join('\n')
+
+  it('a named pipe swapped in after the stat: the open never waits for a writer, and the file is unreadable', async () => {
+    const cfg = configDir({ drive: '{}', policy: '{"updates":{"allow_user_install":false}}' })
+    const file = join(cfg, 'policy.json')
+    statFault.armed = {
+      path: file,
+      swap: () => {
+        unlinkSync(file)
+        const r = spawnSync('mkfifo', [file], { encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`mkfifo failed: ${r.stderr}`)
+      }
+    }
+    const bound = hangBudgetMs(5_000)
+    const rescue = spawn(process.execPath, ['-e', RESCUE], {
+      env: { ...process.env, HR_FIFO: file, HR_AFTER_MS: String(bound) },
+      stdio: 'ignore'
+    })
+    const exited = new Promise<void>((resolve) => rescue.once('exit', () => resolve()))
+    const started = Date.now()
+    let got: UpdatePolicy
+    try {
+      got = readUpdatePolicy(cfg)
+    } finally {
+      rescue.kill()
+    }
+    const took = Date.now() - started
+    await within(exited, 'the rescue writer exiting')
+    expect(statFault.armed, 'the swap ran').toBeNull()
+    expect(lstatSync(file).isFIFO()).toBe(true)
+    expect(took, 'the open waited for a writer: the pipe held the read until the rescue writer came').toBeLessThan(bound)
+    expect(f8Tokens(got)).toEqual({ install: 'allowed', maxVersion: null, file: 'unreadable' })
+  }, testBudgetMs(30_000))
 })
 
 // The new keys reach no existing reader (P3 entry decision 6): the privacy policy, the status line and the tripwire read

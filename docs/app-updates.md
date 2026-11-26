@@ -153,12 +153,12 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 | F-5 | The `updates/` layout and staging: one commit marker, at most one staged update, the start-up sweep, no import while an update is in progress | §4.2, §4.5, §4.6 | P6 | planned; values approved |
 | F-6 | The hand-off from the app to the apply script after a clean lock: `handoff.txt`, the scripts' copies, the `finish-<n>` cap, the spawn and its acknowledgement, the removal of a finished or dead `updates/applying/` | §5.3, §5.4 | P7 | planned; values approved (the Linux spawn measured by spike 4a; the macOS spawn pending spike 3, §5.4) |
 | F-7 | The rules of release 1's start files: resume an interrupted apply (rule 1), the launch counter and its fallback, restore from `updates/previous/` (rule 2), refuse two apps (rule 3), every path ending in one parsed block, and the lines they print | §5.6 | P7 | planned; values approved (`start-hilbertraum.sh`'s rule 1 measured by spike 4a; the `.command`'s rule 1 provisional until spike 3; the Windows in-flight probe can reopen on P11a's Defender row, §5.6) |
-| F-8 | Policy key names, and what an absent key, a junk value and a missing or damaged `policy.json` mean (the install half) | §8.1 | P3 | as built in P3 (T3.1 and its fix round), golden `f8-policy/`; first Fable review sound with limits, the second (T3.7) pending |
+| F-8 | Policy key names, and what an absent key, a junk value and a missing or damaged `policy.json` mean (the install half) | §8.1 | P3 | as built in P3 (T3.1 and its fix round), golden `f8-policy/`; first Fable review sound with limits, the second (T3.7) sound with limits, its points applied in its fix round |
 | F-9 | The vault-format guard: a descriptor, journal, frame or working copy from a newer version reads as "newer", never as damage, and nothing is written | §7.2 | P2 | as built on master, with P2's fix rounds (T2.9, T2.16, T2.7's security round) as built |
 | F-10 | The `schema_meta` table's shape, the `last_writer` stamp, and the keys the migration framework writes | §7.4 | P2, P10 | the table and the stamp as built in P2 (T2.2); the framework's keys planned (P10) |
-| F-11 | The `update.log` line grammar, content-free | §8.2, §5.3 | P3 | the line frame's values approved (§5.3); the app's writer and its three events as built in P3 (T3.2 and its fix round, T3.10), golden `f11-update-log/`; first Fable reviews sound with limits, the second (T3.7) pending; P6's and P7's events planned |
+| F-11 | The `update.log` line grammar, content-free | §8.2, §5.3 | P3 | the line frame's values approved (§5.3); the app's writer and its three events as built in P3 (T3.2 and its fix round, T3.10), golden `f11-update-log/`; first Fable reviews sound with limits, the second (T3.7) sound with limits, its points applied in its fix round (the writer token's shape, a line over 1,024 bytes in the support copy); P6's and P7's events planned |
 | F-12 | The support-end and age-reminder computation and its inputs | §8.4, §5.10 | P6 | planned; the build-date file approved (§5.10) |
-| F-13 | The `drive-release.json` read contract and the write-once `config/kit-support.txt` | §8.5, §8.4, §5.10 | P3 | the reader's types approved (§5.10); both readers and the builders' writers as built in P3 (T3.3a and its fix round, T3.3b), golden `f13-drive-release/`; the record reader's first Fable review sound with limits; T3.7's review of both halves pending; P8's in-app writer planned |
+| F-13 | The `drive-release.json` read contract and the write-once `config/kit-support.txt` | §8.5, §8.4, §5.10 | P3 | the reader's types approved (§5.10); both readers and the builders' writers as built in P3 (T3.3a and its fix round, T3.3b), golden `f13-drive-release/`; the record reader's first Fable review sound with limits; T3.7's review of both halves sound with limits, its points applied in its fix round; P8's in-app writer planned |
 | F-14 | The update channels callable while the workspace is locked, also after a failed start, and the content-free text that "Copy details for support" copies | §3.5 (the hand-off channel: §5.4; the copied text: §5.9) | P6, P7 | planned; the copied text approved (§5.9) |
 | F-15 | Released migration step ids and their source hashes | §7.8 | P10 | planned |
 | F-16 | The update file container: the ustar subset read in process, the reserved `HRUPDATE` prefix | §4.3 | P1 (table), P6 (reader), P5 (writer) | planned; table A approved |
@@ -699,9 +699,9 @@ its value and waits for the named measurement. Every finding that once marked a 
   - **writers:** cmd writes CR LF (its `echo`); bash and the app write LF;
   - keys and codes are lower-case ASCII compared byte for byte, never case-folded (so a `tr-TR` locale
     cannot change them);
-  - a writer's line is at most 256 bytes; a reader ignores a line over 1,024 bytes and reads at most
-    65,536 bytes of a file (append-only files: the last 65,536 bytes, the first partial line
-    dropped);
+  - a writer's line is at most 256 bytes; a reader ignores a line over 1,024 bytes (`update.log`
+    excepted: §5.3) and reads at most 65,536 bytes of a file (append-only files: the last 65,536
+    bytes, the first partial line dropped);
   - an unknown key, an unknown extra field or an unknown extra line is ignored, never an error; a
     missing, unreadable or damaged file means "absent" unless its row says otherwise; a read error (a
     sharing violation while a scanner holds the file) is "absent" for that read only: nothing is
@@ -818,16 +818,26 @@ at every start (accepted, W-51).
 **`update.log` lines of table B's writers** (R1; F-11, §8.2). One line per event:
 `<writer> <os> <event> [<field>…] <time>`.
 - `<writer>`: `r1-launcher` (release 1's start files), `r1-app` (release 1's app), `lb` (a later
-  version's start files), `apply-<version>` (an apply script).
+  version's start files), `apply-<version>` (an apply script). **A writer token is 1 to 32 bytes of
+  0x21–0x7E without `=` and `"`** (T3.7's review, F11-2): a later app writes its own ("Not written",
+  below), and an apply script whose version is longer than 26 bytes writes another token of this
+  shape. **A reader keeps a line whatever its writer, OS and event tokens are**: a token it does not
+  know is read and copied like a known one (golden `a7`, `a14`, `a15`).
 - `<field>`: `key=value`, value ASCII without spaces (versions, codes, counts, the class names below).
   No path, no host or user name, no free text.
 - `<time>` is the last field: `t=<YYYY-MM-DDTHH:MM:SSZ>` (the app and bash, UTC), or
   `d="<%date% %time%>"` from cmd, whose content between the quotes is opaque bytes in the console's code
   page and is never parsed.
-- **`update.log` is exempt from G0's damaged-line rule**: no reader drops a line. G0's byte rule and
-  field split stop at ` d="`; from there to the end of the line any bytes but CR and LF are allowed and
-  never parsed (`%date%` carries non-ASCII bytes, `%time%` a space or a comma in some locales; L1-19,
-  L2-10). "Copy details for support" replaces every byte outside 0x20–0x7E in a copied line by `?`.
+- **`update.log` is exempt from G0's damaged-line rule and from its 1,024-byte rule**: no reader drops a
+  line. G0's byte rule and field split stop at ` d="`; from there to the end of the line any bytes but
+  CR and LF are allowed and never parsed (`%date%` carries non-ASCII bytes, `%time%` a space or a comma
+  in some locales; L1-19, L2-10). "Copy details for support" replaces every byte outside 0x20–0x7E in a
+  copied line by `?`, and shows a line over 1,024 bytes (counted after G0's trimming) as the fixed
+  placeholder `[line of <n> bytes not shown]`, `<n>` its length in decimal bytes, never its bytes (T3.7's
+  review, F11-3, which settles CF-34; golden `a11`, and `a16`, a line of exactly 1,024 bytes shown as
+  is; P6 builds the copy's reader against them). No
+  conforming writer's line comes near it (every app line is at most 256 bytes); a torn tail of zero
+  bytes with no line end can.
 - Every writer appends an empty line first (G0). A write failure is ignored (`2>nul`; bash
   `2>/dev/null || true`); it never stops a start file or an apply.
 
@@ -856,11 +866,13 @@ app writes the file through one appender, `appendUpdateLogLine`, which takes onl
   `[0-9A-Za-z][0-9A-Za-z._+-]{0,15}` that holds a digit. I: `[0-9]{1,6}`, from JSON only as an integer.
   S: the SQLite version `[0-9]{1,3}(\.[0-9]{1,3}){2,3}`. E: an error code `E[A-Z0-9]{1,30}`,
   `ERR_[A-Z0-9_]{1,36}`, `SQLITE_[0-9]{1,5}` or the literal `UNKNOWN` (libuv's code for a Windows error it
-  does not map, seen on failing USB media), at most 40 bytes. C: a bare system call of at most 16 bytes.
-  N (T3.10): a signed integer `-?[0-9]{1,10}`. A (T3.10): the `last_writer` stamp's applied-through
-  token `[0-9A-Za-z._-]{1,16}`, used only for `applied`. The sentinels `unknown`, `absent`,
-  `unreadable` and `none` hold no digit; every real version, pin, integer and SQLite version holds one,
-  so a sentinel never passes for a value.
+  does not map, seen on failing USB media), at most 40 bytes. C: a bare system call `[a-z_]{1,16}`
+  (`bareSyscall`). N (T3.10): a signed integer `-?[0-9]{1,10}`. A (T3.10): the `last_writer` stamp's
+  applied-through token `[0-9A-Za-z._-]{1,16}`, used only for `applied`. The sentinels `unknown`,
+  `absent`, `unreadable` and `none` hold no digit; every value of V, P, I, S and N holds one, so a
+  sentinel never passes for a value of those rules, which are the only ones whose keys admit a sentinel.
+  A and C admit words that may equal a sentinel (`applied=none`, `syscall=unknown`); that is not
+  ambiguous, because no `applied` or `syscall` key admits a sentinel (T3.7's review, F11-6).
 - **Word-shaped rules and data-fed keys.** P and C admit a word (`Steuer_2026.xlsx` is a pin by shape,
   `peter` a system call), V and E admit one in their own shapes (`1.0.0-peter`, `EMMA`), and A is
   word-shaped outright; they cannot be tightened without changing frozen golden lines. So such a key is
@@ -888,8 +900,10 @@ app writes the file through one appender, `appendUpdateLogLine`, which takes onl
   valid `app_version`, `unreadable` for a read that failed, a damaged file or a version over 24 bytes);
   `release_format` (I: only when the record was read and its `format` is valid and passes I);
   `drive_format` (I: `config/drive.json`'s `drive_format_version`; `absent` when the key is missing or
-  not an integer, `unreadable` for no file, a read error, text that is no JSON object, a file over
-  65,536 bytes or an integer that fails I); `sqlite` (S: `process.versions.sqlite`, else `unknown`); `t`.
+  not an integer, `unreadable` for no file, a link or anything else but a regular file at the name
+  (never followed, unlike `loadPolicy`'s read and the prepared-drive test, which follow a link; T3.7's
+  review, F11-8), a read error, text that is no JSON object, a file over 65,536 bytes or an integer
+  that fails I); `sqlite` (S: `process.versions.sqlite`, else `unknown`); `t`.
   Written once per start, in `initBackend` after logging exists and before the policy and the
   workspace's start.
 - **`start-failed`** (T3.2; W-82), in order: `version` (V, else `unknown`); `cause`
@@ -931,17 +945,15 @@ app writes the file through one appender, `appendUpdateLogLine`, which takes onl
   fits the 65,536-byte window every reader takes from an append-only file (G0). Start files and apply
   scripts only append; readers accept any size.
 - **Not written.** No quit line and no line for C09 (§7.6). Release 1 parses no writer token or event; a
-  later app writes its own writer token, not `r1-app` (an open item for the first release after release
-  1).
+  later app writes its own writer token, not `r1-app`, in the shape `<writer>` gives above (which token
+  is an open item for the first release after release 1).
 - **Residuals** (T3.2's review, N-4 and m-3; also in [`known-limitations.md`](known-limitations.md)): on
   Windows, which has no `O_NOFOLLOW`, a symbolic link planted between the `lstat` and the open is
   followed, so only a content-free line can land at its target; the log's own `O_NONBLOCK` is a belt no
   row can prove (an `O_RDWR` open of a pipe never blocks on Linux); a line another writer appends while
   the app trims can be lost (a trim comes once per 32 KiB of appends: about every 200 starts where
   startup lines are all a drive writes, sooner with unlock lines); a case-variant `Updates/` folder on
-  macOS gets no line; two app instances writing one drive's log are not coordinated. Whether a reader
-  keeps an `update.log` line over 1,024 bytes (as above) or ignores it (G0) is P6's support copy's to
-  settle (CF-34); the app's own lines are at most 256 bytes.
+  macOS gets no line; two app instances writing one drive's log are not coordinated.
 
 ### 5.4 The hand-off (table B.3; F-6, F-14's hand-off channel)
 
@@ -1340,7 +1352,7 @@ through the log redaction, and a row asserts it comes back unchanged (W-16).
 | `Update in progress` | `no`, or `yes version=<v> launches=<0-3> hand-offs=<0-3> started=<yes or no>` (from `handoff.txt`, `launch-<n>`, `finish-<n>`, `started`) |
 | `Unconfirmed` | `unconfirmed.txt`'s version, `damaged` or `none` |
 | `Last update results` | `none`, or the last 3 valid `last-result.txt` lines, each on its own line indented by two spaces |
-| `Update log (last 40 lines)` | `none`, or the last 40 non-empty lines of `update.log`, each indented by two spaces, every byte outside 0x20–0x7E replaced by `?` (§5.3) |
+| `Update log (last 40 lines)` | `none`, or the last 40 non-empty lines of `update.log`, each indented by two spaces, every byte outside 0x20–0x7E replaced by `?`; a line over 1,024 bytes (after G0's trimming) is kept, as the fixed placeholder `[line of <n> bytes not shown]` with its length and never its bytes, and counts as one of the 40 (§5.3; T3.7's review, F11-3) |
 | `Free space` | decimal bytes, then ` bytes` |
 | `Drive writable` | `yes` or `no` (§5.4's probe) |
 
@@ -3374,13 +3386,14 @@ are not repeated: the engine install's (§6.7), G-43 (c) and the salvage behind 
 ## 8. Policy keys, `update.log`, the drive-release record
 
 _Status: as built in P3 on the phase branch (PR-3 pending; the second Fable review of F-8, F-11 and
-F-13, T3.7, pending): the policy keys and their reader (§8.1), the app's `update.log` writer and its
-startup, failed-start and unlock lines (§8.2), the drive version in the Copy report (§8.3),
-`config/kit-support.txt` (§8.4), the `drive-release.json` reader and the builders' helper (§8.5), the
-pins (§8.7). Planned: the support-end and age notices and the update rows of the support details (P6),
-the readers' callers at the import and the hand-off (P6, P7), their `update.log` events (P6, P7), the
-audit events (§8.6), the in-app writer of `drive-release.json` (P8). The names, grammars and read
-contracts below freeze in release 1. Absent keys and an absent record mean today's behavior._
+F-13, T3.7: sound with limits, its points applied in its fix round): the policy keys and their reader
+(§8.1), the app's `update.log` writer and its startup, failed-start and unlock lines (§8.2), the
+drive version in the Copy report (§8.3), `config/kit-support.txt` (§8.4), the `drive-release.json`
+reader and the builders' helper (§8.5), the pins (§8.7). Planned: the support-end and age notices and
+the update rows of the support details (P6), the readers' callers at the import and the hand-off (P6,
+P7), their `update.log` events (P6, P7), the audit events (§8.6), the in-app writer of
+`drive-release.json` (P8). The names, grammars and read contracts below freeze in release 1. Absent
+keys and an absent record mean today's behavior._
 
 ### 8.1 Policy keys (F-8, G-14 (c) built the simple way, U1 (b))
 
@@ -3416,13 +3429,19 @@ The `updates.max_version` table:
 - **A missing or damaged `policy.json`** keeps the signed import **allowed** and reports
   `file: unreadable`, so an administrator's typo that lifted a block is visible: missing on a prepared
   drive (`config/drive.json` there), or damaged on any root (empty, malformed, a top level that is not an
-  object, a folder, a read error, over 1,048,576 bytes, not UTF-8, UTF-16 included); a root with neither
-  file reports `none` and shows nothing. One leading UTF-8 byte-order mark is skipped (`loadPolicy`
-  still reads such a file as malformed); invalid UTF-8 inside a string becomes U+FFFD; with a duplicate
-  key the last one wins; a link at the name is followed, as `loadPolicy` follows it, so a dangling link
-  reads as a missing file and a folder as `unreadable`. "Policy file unreadable" in Settings → Updates
-  and in Diagnostics (P6) comes from this `file: unreadable`, never from
-  `PolicyStatus.policyFilePresent`, which is `true` for a malformed file (CF-29).
+  object, a folder, a named pipe or anything else but a regular file, a read error, over 1,048,576
+  bytes, bytes that are not UTF-8 outside a JSON string, UTF-16 included); a root with neither file
+  reports `none` and shows nothing. One leading UTF-8 byte-order mark is skipped (`loadPolicy` still
+  reads such a file as malformed); invalid UTF-8 inside a string becomes U+FFFD and the file is read
+  (T3.7's review, F8-1); with a duplicate key the last one wins; a link at the name is followed, as
+  `loadPolicy` follows it, so a dangling link reads as a missing file and a folder as `unreadable`.
+  The read: one `stat` (anything but a regular file is `unreadable`, never opened), then an open that
+  adds `O_NONBLOCK` on macOS and Linux, so a named pipe put at the name after the `stat` opens at once
+  instead of holding the main process until something writes to it, then a check on the descriptor that
+  a regular file was opened (T3.7's review, F8-2; as the drive-release reader opens, §8.5, but without
+  `O_NOFOLLOW`, since the link is followed). "Policy file unreadable" in Settings → Updates and in
+  Diagnostics (P6) comes from this `file: unreadable`, never from `PolicyStatus.policyFilePresent`,
+  which is `true` for a malformed file (CF-29).
 - **A junk value blocks while a damaged file allows**, on purpose: a junk value is an administrator's
   edit, shown as invalid, while a damaged file must not block the signed repair. This is a deliberate
   exception to "a damaged policy never fails open" (G-14: a blocked import is a management control, not
@@ -3613,11 +3632,13 @@ As built in P3 (T3.3a and its fix round, T3.3b): the reader `readDriveRelease` i
   `not-an-object`); or `record`, holding `appVersion`, `format` and `highestVersionSeen`, each
   `absent`, `invalid` or `valid` with its value;
 - only `app_version` reaches a decision (the version rule, §2.5, through `driveAppVersion`): its valid
-  value, otherwise null, no constraint. `format` and `highest_version_seen` are returned for the log
-  only and never acted on: a record with `format` 2 or 99 has its `app_version` read as usual, so a
-  later `format` bump never stops release 1, and a breaking layout takes a new file name;
-  `highest_version_seen` is a reserved name. The startup line is where "logged" happens (`release`,
-  `release_format`, §5.3);
+  value, otherwise null, no constraint. `format` and `highest_version_seen` are returned and never
+  acted on: a record with `format` 2 or 99 has its `app_version` read as usual, so a later `format`
+  bump never stops release 1, and a breaking layout takes a new file name; `highest_version_seen` is a
+  reserved name. What the startup line logs (`release`, `release_format`, §5.3): a valid `app_version`
+  and a valid `format`; an invalid field counts as absent, so the line shows `release=absent` and no
+  `release_format`, and the log does not tell an invalid field from a missing one;
+  `highest_version_seen` is returned and never logged (T3.7's review, F11-1 = F13-1);
 - anything but a regular file at the name (a folder, a named pipe, a symbolic link or junction, to a
   record or to nothing) is `damaged not-a-file`, never opened or followed; 0 bytes is `damaged empty`;
   over 1,048,576 bytes is `damaged too-large` and never opened; exactly 1,048,576 bytes is read;
@@ -3629,9 +3650,12 @@ As built in P3 (T3.3a and its fix round, T3.3b): the reader `readDriveRelease` i
   JSON escapes in keys decoded;
 - `app_version` and `highest_version_seen` are valid only as SemVer 2.0.0 (T3.1's parse), ASCII, at most
   64 bytes, compared byte for byte and never trimmed; anything else, `null` included, is `invalid`: it
-  counts as absent and is logged as invalid;
+  counts as absent. The startup line shows an invalid `app_version` as `release=absent`, the token of a
+  missing field or file, so the log does not tell an invalid field from a missing one;
+  `highest_version_seen` is returned and never logged;
 - `format` is valid as a safe integer of at least 1 (`1.0` reads as 1); anything else (0, −1, 1.5,
-  `1e400`, 2^53 + 1, `"1"`, `null`) is invalid;
+  `1e400`, 2^53 + 1, `"1"`, `null`) is invalid, and the startup line then has no `release_format`, as
+  for a missing one;
 - no cache: a rewrite of the same size and time is seen at the next read; the reader never throws and
   logs nothing;
 - the open (the fix round): one `lstat` first, then an open that adds `O_NOFOLLOW` and `O_NONBLOCK` on
@@ -3643,8 +3667,12 @@ As built in P3 (T3.3a and its fix round, T3.3b): the reader `readDriveRelease` i
 - **a `config/` that is itself a link is followed** (a recorded residual, the #1047 class shared with
   `policy.json` and `drive.json`: whoever can place the link can write the file; pinned by a read
   vector);
-- release 1 never writes the file. (Release 1 also carries P8's in-app writer, §6.9, §6.10, under
-  G-40 (b), so P8's T8.2 sheet settles this sentence and T3.7's review checks it: CF-32.)
+- **On a Kit, release 1's app never writes the file: its writer (P8) runs only as the new version of an
+  update, which release 1 never is on a sold drive. No later writer may rely on it; release 1's writer
+  keeps every duty of §8.5** (T3.7's review, F13-2, frozen in the reviewer's wording; G-40 (b) puts
+  P8's in-app writer, §6.9, §6.10, into release 1). P8's T8.2 pins the two triggers with a row: a
+  release-1 start with no `unconfirmed.txt` naming its own version writes nothing under `config/`
+  (CF-32).
 
 **What every writer keeps:**
 - the bytes: UTF-8 without a byte-order mark, LF, a two-space indent; the writer's own fields first
@@ -3654,9 +3682,14 @@ As built in P3 (T3.3a and its fix round, T3.3b): the reader `readDriveRelease` i
 - **unknown fields are kept, as far as a double holds them** (T3.3a's review, M1): release 1's helper
   rewrites a record through `JSON.parse` and `JSON.stringify`, so a later writer's own fields must
   survive a round trip through an IEEE double parser: integers beyond ±(2^53 − 1) and wide values go in
-  strings; no duplicate keys; no meaning in key order, number spelling or whitespace. A golden `writes`
-  vector pins what the helper does to such a record (2^53 + 1 becomes `9007199254740992`, `1e400`
-  `null`, `-0` `0`, `1.0` `1`; a duplicate keeps its first place with the last value);
+  strings; no duplicate keys; no meaning in key order, number spelling, string escapes or whitespace;
+  no nesting beyond 64 levels (T3.7's review, F13-4: how deep `JSON.parse` goes is the engine's, so
+  golden `R10`'s 400,000 levels admit two answers). A golden `writes` vector pins what the helper does
+  to such a record (2^53 + 1 becomes `9007199254740992`, `1e400` `null`, `-0` `0`, `1.0` `1`; a
+  duplicate keeps its first place with the last value). The helper decodes leniently and writes UTF-8,
+  so a kept string that is not valid UTF-8 is not kept byte for byte (such bytes come back as U+FFFD),
+  and a string comes back in `JSON.stringify`'s spelling, not with the escapes it was written with
+  (T3.7's review, F13-3);
 - **the owned fields**: an older builder's helper may rewrite `format`, `app_version`, `systems` and
   `files` at any time, in release 1's shape and with `format` back to 1, so a later shape takes new
   field names and no later reader infers its own fields from `format`; `format` stays informational;
@@ -3755,11 +3788,11 @@ T3.4):
   `renderer/preview/`, which never ships, is left out;
 - `portable.unpackDirName: true` joins these pins once #1043's fix reaches the integration branch (an
   open item for the phase running then);
-- for every electron-builder, NSIS or Electron major bump, P11c re-runs two checks that
-  [`packaging.md`](packaging.md)'s pre-ship checklist holds as items 14 and 15: the name inside each
-  built `app.asar`, and the portable stub's hold on the drive-root exe, measured by
-  `scripts/release/run-hold.ps1` (moved from the spike's working papers with its `lib.ps1` and
-  `T11Native.cs`, every path a parameter).
+- two checks that [`packaging.md`](packaging.md)'s pre-ship checklist holds as items 14 and 15 (T3.4's
+  review, R-14): item 14, the name inside each built `app.asar`, runs on every release (W-15); item 15,
+  the portable stub's hold on the drive-root exe, measured by `scripts/release/run-hold.ps1` (moved
+  from the spike's working papers with its `lib.ps1` and `T11Native.cs`, every path a parameter), is
+  re-run by P11c on every electron-builder, NSIS or Electron major bump.
 
 ---
 

@@ -32,3 +32,10 @@ whitespace then a mark, unreadable (O-2; U+FEFF is not JSON whitespace, RFC 8259
 built: a dangling link at `policy.json` reads as absent (`none` on a root without `drive.json`, `unreadable` on a
 prepared drive; O-1, O-5), and a folder at the name is `unreadable` either way. The review's (g) (no config folder)
 and (j) (deep nesting) stay unpinned, as it allows. Every earlier vector is unchanged, byte for byte.
+
+Not golden, on purpose (T3.7's review, F8-3, and its disposition, 2026-11-26):
+`tests/fixtures/prepare-drive-policy-bytes.json`, the `policy.json` bytes the prepare-drive twins write for a DIY and a
+developer drive (no `updates` key), sits outside this folder and outside `../../golden-fixtures.sha256`. It pins those
+bytes against an accidental change (the prepare-drive rows of `script-orchestration.test.ts` compare each written file
+with it, byte for byte); a deliberate change of the DIY or developer posture updates it in the same change. What
+release 1 reads for ever is this folder's; the Kit's own block is locked here (`vectors.json`, `writers.kit`).

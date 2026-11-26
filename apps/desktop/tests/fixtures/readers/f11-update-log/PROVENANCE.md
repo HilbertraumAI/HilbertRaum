@@ -19,8 +19,8 @@ Two files:
   - `accept`: lines any reader must accept from any writer (the app, cmd and bash start files, a later version's
     `lb`, an apply script), each with the record's reading (`parse`) and what "Copy details for support" shows of it
     (`copied`). Lines with bytes the repo hygiene nets refuse in a text file under `tests/` (a CR, a NUL) or that are
-    not ASCII (cmd's code-page bytes) are held as base64 (`bytes_b64`). `a11`, a line over 1,024 bytes, is left out
-    until P6 decides what the support copy does with it (CF-34);
+    not ASCII (cmd's code-page bytes) are held as base64 (`bytes_b64`). `a11`, a line over 1,024 bytes, was left
+    out until its rule was settled; it joined in T3.7's fix round (below);
   - `emit`: the exact lines the HEAD writer emits for fixed input (the time and the platform are inputs): the startup
     line's token rules and sentinels, the worst case of each event, the failed-start line for real start errors (a
     non-ASCII drive root among them, which must never appear) and the generic appender that later events use.
@@ -41,3 +41,25 @@ new `tokens.registered` (the app's lines are content-free by each event's typed 
 field by its key's rule), `emit.how` and `generic.sources` (`generic` is the frame alone), `start_failed.sources` (where
 `err=UNKNOWN` comes from) and `s45`'s `why` (248 bytes, not the worst case). The byte lengths were counted with a scratch
 script over the hand-written lines, which also checked that every earlier vector is unchanged byte for byte.
+
+T3.10 (2026-11-26, written on `c024fc8e` and committed in `ed6a380f`), the new file `vectors-unlock.json`: the
+`unlock` line (`contract`, the token rules N and A in `tokens`, the field order and each result's fields in `fields`,
+the 61 `emit` vectors). Hand-written from part (a) of T3.10's blast-radius sheet (the line's fields per result, its
+rules B2 and D4) and T3.2's rules in `vectors.json` (`frame`, `tokens`, `registered`), before the writer's `unlock`
+code existed (tests first: the rows were red before it). The byte lengths (the longest line `u61`, 210 bytes) were
+counted with a scratch script over the hand-written lines. No expected value was taken from the writer's output, and
+`vectors.json` was not touched.
+
+T3.7 fix round (2026-11-26, after the second independent review of F-11 at `eae4ca82`, findings F11-2 and F11-3, and
+their disposition), by hand, additions only to the `accept` vectors: `a11` (a line of 1,025 bytes, a later start
+file's line whose one value runs to 983 bytes: G0's 1,024-byte rule drops no `update.log` line, and the support copy
+shows `[line of 1025 bytes not shown]`, the fixed placeholder with the line's length, never its bytes; this settles
+CF-34, and P6 builds the copy's reader against it), `a14` (a later app's startup line under a writer token release 1
+does not list, `app-2.3.0`, with a key it does not know), `a15` (an OS token no release-1 writer uses, `freebsd`) and,
+on the orchestrator's answer to the round's Q2, `a16` (`a11`'s line one byte shorter, exactly 1,024 bytes with nothing
+to trim: read and shown as is, so the bound is pinned from both sides).
+Sources: the review's text, the disposition's wording and the record's 5.3 and 5.9 as edited in the same round. Texts
+corrected, no line changed: `accept.reading` (the `long` reading, the placeholder, any writer, OS and event token) and
+`accept.left_out` (none left out). The byte lengths were counted with a scratch script over the hand-written lines,
+which also checked that every earlier vector is unchanged; no expected value was taken from a reader's output (the
+reader in `update-log.test.ts` gained the placeholder rule after `a11` was written, and was red on it before).
