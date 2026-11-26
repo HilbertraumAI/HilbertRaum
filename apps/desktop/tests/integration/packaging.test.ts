@@ -718,7 +718,10 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
 // `continue-on-error:` and no `shell:` on the step (a shell template decides the step's exit code), none on its job, no
 // default shell for the job or the workflow, and a release job gated on the tag alone (review R-3). The steps never set
 // HILBERTRAUM_PACKED_REQUIRED, which demands the executable too (the #769 rows above). The mac leg resolves its
-// `release/mac-<arch>/` folder in the step, with a Bash 3.2 script that refuses anything but one match.
+// `release/mac-<arch>/` folder in the step, with a Bash 3.2 script that refuses anything but one match. The command
+// runs vitest with `npx --no-install` (T4.5 L-2): with no local vitest, plain npx would install the newest one from the
+// registry and run it, unpinned; `--no-install` makes that a failed step. It still asks the registry for vitest's
+// metadata first, and it would run a vitest already in npm's own npx cache (T4.5 security-fix, npx-probe).
 describe("release.yml's three build legs check the packed app's embedded update keys (app-update W-3)", () => {
   interface Step {
     name?: string
@@ -739,7 +742,7 @@ describe("release.yml's three build legs check the packed app's embedded update 
     'continue-on-error'?: unknown
   }
   const TEST_FILE = 'tests/unit/updates-bundle-check.test.ts'
-  const COMMAND = `npx vitest run ${TEST_FILE}`
+  const COMMAND = `npx --no-install vitest run ${TEST_FILE}`
   const cfg = builderConfig()
   const output = (cfg.directories as { output: string }).output
   const workflow = parseYaml(repoText('.github', 'workflows', 'release.yml')) as { jobs: Record<string, Job>; defaults?: unknown }
