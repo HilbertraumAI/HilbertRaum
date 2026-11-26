@@ -179,15 +179,18 @@ function verifies(message: Buffer, key: KeyObject, signature: Buffer): boolean {
 
 /**
  * Verify member 0's bytes against the embedded keys (§2.3's table, in its order). `runningVersion` is only a parameter
- * of the answers that carry it (§2.10). An empty key set refuses before a byte is read. Every `signatures` entry that
+ * of the answers that carry it (§2.10). An empty key set refuses before a byte is read, and so does a `keys` that is no
+ * array (an untyped caller's mistake, such as parseKeySet's whole read: it holds no key). Every `signatures` entry that
  * counts (an object whose own `sig` is base64 of exactly 64 bytes) is tried, in envelope order, against every key; the
  * first that one key verifies accepts, and only then is the `payloadType` read for its meaning. When none verifies, an
  * entry whose own string `keyid` equals an embedded key's id makes it UPD-NOT-GENUINE, else UPD-UNKNOWN-SIGNER (no
- * signature at all included). Never throws.
+ * signature at all included). Never throws for any bytes, with parseKeySet's keys or with a `keys` that is no array
+ * (`undefined` included); an array of other values is no key set and outside this contract.
  */
 export function verifyEnvelope(bytes: Uint8Array, keys: readonly UpdateKey[], runningVersion: string): EnvelopeResult {
   const refuse = (refusal: EnvelopeRefusal): EnvelopeResult => ({ verified: false, refusal })
-  if (keys.length === 0) return refuse({ code: 'UPD-NOT-AVAILABLE', params: {} })
+  // `as unknown`: Array.isArray would narrow `keys` to any[] for the rest of the function.
+  if (!Array.isArray(keys as unknown) || keys.length === 0) return refuse({ code: 'UPD-NOT-AVAILABLE', params: {} })
   if (bytes.length > ENVELOPE_MAX_BYTES) return refuse({ code: 'UPD-TOO-NEW', params: { runningVersion } })
   const envelope = readJsonObject(bytes)
   if (envelope === null) return refuse({ code: 'UPD-FILE-DAMAGED', params: {} })

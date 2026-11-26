@@ -273,6 +273,21 @@ describe('verifyEnvelope: the key set and the size cap come first (record §2.3)
     expect(run(bytes, [])).toEqual(NOT_AVAILABLE)
   })
 
+  // The release tools are untyped .mjs callers (T4.1's review, m-2): one may hand over parseKeySet's whole read instead
+  // of its `keys`, or nothing. That is no key array, so it holds no key: UPD-NOT-AVAILABLE before a byte is read, for
+  // a signed envelope as for bytes that are no envelope, and never a throw.
+  it.each<[string, unknown]>([
+    ['an object', {}],
+    ['undefined', undefined],
+    ['parseKeySet\u{2019}s whole read of a valid set', parseKeySet(MARKER + A.spki)],
+    ['parseKeySet\u{2019}s whole read of an invalid set', parseKeySet('hilbertraum-key-set-2:')]
+  ])('a keys argument that is no array (%s) answers UPD-NOT-AVAILABLE, never a throw', (_label, keys) => {
+    for (const bytes of [VALID, Buffer.from([0xff, 0xfe])]) {
+      // verifyEnvelope itself, not `run`: its default argument would replace `undefined` with the test's keys.
+      expect(outcome(verifyEnvelope(bytes, keys as unknown as readonly UpdateKey[], RUNNING))).toEqual(NOT_AVAILABLE)
+    }
+  })
+
   it('an envelope of exactly 4,194,304 bytes is read', () => {
     expect(atCap.length).toBe(CAP)
     expect(run(atCap)).toEqual(VERIFIED())
@@ -340,6 +355,40 @@ describe('verifyEnvelope: text, JSON and fields (record §2.3)', () => {
   it('unknown keys are ignored, an own __proto__ key among them', () => {
     const text = `{"__proto__":{"payloadType":"x","signatures":[]},"note":[1,{"b":2}],${JSON.stringify(envelope()).slice(1)}`
     expect(run(Buffer.from(text))).toEqual(VERIFIED())
+  })
+
+  // Keys are compared after JSON's escapes are decoded, and with a duplicate key the last one counts (§2.3, "JSON"):
+  // `JSON.parse` does both. A reading of the text itself (a pre-scan, a streaming parser) would answer otherwise.
+  /** `name` with its last character written as JSON's six-character escape: a backslash, `u`, four hex digits. */
+  const escapeLast = (name: string): string =>
+    `${name.slice(0, -1)}${String.fromCharCode(0x5c)}u${name.charCodeAt(name.length - 1).toString(16).padStart(4, '0')}`
+  /** A signed envelope's text with each of `names` written with an escape wherever it is a key. */
+  const withEscapedNames = (names: string[]): string =>
+    names.reduce((text, name) => text.split(`"${name}":`).join(`"${escapeLast(name)}":`), JSON.stringify(envelope()))
+
+  it.each<[string, string[]]>([
+    ['payloadType', ['payloadType']],
+    ['payload', ['payload']],
+    ['signatures', ['signatures']],
+    ['an entry\u{2019}s sig', ['sig']],
+    ['all four at once', ['payloadType', 'payload', 'signatures', 'sig']]
+  ])('a key name written with a JSON escape is that key: %s, and the envelope verifies', (_label, names) => {
+    const text = withEscapedNames(names)
+    for (const name of names) expect(text.includes(`"${name}":`), name).toBe(false) // the name is there only escaped
+    expect(run(Buffer.from(text))).toEqual(VERIFIED())
+  })
+
+  const OTHER = Buffer.from('{"format":1,"product":"hilbertraum","kind":"other"}')
+
+  it('a duplicate payload key, the last one the signed bytes: verified, and the bytes handed on are the last one\u{2019}s', () => {
+    const text = `{"payload":${JSON.stringify(OTHER.toString('base64'))},${JSON.stringify(envelope()).slice(1)}`
+    expect(run(Buffer.from(text))).toEqual(VERIFIED())
+  })
+
+  it('a duplicate payload key, the last one other bytes than the signed ones: UPD-UNKNOWN-SIGNER (no entry names a key)', () => {
+    const signed = JSON.stringify(envelope({ signatures: [entry(A, { keyid: undefined })] }))
+    const text = `${signed.slice(0, -1)},"payload":${JSON.stringify(OTHER.toString('base64'))}}`
+    expect(run(Buffer.from(text))).toEqual(UNKNOWN_SIGNER)
   })
 
   it('the parsed value is never walked whole: 10,000 levels of nesting in an ignored key', () => {
