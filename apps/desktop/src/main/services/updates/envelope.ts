@@ -31,7 +31,7 @@ export const KEY_SET_MAX_KEYS = 16
 export const RELEASE_PAYLOAD_TYPE = 'application/vnd.hilbertraum.release+json'
 
 /** Every later HilbertRaum `payloadType` starts so (§2.3, "Writers: the caps and the signer"). */
-const HILBERTRAUM_TYPE_PREFIX = 'application/vnd.hilbertraum.'
+const VENDOR_TYPE_PREFIX = 'application/vnd.hilbertraum.'
 
 /** The key-set marker's name: the set is this name, a colon, then the keys. */
 const KEY_SET_MARKER_NAME = 'hilbertraum-key-set-1'
@@ -216,7 +216,7 @@ export function verifyEnvelope(bytes: Uint8Array, keys: readonly UpdateKey[], ru
     if (!keys.some((k) => verifies(message, k.key, signature))) continue
     if (payloadType === RELEASE_PAYLOAD_TYPE) return { verified: true, payload }
     return refuse(
-      payloadType.startsWith(HILBERTRAUM_TYPE_PREFIX)
+      payloadType.startsWith(VENDOR_TYPE_PREFIX)
         ? { code: 'UPD-FOR-NEWER-HILBERTRAUM', params: { runningVersion } }
         : { code: 'UPD-NOT-AN-UPDATE', params: {} }
     )

@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { createHash, createPublicKey, generateKeyPairSync, sign, verify, type KeyObject } from 'node:crypto'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -10,6 +10,7 @@ import {
   readJsonObject,
   verifyEnvelope,
   type EnvelopeResult,
+  type KeySetRead,
   type UpdateKey
 } from '../../src/main/services/updates/envelope'
 import { embeddedKeySet } from '../../src/main/services/updates/keys'
@@ -26,8 +27,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // process's memory only. The one fixed key (FIXED) is 32 chosen bytes behind the SPKI prefix, a public key only; its
 // base64 and its id were computed with .NET (PowerShell 5.1's Convert.ToBase64String and SHA256, then Get-FileHash), not
 // with node, so the id form has a second tool behind it. Expected PAE bytes are written out by hand from §2.3's
-// definition, with the counts counted by hand. The golden vectors of F-1 (tests/fixtures/updates/vectors/, T4.4 and
-// T4.4b) are their own rows, added once they are committed.
+// definition, with the counts counted by hand. The golden vectors of F-1 and F-3 (tests/fixtures/updates/vectors/,
+// record §10.7) run in their own blocks near the end: spec/'s three files, and the envelope stage of every vector with
+// an envelope (its payload stage is updates-payload.test.ts's).
 
 /** The key-set marker with its colon: fine in a test, never in a main source (record §2.7, "The embedded form"). */
 const MARKER = 'hilbertraum-key-set-1:'
@@ -275,14 +277,15 @@ describe('verifyEnvelope: the key set and the size cap come first (record §2.3)
 
   // The release tools are untyped .mjs callers (T4.1's review, m-2): one may hand over parseKeySet's whole read instead
   // of its `keys`, or nothing. That is no key array, so it holds no key: UPD-NOT-AVAILABLE before a byte is read, for
-  // a signed envelope as for bytes that are no envelope, and never a throw.
+  // a signed envelope, for bytes that are no envelope and for bytes over the cap (the key set comes before the size,
+  // T4.1's re-check N-2), and never a throw.
   it.each<[string, unknown]>([
     ['an object', {}],
     ['undefined', undefined],
     ['parseKeySet\u{2019}s whole read of a valid set', parseKeySet(MARKER + A.spki)],
     ['parseKeySet\u{2019}s whole read of an invalid set', parseKeySet('hilbertraum-key-set-2:')]
   ])('a keys argument that is no array (%s) answers UPD-NOT-AVAILABLE, never a throw', (_label, keys) => {
-    for (const bytes of [VALID, Buffer.from([0xff, 0xfe])]) {
+    for (const bytes of [VALID, Buffer.from([0xff, 0xfe]), Buffer.alloc(CAP + 1, 0x20)]) {
       // verifyEnvelope itself, not `run`: its default argument would replace `undefined` with the test's keys.
       expect(outcome(verifyEnvelope(bytes, keys as unknown as readonly UpdateKey[], RUNNING))).toEqual(NOT_AVAILABLE)
     }
@@ -388,6 +391,25 @@ describe('verifyEnvelope: text, JSON and fields (record §2.3)', () => {
   it('a duplicate payload key, the last one other bytes than the signed ones: UPD-UNKNOWN-SIGNER (no entry names a key)', () => {
     const signed = JSON.stringify(envelope({ signatures: [entry(A, { keyid: undefined })] }))
     const text = `${signed.slice(0, -1)},"payload":${JSON.stringify(OTHER.toString('base64'))}}`
+    expect(run(Buffer.from(text))).toEqual(UNKNOWN_SIGNER)
+  })
+
+  // One key spelled both ways in one envelope (T4.1's re-check, N-1): the last one counts whichever spelling it has, so
+  // a reading of the text that knows only the literal name, and takes its last one, answers both rows otherwise.
+  const escapedPayloadKey = `"${escapeLast('payload')}":`
+  const literalPayloadKeys = (text: string): number => text.split('"payload":').length - 1
+
+  it('a literal payload key first (other bytes), an escaped one last (the signed bytes): verified with the last one\u{2019}s bytes', () => {
+    const signed = JSON.stringify(envelope()).split('"payload":').join(escapedPayloadKey)
+    const text = `{"payload":${JSON.stringify(OTHER.toString('base64'))},${signed.slice(1)}`
+    expect(literalPayloadKeys(text)).toBe(1) // the first one only; the signed one is there only escaped
+    expect(run(Buffer.from(text))).toEqual(VERIFIED())
+  })
+
+  it('a literal payload key first (the signed bytes), an escaped one last (other bytes): UPD-UNKNOWN-SIGNER (no entry names a key)', () => {
+    const signed = JSON.stringify(envelope({ signatures: [entry(A, { keyid: undefined })] }))
+    const text = `${signed.slice(0, -1)},${escapedPayloadKey}${JSON.stringify(OTHER.toString('base64'))}}`
+    expect(literalPayloadKeys(text)).toBe(1) // the signed one only; the other one is there only escaped
     expect(run(Buffer.from(text))).toEqual(UNKNOWN_SIGNER)
   })
 
@@ -609,6 +631,183 @@ describe('verifyEnvelope: the payloadType is decided after a signature verified 
     ['sig', () => ({ ...envelope(), signatures: [{ keyid: A.id, sig: (() => { const s = signature(A); s[0] ^= 1; return s.toString('base64') })() }] })]
   ])('a tampered %s: the signature fails, UPD-NOT-GENUINE', (_label, env) => {
     expect(run(bytesOf(env()))).toEqual(NOT_GENUINE)
+  })
+})
+
+// ---- The committed contract vectors (record §10.7): written from the DSSE specification, RFC 8032 and the record by
+// another task, never from this code (C14), and locked by the golden manifest. A vector that disagrees with the code is
+// never edited here: the disagreement goes to the orchestrator.
+
+const VECTORS = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates', 'vectors')
+
+/** One vector file: a bare JSON array, one vector per element (§10.7 "File shape and routing"); never empty. */
+function vectorFile<T>(set: string, name: string): T[] {
+  const all: unknown = JSON.parse(readFileSync(join(VECTORS, set, name), 'utf8'))
+  if (!Array.isArray(all) || all.length === 0) throw new Error(`${set}/${name} is no bare array of vectors`)
+  return all as T[]
+}
+
+interface PaeVector {
+  id: string
+  payloadType: string
+  /** Base64. */
+  body: string
+  /** Base64. */
+  pae: string
+}
+
+interface Ed25519Vector {
+  id: string
+  spki: string
+  keyId: string
+  /** Hex. */
+  message: string
+  /** Hex, 64 bytes. */
+  signature: string
+}
+
+type KeySetVector = { id: string; expect: { valid: true; ids: string[] } | { valid: false } } & ({ keySet: string } | { keysJson: string })
+
+describe('the spec vectors: DSSE\u{2019}s PAE (spec/pae.json; record §2.3 "Verification")', () => {
+  it.each(vectorFile<PaeVector>('spec', 'pae.json').map((v) => [v.id, v] as const))('%s', (_id, v) => {
+    expect(pae(v.payloadType, Buffer.from(v.body, 'base64')).toString('base64')).toBe(v.pae)
+  })
+})
+
+describe('the spec vectors: RFC 8032 §7.1\u{2019}s Ed25519 (spec/ed25519.json; record §2.3 "Verification", §2.7)', () => {
+  it.each(vectorFile<Ed25519Vector>('spec', 'ed25519.json').map((v) => [v.id, v] as const))(
+    '%s: its SPKI reads with its id, its signature verifies over its message, and over a message one byte different it does not',
+    (_id, v) => {
+      const read = parseKeySet(MARKER + v.spki)
+      const keys = read.valid ? read.keys : []
+      expect(keys.map((k) => k.id)).toEqual([v.keyId])
+      const message = Buffer.from(v.message, 'hex')
+      const signed = Buffer.from(v.signature, 'hex')
+      expect(verify(null, message, keys[0].key, signed)).toBe(true)
+      // The last byte's low bit flipped; TEST 1's message is empty, so it gains one byte.
+      const other = message.length === 0 ? Buffer.from([0]) : Buffer.concat([message.subarray(0, -1), Buffer.from([message[message.length - 1] ^ 1])])
+      expect(verify(null, other, keys[0].key, signed)).toBe(false)
+    }
+  )
+})
+
+describe('the spec vectors: the key set (spec/key-set.json; record §2.7)', () => {
+  // A `keysJson` text stands for its UTF-8 bytes (a byte-order mark is written as its JSON escape, so the bytes start
+  // EF BB BF), read as the file readers read keys.json (§2.7 "The file readers"; the committed file's row above).
+  const answer = (v: KeySetVector): unknown => {
+    let read: KeySetRead | null
+    if ('keySet' in v) read = parseKeySet(v.keySet)
+    else {
+      const json = readJsonObject(Buffer.from(v.keysJson, 'utf8'))
+      read = json === null ? null : parseKeySet(Object.hasOwn(json, 'key_set') ? json.key_set : undefined)
+    }
+    return read?.valid ? { valid: true, ids: read.keys.map((k) => k.id) } : { valid: false }
+  }
+
+  it.each(vectorFile<KeySetVector>('spec', 'key-set.json').map((v) => [v.id, v] as const))('%s', (_id, v) => {
+    expect(answer(v)).toEqual(v.expect)
+  })
+})
+
+/**
+ * The sets whose vectors this file runs through the envelope check (§10.7 "File shape and routing"); T4.4 adds
+ * 'positive'. A set's files are its `vectors*.json`, found by name; spec/ holds its three own files instead (§10.7
+ * "Folder"), whose vectors have no envelope.
+ */
+const ENVELOPE_SETS = ['spec', 'negative']
+const SPEC_FILES = ['pae.json', 'ed25519.json', 'key-set.json']
+
+interface PipelineVector {
+  id: string
+  /** The key set: Ed25519 SPKI DER in standard base64 (§2.7). */
+  keys?: string[]
+  envelope?: string | { parts: Array<{ base64: string } | { text: string } | { repeat: string; times: number }> }
+  version?: string
+  host: { runningVersion: string }
+  expect: { stage: string; code: string; params: Record<string, unknown> }
+}
+
+/**
+ * Every vector of a set, with its file. Throws (so no run passes on nothing) when the set is missing (readdirSync),
+ * holds no vector, or a `vectors*.json` vector has not exactly one of the two forms, which no runner would route.
+ */
+function setVectors(set: string): Array<{ file: string; v: PipelineVector }> {
+  const files = readdirSync(join(VECTORS, set))
+    .filter((name) => /^vectors.*\.json$/.test(name) || (set === 'spec' && SPEC_FILES.includes(name)))
+    .sort()
+  const all = files.flatMap((file) => vectorFile<PipelineVector>(set, file).map((v) => ({ file, v })))
+  if (all.length === 0) throw new Error(`the vector set ${set} holds no vector`)
+  for (const { file, v } of all) {
+    if (/^vectors/.test(file) && (v.envelope === undefined) === (v.version === undefined)) throw new Error(`${set}/${file} ${v.id} has no single form`)
+  }
+  return all
+}
+
+/** Standard base64 that re-encodes to itself: a vector's own encoding, never misread by a lenient decoder. */
+function canonicalBase64(text: string): Buffer {
+  const bytes = Buffer.from(text, 'base64')
+  if (bytes.toString('base64') !== text) throw new Error('a vector holds base64 that is not canonical')
+  return bytes
+}
+
+/** Member 0's bytes as §10.7 "`envelope`" writes them: one base64 string, or the parts joined in order. */
+function envelopeBytes(envelope: NonNullable<PipelineVector['envelope']>): Buffer {
+  if (typeof envelope === 'string') return canonicalBase64(envelope)
+  return Buffer.concat(
+    envelope.parts.map((part) => {
+      if ('base64' in part) return canonicalBase64(part.base64)
+      if ('text' in part) return Buffer.from(part.text, 'utf8')
+      if ('repeat' in part) return Buffer.from(part.repeat.repeat(part.times), 'utf8')
+      throw new Error(`a part of no known form: ${JSON.stringify(Object.keys(part))}`)
+    })
+  )
+}
+
+/**
+ * Whether some `sig` of the envelope is a signature by one of `spkis` over the release type's PAE of `payload`: the
+ * test's own parse, PAE and key loading, so "the bytes handed on are the signed ones" does not lean on the code.
+ */
+function signedByAVectorKey(bytes: Buffer, spkis: string[], payload: Buffer): boolean {
+  const parsed = JSON.parse(bytes.toString('utf8')) as { signatures?: unknown }
+  const entries: unknown[] = Array.isArray(parsed.signatures) ? parsed.signatures : []
+  const keys = spkis.map((s) => createPublicKey({ key: Buffer.from(s, 'base64'), format: 'der', type: 'spki' }))
+  const message = testPae(RELEASE_TYPE, payload)
+  return entries.some((e) => {
+    const sig = typeof e === 'object' && e !== null ? (e as { sig?: unknown }).sig : undefined
+    if (typeof sig !== 'string') return false
+    return keys.some((k) => {
+      try {
+        return verify(null, message, k, Buffer.from(sig, 'base64'))
+      } catch {
+        return false
+      }
+    })
+  })
+}
+
+describe('the contract vectors: the envelope stage of every vector with an envelope (record §10.7; §2.3, §2.10)', () => {
+  // Routed by form, never by file or stage (§10.7 "File shape and routing"): an envelope runs the envelope check here,
+  // whatever its `expect.stage`; a `version` alone is the version rule's (updates-version.test.ts).
+  const runs = ENVELOPE_SETS.flatMap((set) =>
+    setVectors(set)
+      .filter(({ v }) => v.envelope !== undefined)
+      .map(({ file, v }) => [`${set}/${file} ${v.id}`, v] as const)
+  )
+  if (runs.length === 0) throw new Error('the listed sets hold no vector with an envelope')
+
+  it.each(runs)('%s', (_label, v) => {
+    const read = parseKeySet(MARKER + (v.keys ?? []).join(','))
+    expect(read.valid, 'the vector\u{2019}s keys read as a key set').toBe(true)
+    const bytes = envelopeBytes(v.envelope!)
+    const r = verifyEnvelope(bytes, read.valid ? read.keys : [], v.host.runningVersion)
+    if (v.expect.stage === 'envelope') {
+      expect(outcome(r)).toEqual({ code: v.expect.code, params: v.expect.params })
+    } else {
+      // The envelope passed; what the payload answers is updates-payload.test.ts's. Here only: it verified, and the
+      // bytes it hands on are bytes one of the vector's keys signed.
+      expect(r.verified, r.verified ? '' : JSON.stringify(outcome(r))).toBe(true)
+      expect(r.verified && signedByAVectorKey(bytes, v.keys ?? [], r.payload)).toBe(true)
+    }
   })
 })
 
