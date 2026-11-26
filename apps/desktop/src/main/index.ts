@@ -104,6 +104,7 @@ import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
 import { writeStartupLine } from './services/updates/update-log'
+import { embeddedKeySet } from './services/updates/keys'
 import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
@@ -270,6 +271,10 @@ function initBackend(): void {
   const updateLogT0 = performance.now()
   writeStartupLine(paths, { appVersion: app.getVersion(), bundledManifestsDir })
   perfMark('update_log_startup', { ms: perfMs(updateLogT0) })
+  // App-update W-1 (F-3): how many update keys this build embeds, and whether keys.json's set read (one that does not
+  // embeds none, so every update file answers "not available"). A count and a flag only: never a key or an id. This use
+  // also keeps the key set in the main bundle, where the release guard looks for it (docs/app-updates.md §2.7).
+  log.info('Update keys', { count: embeddedKeySet.keys.length, valid: embeddedKeySet.valid })
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the

@@ -1610,6 +1610,63 @@ describe('repo hygiene — every golden fixture matches the sha256 manifest (T2.
   })
 })
 
+// App-update C8 (docs/app-updates.md §2.7 "Test keys", §10.7 "No private key"; T4.1): no file under tests/fixtures/updates/
+// holds a private key, test keys included. The vector generators make each key pair in memory and write only its public
+// half; this row refuses the forms §10.7 names in every file there, whatever its extension: the start of a PKCS#8
+// Ed25519 private key as hex in either case or as base64, a PEM `PRIVATE KEY` armor line, and a JWK private key (a `"kty"`
+// key with the value `"OKP"` beside a `"d"` key). Not caught, by design: a raw 32-byte seed, which no text tells from a
+// public key or a hash (each generator's review holds that case), and a key in any other encoding. The folder does not
+// exist until the vectors are committed (T4.4, T4.4b), so the second row proves the scan on texts of its own.
+describe('repo hygiene — no private key under tests/fixtures/updates/ (app-update C8, record §10.7)', () => {
+  const dir = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates')
+  const PKCS8_ED25519_HEX = '302e020100300506032b657004220420'
+  const PKCS8_ED25519_BASE64 = 'MC4CAQAw' + 'BQYDK2VwBCIEI' // in two parts, so this file is no match for a secret scanner
+  const PEM_PRIVATE = /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/
+
+  /** The private-key forms a text holds, by name. */
+  const privateKeyForms = (text: string): string[] => {
+    const found: string[] = []
+    if (text.toLowerCase().includes(PKCS8_ED25519_HEX)) found.push('PKCS#8 Ed25519 key (hex)')
+    if (text.includes(PKCS8_ED25519_BASE64)) found.push('PKCS#8 Ed25519 key (base64)')
+    if (PEM_PRIVATE.test(text)) found.push('a PRIVATE KEY line')
+    if (/"kty"\s*:\s*"OKP"/.test(text) && /"d"\s*:/.test(text)) found.push('a JWK private key')
+    return found
+  }
+
+  it('no file there holds the start of a PKCS#8 Ed25519 key, a PRIVATE KEY line or a JWK private key', () => {
+    const files = existsSync(dir)
+      ? readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile())
+      : []
+    // latin1 reads every byte as one character, so a binary file is scanned too and never throws.
+    const offenders = files.flatMap((p) =>
+      privateKeyForms(readFileSync(p, 'latin1')).map((form) => `${relative(DESKTOP_ROOT, p).split(sep).join('/')}: ${form}`)
+    )
+    expect(offenders).toEqual([])
+  })
+
+  it('the scan finds each form (hex in either case) and passes public keys and prose', () => {
+    const pem = (label: string): string => `-----BEGIN ${label}-----\nAAAA\n-----END ${label}-----\n`
+    expect(privateKeyForms(`{"pkcs8":"${PKCS8_ED25519_HEX}00"}`)).toEqual(['PKCS#8 Ed25519 key (hex)'])
+    expect(privateKeyForms(PKCS8_ED25519_HEX.toUpperCase())).toEqual(['PKCS#8 Ed25519 key (hex)'])
+    expect(privateKeyForms(`${PKCS8_ED25519_BASE64}g`)).toEqual(['PKCS#8 Ed25519 key (base64)'])
+    expect(privateKeyForms(pem('PRIVATE KEY'))).toEqual(['a PRIVATE KEY line'])
+    expect(privateKeyForms(pem('OPENSSH PRIVATE KEY'))).toEqual(['a PRIVATE KEY line'])
+    expect(privateKeyForms('{"kty":"OKP","crv":"Ed25519","x":"AAAA","d":"AAAA"}')).toEqual(['a JWK private key'])
+    expect(privateKeyForms('{\n  "kty" : "OKP",\n  "crv": "Ed25519",\n  "d"\t:\n "AAAA"\n}')).toEqual(['a JWK private key'])
+    // Public halves, other key types and prose about the rule pass.
+    for (const text of [
+      'MCowBQYDK2VwAyEA' + 'A'.repeat(43) + '=', // an Ed25519 SPKI in base64 (record §2.7)
+      '302a300506032b6570032100' + '00'.repeat(32), // the same in hex
+      PKCS8_ED25519_BASE64.toLowerCase(), // base64 is case-sensitive
+      pem('PUBLIC KEY'),
+      '{"kty":"OKP","crv":"Ed25519","x":"AAAA"}', // a JWK public key
+      'No file holds a PRIVATE KEY line, a "kty" of "OKP" or a "d" key.'
+    ]) {
+      expect(privateKeyForms(text), text).toEqual([])
+    }
+  })
+})
+
 // App-update F-27 (W-64, rule d; docs/app-updates.md §7.7, "File names in the workspace"). At every start of an encrypted
 // workspace, before any password, `shredStalePlaintext` (workspace-vault.ts) overwrites and removes every file in
 // `workspace/documents/` and `workspace/images/` whose name passes one of two tests: it holds `.parse`, or it ends `.tmp`.
