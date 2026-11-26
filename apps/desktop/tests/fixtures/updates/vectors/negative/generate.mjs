@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // Writes the negative contract vectors of the app-update trust core (docs/app-updates.md section 10.7; F-1, F-2,
 // F-4): vectors-envelope.json, vectors-payload.json, vectors-order.json, vectors-version-rule.json,
-// vectors-caps.json and vectors-edges.json. Plain Node, no dependency, no import from the repository.
+// vectors-caps.json, vectors-edges.json and vectors-review2.json. Plain Node, no dependency, no import from the
+// repository.
 //
 //   node generate.mjs --out <an empty folder>
 //   node generate.mjs --out <an empty folder> --only=vectors-edges.json
+//   node generate.mjs --out <an empty folder> --only=vectors-review2.json
 //
 // The second form writes vectors-edges.json alone: that file was added after the other five were committed (the
 // adversarial review's M-2, m-5 and m-9; the record at commit 5e01fff0), and a full run would give the five other
 // keys and signatures. It builds every vector as a full run does (so an id of the new file can never repeat one of
 // the five) and writes the one file; like a full run it refuses a folder that already holds a vectors file, so it
-// can never replace a committed one.
+// can never replace a committed one. The third form does the same for vectors-review2.json, the file added after
+// those six were committed (the second review's M-1, m-6 and m-7; the record at commit f1864cbf and the review's
+// disposition).
 //
 // Written from the DSSE specification, RFC 8032 and the design record only (PROVENANCE.md), at the record's commit
 // 930b7d4c, before the verifier was committed and without reading it (T4.1 was writing it in the same tree; this
@@ -20,20 +24,22 @@
 // THE COMMITTED VECTORS ARE THE GOLDEN. Every key pair is made at run time (`generateKeyPairSync('ed25519')`); its
 // private half stays inside `newKey`'s closure, signs, and is gone when the process ends. It is never exported to a
 // file, printed or logged, and no seed, PEM, JWK or PKCS#8 text is written anywhere. So a new run gives other keys
-// and signatures: this script documents how the golden was made, it does not reproduce its bytes.
+// and signatures: this script documents how the golden was made, it does not reproduce its bytes. One pair, in the
+// vectors-review2.json block, is used outside `newKey`: that block computes one signature with its own arithmetic
+// and needs the pair's scalar for it, in memory only and under the same rule (nothing of it is written).
 
-import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, verify as edVerify } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const outAt = process.argv.indexOf('--out')
 const outDir = outAt < 0 ? null : (process.argv[outAt + 1] ?? null)
-/** The one file `--only=` may name: the file added after the first five were committed. */
-const ONLY_FILE = 'vectors-edges.json'
+/** The files `--only=` may name, one per run: each was added after the files before it were committed. */
+const ONLY_FILES = ['vectors-edges.json', 'vectors-review2.json']
 const onlyArgs = process.argv.filter((a) => a === '--only' || a.startsWith('--only='))
 const only = onlyArgs.length === 0 ? null : onlyArgs[0].slice('--only='.length)
-if (!outDir || onlyArgs.length > 1 || (only !== null && only !== ONLY_FILE)) {
-  console.error(`usage: node generate.mjs --out <an empty folder> [--only=${ONLY_FILE}]`)
+if (!outDir || onlyArgs.length > 1 || (only !== null && !ONLY_FILES.includes(only))) {
+  console.error(`usage: node generate.mjs --out <an empty folder> [--only=${ONLY_FILES.join(' | --only=')}]`)
   process.exit(2)
 }
 // Both forms: never into a folder that holds a vectors file, so no run replaces a committed file.
@@ -58,6 +64,8 @@ function nonZeroPadBits(b64) {
 
 /** The seeds of this run's keys, in memory only: the last step scans every written file for them. */
 const seeds = []
+/** Other secret 32-byte values of this run (a key's scalar, a signature's nonce), in memory only, scanned for alike. */
+const secrets = []
 /** A new Ed25519 key pair: its public half as section 2.7 writes a key, its id, and a signer. Nothing else leaves. */
 function newKey() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -1263,6 +1271,207 @@ function pay(part, id, why, payload, expect, host = {}) {
 }
 
 // ================================================================================================================
+// vectors-review2.json: the second review of F-1 to F-4 (its M-1, m-7 and m-6), written from the record at commit
+// f1864cbf and the review's disposition table, after the six files above were committed
+// ================================================================================================================
+{
+  const Y = 'review2'
+  const fail = (what) => {
+    throw new Error('review2: ' + what)
+  }
+
+  // ---- Ed25519's curve in BigInt, from RFC 8032 section 5.1 (the constants), 5.1.2 (encoding), 5.1.3 (decoding),
+  //      5.1.4 (the addition law, here in affine coordinates) and 5.1.6 (signing). No library decides a claim the
+  //      M-1 vector makes: the two equations of section 5.1.7 are checked with this arithmetic, and `crypto.verify`
+  //      is asked afterwards.
+  const P = (1n << 255n) - 19n
+  const L = (1n << 252n) + 27742317777372353535851937790883648493n
+  const mod = (n, m = P) => ((n % m) + m) % m
+  const pow = (base, exp, m = P) => {
+    let out = 1n
+    let b = mod(base, m)
+    for (let e = exp; e > 0n; e >>= 1n) {
+      if (e & 1n) out = (out * b) % m
+      b = (b * b) % m
+    }
+    return out
+  }
+  const inv = (n) => pow(n, P - 2n)
+  const D = mod(-121665n * inv(121666n))
+  const SQRT_M1 = pow(2n, (P - 1n) / 4n)
+  const NEUTRAL = [0n, 1n]
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1]
+  /** The curve's addition law (complete on this curve): -x^2 + y^2 = 1 + d x^2 y^2. */
+  const plus = ([x1, y1], [x2, y2]) => {
+    const t = mod(D * x1 * x2 * y1 * y2)
+    return [mod((x1 * y2 + x2 * y1) * inv(1n + t)), mod((y1 * y2 + x1 * x2) * inv(1n - t))]
+  }
+  const times = (k, point) => {
+    let out = NEUTRAL
+    let q = point
+    for (let n = k; n > 0n; n >>= 1n) {
+      if (n & 1n) out = plus(out, q)
+      q = plus(q, q)
+    }
+    return out
+  }
+  const onCurve = ([x, y]) => mod(y * y - x * x) === mod(1n + D * x * x * y * y)
+  const leInt = (bytes) => {
+    let n = 0n
+    for (let i = bytes.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(bytes[i])
+    return n
+  }
+  const leBytes = (value) => {
+    const out = Buffer.alloc(32)
+    let n = value
+    for (let i = 0; i < 32; i++) {
+      out[i] = Number(n & 0xffn)
+      n >>= 8n
+    }
+    if (n !== 0n) fail('a number does not fit 32 bytes')
+    return out
+  }
+  const encode = ([x, y]) => leBytes(y | ((x & 1n) << 255n))
+  /** RFC 8032 section 5.1.3; null where the decoding fails. */
+  const decode = (bytes) => {
+    const n = leInt(bytes)
+    const sign = n >> 255n
+    const y = n & ((1n << 255n) - 1n)
+    if (bytes.length !== 32 || y >= P) return null
+    const u = mod(y * y - 1n)
+    const v = mod(D * y * y + 1n)
+    let x = mod(u * pow(v, 3n) * pow(u * pow(v, 7n), (P - 5n) / 8n))
+    const vxx = mod(v * x * x)
+    if (vxx === mod(-u) && vxx !== u) x = mod(x * SQRT_M1)
+    else if (vxx !== u) return null
+    if (x === 0n && sign === 1n) return null
+    if ((x & 1n) !== sign) x = P - x
+    return [x, y]
+  }
+  const sha512 = (...chunks) => createHash('sha512').update(Buffer.concat(chunks)).digest()
+
+  // The base point as section 5.1 prints it, and its order.
+  const B = [15112221349535400772501151409588531511454012693041857206046113283949847762202n, 46316835694926478169428394003475163141307993866256225615783033603165251855960n]
+  if (D !== 37095705934669439343138083508754565189542113879843219016388785533085940283555n) fail('d is not the constant of RFC 8032 section 5.1')
+  if (!onCurve(B) || B[1] !== mod(4n * inv(5n)) || !same(decode(encode(B)), B)) fail('the base point is not the one of RFC 8032 section 5.1')
+  if (!same(times(L, B), NEUTRAL) || same(times(L - 1n, B), NEUTRAL)) fail('the base point does not have the order L')
+
+  /** What section 5.1.7 checks for a signature, both ways. `canonical`: step 1's decodings, S below L included. */
+  const equations = (keyBytes, message, signature) => {
+    const rBytes = signature.subarray(0, 32)
+    const R = decode(rBytes)
+    const A = decode(keyBytes)
+    const S = leInt(signature.subarray(32, 64))
+    if (signature.length !== 64 || R === null || A === null || S >= L || !encode(R).equals(rBytes)) return { canonical: false, cofactored: false, cofactorless: false }
+    const k = leInt(sha512(rBytes, keyBytes, message))
+    const left = times(S, B)
+    const right = plus(R, times(k, A))
+    return { canonical: true, cofactored: same(times(8n, left), times(8n, right)), cofactorless: same(left, right), R }
+  }
+
+  // ---- M-1: a signature that satisfies only the equation with the factor 8
+  // A point of order 8, written from the record's own bytes (section 2.7 'A weak key' prints the y of the order-8
+  // points; this is the first of the two, with the sign bit clear) and proved to be one here.
+  const T = decode(Buffer.from('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', 'hex'))
+  if (T === null || !onCurve(T) || !same(times(8n, T), NEUTRAL) || same(times(4n, T), NEUTRAL)) fail('no point of order 8')
+
+  const body = bodyOf(BASE())
+  const message = pae(utf8(RELEASE), body)
+  // The one key pair of this file whose private half is used outside `newKey`: the pair is made at run time, its
+  // scalar and the signature's nonce live in this block's variables only, and nothing of them is exported, written,
+  // printed or logged. They are on the list the last step scans every written file for, and the envelope's own bytes
+  // are scanned for them below.
+  const made = (() => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const spkiDer = publicKey.export({ type: 'spki', format: 'der' })
+    const keyBytes = Buffer.from(spkiDer.subarray(12))
+    const seed = Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' }).subarray(16))
+    seeds.push(seed)
+    // Section 5.1.5: the scalar is the first half of SHA-512(seed) with its lowest three bits and its top bit
+    // cleared and bit 254 set.
+    const half = Buffer.from(sha512(seed).subarray(0, 32))
+    half[0] &= 248
+    half[31] &= 127
+    half[31] |= 64
+    const scalar = leInt(half)
+    if (!encode(times(scalar, B)).equals(keyBytes)) fail("the scalar does not give the key pair's public key")
+    // Section 5.1.6 with two changes: the nonce r is random (64 random bytes reduced modulo L, never written), and
+    // R is [r]B plus the point of order 8. S = (r + k * scalar) mod L as in step 5, k being the hash over that R.
+    const r = leInt(randomBytes(64)) % L
+    const rBytes = encode(plus(times(r, B), T))
+    const k = leInt(sha512(rBytes, keyBytes, message)) % L
+    const sBytes = leBytes((r + k * scalar) % L)
+    secrets.push(half, leBytes(scalar % L), leBytes(r))
+    return { publicKey, keyBytes, spki: spkiDer.toString('base64'), id: sha256hex(spkiDer), standard: edSign(null, message, privateKey), onlyCofactored: Buffer.concat([rBytes, sBytes]) }
+  })()
+
+  // The claims the two vectors make, held here before anything is written.
+  const m1 = equations(made.keyBytes, message, made.onlyCofactored)
+  if (!m1.canonical) fail('the signature does not decode as section 5.1.7 step 1 asks (R a point in its canonical form, S below L)')
+  if (!m1.cofactored) fail('[8][S]B = [8]R + [8][k]A does not hold')
+  if (m1.cofactorless) fail('[S]B = R + [k]A holds: the signature is an ordinary one')
+  // Its R is no small-order point, and it carries a part of order exactly 8: [L]R has order 8.
+  const torsion = times(L, m1.R)
+  if (same(times(8n, m1.R), NEUTRAL) || !same(times(8n, torsion), NEUTRAL) || same(times(4n, torsion), NEUTRAL)) fail('R does not carry a point of order 8')
+  const control = equations(made.keyBytes, message, made.standard)
+  if (!control.canonical || !control.cofactored || !control.cofactorless) fail('the standard signature does not satisfy both equations')
+  // The key is a point of order L (so no weak key of section 2.7), and what `crypto.verify` says on this runtime.
+  if (!same(times(L, decode(made.keyBytes)), NEUTRAL)) fail('the key is not a point of order L')
+  const spkiKey = createPublicKey({ key: Buffer.from(made.spki, 'base64'), format: 'der', type: 'spki' })
+  if (edVerify(null, message, spkiKey, made.onlyCofactored) !== false) fail('crypto.verify accepts the signature on this runtime: the expected answer does not hold here')
+  if (edVerify(null, message, spkiKey, made.standard) !== true) fail('crypto.verify refuses the standard signature')
+
+  const envOf = (sig) => JSON.stringify({ payloadType: RELEASE, payload: body.toString('base64'), signatures: [{ keyid: made.id, sig: sig.toString('base64') }] })
+  const M1 = "the second review, M-1, and its disposition (2026-11-26): release 1 checks S below L and [S]B = R + [k]A without the factor 8, as Node 24.13.0's OpenSSL and Electron 43.8.10's BoringSSL both decide"
+  vec(Y, 'rev2-verify-cofactored-only-order-8-in-r', `${S23} 'Verification' (Ed25519 as RFC 8032 section 5.1.7 'through crypto.verify(null, ...)') and 'No signature verifies' ('some entry ... names an embedded key's id -> UPD-NOT-GENUINE'): the one signature, by the embedded key and named by its keyid, satisfies section 5.1.7's equation [8][S]B = [8]R + [8][k]A and not [S]B = R + [k]A (its R is [r]B plus a point of order 8, in its canonical form; S is below L), so it verifies under no key; ${M1}`, [made.spki], envOf(made.onlyCofactored), NOT_GENUINE())
+  vec(Y, 'rev2-verify-cofactored-only-control-standard-signature-accepted', `${S23} 'Verification': the control of rev2-verify-cofactored-only-order-8-in-r, the same key, payload and envelope with the key's standard RFC 8032 signature (both equations of section 5.1.7 hold) -> the envelope verifies and the payload is accepted; ${M1}`, [made.spki], envOf(made.standard), accepted())
+  // Nothing secret stands in the bytes these two envelopes hold (the last step scans the files' text only).
+  for (const sig of [made.onlyCofactored, made.standard]) {
+    for (const secret of [...seeds.slice(-1), ...secrets]) if (Buffer.concat([utf8(envOf(sig)), body, sig]).includes(secret)) fail('an envelope holds a secret value of this run')
+  }
+
+  // ---- m-7: lone surrogates, written as JSON escapes, in strings release 1 never interprets
+  // A lone surrogate has no UTF-8 form, so it can stand in a JSON text only as an escape (section 2.3 'Text'); the
+  // text is then plain ASCII and `JSON.parse` keeps the code unit. The two code units are made from their numbers
+  // and the escapes from pieces, so that no tool can turn an escape in this source into a raw character.
+  const HI = String.fromCharCode(0xd800)
+  const LO = String.fromCharCode(0xdfff)
+  const ESC_HI = '\\' + 'uD800'
+  const ESC_LO = '\\' + 'uDFFF'
+  /** `value` as JSON text with its lone surrogates as upper-case escapes; proved to read back as `value`. */
+  const escaped = (value, count) => {
+    const text = JSON.stringify(value).split(HI).join(ESC_HI).split(LO).join(ESC_LO).split('\\' + 'ud800').join(ESC_HI).split('\\' + 'udfff').join(ESC_LO)
+    if (/[^\x20-\x7e]/.test(text)) fail('the text is not plain ASCII')
+    if (text.split(ESC_HI).length - 1 !== count[0] || text.split(ESC_LO).length - 1 !== count[1]) fail('not the number of escapes meant')
+    if (JSON.stringify(JSON.parse(text)) !== JSON.stringify(value)) fail('the text does not read back as the value')
+    return text
+  }
+  for (const text of [HI, LO, LO + HI, 'x' + HI, 'Start ' + HI + ' HilbertRaum.cmd']) if (text.isWellFormed()) fail('no lone surrogate')
+  const files = FILES_IN()
+  files[1] = { ...files[1], group: HI, install_as: LO }
+  files[2] = { ...files[2], group: LO + HI, install_as: 'Start ' + HI + ' HilbertRaum.cmd' }
+  const filesOut = FILES_OUT()
+  filesOut[1] = { ...filesOut[1], group: HI, installAs: LO }
+  filesOut[2] = { ...filesOut[2], group: LO + HI, installAs: 'Start ' + HI + ' HilbertRaum.cmd' }
+  // An ignored key whose name and value hold one each, at the payload's top level and nested.
+  const payloadText = escaped(BASE({ files, ['later' + HI]: LO, later: { [LO]: [HI, LO + HI] } }), [6, 5])
+  const s = setup(payloadText)
+  const other = newKey() // signs the first entry; the verifier does not embed it
+  const first = { keyid: HI, sig: other.sign(pae(utf8(RELEASE), s.body)).toString('base64') }
+  const envelopeText = escaped({ payloadType: RELEASE, ['later' + LO]: HI, payload: s.b64, signatures: [first, s.entry] }, [2, 1])
+  vec(Y, 'rev2-lone-surrogates-in-ignored-strings-accepted', `${S23} 'JSON' ('as ECMA-262's JSON.parse reads it'; 'unknown keys are ignored'; keys compared 'code unit for code unit after JSON's escapes are decoded'), 'keyid' (a hint, 'compared code unit for code unit') and 'Verification' ('The first entry that one key verifies accepts the envelope'), ${S24} 'group' ('A string of at least one character ..., compared code unit for code unit and never interpreted') and 'install_as' ('never read at the import: any value'), section 2.10 ('group or null, installAs or null', as written): lone surrogates written as the JSON escapes for U+D800 and U+DFFF (the text is ASCII) in an ignored key of the envelope and its value, in the keyid of a first signature entry that no embedded key verifies (the embedded key's own entry follows), in an ignored key of the payload, its value and a nested ignored value, and in the group and the install_as of two files[] entries (one group is U+D800, the other U+DFFF then U+D800) -> accepted, each group and installAs carried as written (the code units, no replacement character); the second review, m-7`, [s.key.spki], envelopeText, accepted({ files: filesOut }))
+
+  // ---- m-6: a files[] size written as -0
+  // `JSON.stringify` writes -0 as 0, so the payload's text is made by replacing the first entry's number.
+  const zeroText = JSON.stringify(BASE()).replace('"size":4096', '"size":-0')
+  if (zeroText.split('"size":-0').length !== 2 || !Object.is(JSON.parse(zeroText).files[0].size, -0)) fail('the payload does not hold one size of -0')
+  const zeroOut = FILES_OUT()
+  zeroOut[0] = { ...zeroOut[0], size: 0 }
+  if (asciiJson(zeroOut[0]).includes('-0') || !Object.is(zeroOut[0].size, 0)) fail('the expected size is not 0')
+  pay(Y, 'rev2-files-size-minus-zero-carried-as-zero-accepted', `${S43} 'files[] entries' ('an integer size from 0 to 8,589,934,591 (the value JSON.parse gives is a safe integer in that range ...)'; a member of 0 bytes is legal) and section 2.10 ('An accepted payload'): the first entry's size is written -0, for which JSON.parse gives the number -0, a safe integer in the range -> accepted, and the accepted entry carries size 0, never -0 (the orchestrator's decision of 2026-11-26 on the second review's m-6: -0 is 0)`, zeroText, accepted({ files: zeroOut }))
+}
+
+// ================================================================================================================
 // write, then scan what was written
 // ================================================================================================================
 const written = []
@@ -1284,7 +1493,7 @@ for (const file of [...written, new URL(import.meta.url)]) {
   const lower = textOf.toLowerCase()
   for (const needle of exact) if (textOf.includes(needle)) (bad++, console.error(`${file}: holds ${needle.slice(0, 4)}...`))
   for (const needle of anyCase) if (lower.includes(needle)) (bad++, console.error(`${file}: holds ${needle.slice(0, 4)}...`))
-  for (const seed of seeds) {
+  for (const seed of [...seeds, ...secrets]) {
     const forms = [seed.toString('base64'), seed.toString('base64url'), seed.toString('base64').replace(/=+$/, '')]
     if (lower.includes(seed.toString('hex')) || forms.some((form) => textOf.includes(form))) (bad++, console.error(`${file}: holds a seed of this run`))
   }

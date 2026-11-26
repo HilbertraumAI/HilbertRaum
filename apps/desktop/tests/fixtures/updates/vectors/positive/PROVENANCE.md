@@ -20,8 +20,11 @@ read their exports and the two runners, to call them from the tests, and the gen
 expected values were stated from the record before the set was first run through the code; that first run (76
 vectors) agreed for every one, and no vector was changed after a run. One vector was added afterwards from the record
 for a case the set had left out (`pos-pay-total-size-beyond-one-member`, §4.3 "Total size"), and the generator was run
-once more: that run is the committed set. The record commit `10989dd1` stays citable only while the phase's pull
-request keeps it reachable (a merge commit, not a squash).
+once more: that run is the committed set.
+
+**The merge rule.** The commit this file cites (`10989dd1`: the record, the verifier and the payload check) is a
+commit of the phase branch `feat/updates-trust-core`. It stays reachable, and so citable, only if the phase's pull
+request is merged with a merge commit, not squashed or rebased.
 
 ## Sources
 
@@ -32,6 +35,14 @@ request keeps it reachable (a merge commit, not a squash).
 | RFC 4648 §4, §5 | October 2006 | the base64 writer (both alphabets, padding) |
 | RFC 8032 §5.1 (Ed25519 signatures are 64 bytes; Ed448's 114) | January 2017 | which entries count; the Ed448-sized entry |
 | FIPS 204 (ML-DSA-65: 3,309-byte signatures), FIPS 205 (SLH-DSA-SHA2-128s: 7,856; SLH-DSA-SHA2-192f: 35,664) | August 2024 | the sizes of the later schemes' entries. They only make entries of another length: no expected value rests on them |
+
+The wave keeps reference copies of the DSSE files and of RFC 8032 with its working papers, not in the repository
+(fetched by the orchestrator on 2026-11-26); the `spec/` and `negative/` sets were written from them. For a reader who
+fetches the same versions, their sha256: DSSE `protocol.md`
+`6c0d965475162230f9f461acf634b4d4b409eab1a1839d31a9c24c76b3676253` and `envelope.md`
+`3a8e7370671354cf3d3417c818a44dcda02cbc57dce6f4b6a75a84c41c483074` (both at the commit above); RFC 8032, plain text,
+`ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3`. This set's writer cites DSSE as the record cites
+it (the row above); this note does not say which copy that writer read.
 
 ## The files
 
@@ -92,6 +103,12 @@ What every value that looks like key material is:
   encoding (§2.3 "Writers: `keyid`": another construction carries another `keyid` or none).
 
 ## Limits a reader should know
+
+- **No checker of this set is in the repository.** Any self-check or reviewer's checker that was run over these
+  vectors is a working paper of the wave, kept outside the repository; a later reader cannot run it again from here.
+  What the repository holds is the vectors, this generator (whose own checks run inside it) and the tests that read
+  the vectors. (Added on 2026-11-26 with the merge rule and the copies' sha256 above, by the negative set's writer,
+  Fable 5.2, for the second review's m-12; no vector, `expect` or other statement of this file changed.)
 
 - `pos-env-depth-10000-in-ignored-key` nests 10,000 levels inside the ignored key, as §10.7 "Depth" says; with the
   envelope's own object that is 10,001 levels.

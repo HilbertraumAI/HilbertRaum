@@ -12,8 +12,10 @@ in the same tree, and this writer saw only its file names in one `git status` li
 verifier was committed later the same day (`d6618f79`, `937f6e7b`); the eleven vectors of the review round (below)
 were added after that, again without opening it.
 
-The record commit `930b7d4c` stays citable only while the phase's pull request keeps it reachable: merged with a
-merge commit (as PR #1055 was), not squashed.
+**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `5e01fff0` and `f1864cbf`; the verifier's
+`d6618f79` and `937f6e7b`; the review's `aeda35af`; `d2784a2b`, which holds the generator of the first five files)
+is a commit of the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if the phase's
+pull request is merged with a merge commit (as PR #1055 was), not squashed or rebased.
 
 An independent review (Opus 5.5, the same day) re-derived every `expect` from the record with its own code, written
 before it opened this generator: no `expect` was wrong. Its mutation run (231 deliberate verifier bugs) found eight
@@ -29,6 +31,11 @@ the reviewer's checker agreed with all 849.
 core, T4.4d). The five files above stay byte for byte as committed; the new file has its own section below
 ("`vectors-edges.json`"), with its sources, its run and what its writer opened.
 
+**Added on 2026-11-26, before release 1: `vectors-review2.json`** (4 vectors; the second review of F-1–F-4, T4.5:
+its M-1, m-7 and m-6). The six files above stay byte for byte as committed; the new file has its own section below
+("`vectors-review2.json`"). The same round wrote out in full every sha256 this file cites, named the commit of the
+earlier generator, and stated the merge rule above and the limit on working papers below (the review's m-12).
+
 ## Sources
 
 | Source | Version | Used for |
@@ -39,6 +46,18 @@ core, T4.4d). The five files above stay byte for byte as committed; the new file
 | semver.org 2.0.0 §11 | as `version.ts` cites it | the version rule's order vectors |
 | `src/main/services/updates/version.ts`, `drive-release.ts` (frozen in P3, read, not imported) | commit `930b7d4c` | which strings are versions; how `rootApps` lists a root |
 | `docs/app-updates.md` §2.3, §2.4, §2.5, §2.10, §4.3, §4.5, §10.7; `version.ts` (read, not imported) | commit `5e01fff0` | every `expect` of `vectors-edges.json` |
+| `docs/app-updates.md` §2.3, §2.4, §2.7 ("A weak key": the `y` of the order-8 points), §2.10, §4.3, §4.4, §10.7 | commit `f1864cbf` | every `expect` of `vectors-review2.json` |
+| The second review's disposition table (the orchestrator, 2026-11-26; a working paper, not in the repository): the rows M-1, m-6 and m-7, and the orchestrator's note of the same day on m-6 | 2026-11-26 | which of RFC 8032 §5.1.7's two equations release 1 checks; that a `size` of `-0` is carried as 0 (below, "`vectors-review2.json`") |
+| RFC 8032 §5.1 (the constants), §5.1.2, §5.1.3, §5.1.4, §5.1.5, §5.1.6, §5.1.7 | January 2017 | the curve arithmetic, the signature and the two equations of `rev2-verify-cofactored-only-…` |
+
+**The reference copies.** DSSE's files and the RFC were read from copies the orchestrator fetched on 2026-11-26. They
+are working papers of the wave and are not in the repository; a reader who fetches the same versions can compare:
+
+| Copy | Version | sha256 of the copy |
+|---|---|---|
+| DSSE `protocol.md` | `secure-systems-lab/dsse` commit `75a79b6ed61c63dabf291657e076d120d95a39a1` | `6c0d965475162230f9f461acf634b4d4b409eab1a1839d31a9c24c76b3676253` |
+| DSSE `envelope.md` | the same commit | `3a8e7370671354cf3d3417c818a44dcda02cbc57dce6f4b6a75a84c41c483074` |
+| RFC 8032, plain text (RFC Editor) | January 2017 | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
 
 DSSE's Python reference implementation (`signing_spec.py`) was not opened and is no oracle here (§2.3).
 
@@ -66,8 +85,8 @@ verifier's tasks.
 
 ## The files
 
-869 vectors: 849 in the five files of the first writing, 20 in `vectors-edges.json`. An id that ends in `-accepted`
-has the code `accepted`; every other vector is a refusal.
+873 vectors: 849 in the five files of the first writing, 20 in `vectors-edges.json`, 4 in `vectors-review2.json`. An
+id that ends in `-accepted` has the code `accepted`; every other vector is a refusal.
 
 **A test routes a vector by its form, never by its file or by `expect.stage`** (§10.7 "A vector"):
 
@@ -92,6 +111,7 @@ A test that picked its vectors by `expect.stage` would drop the eleven envelope-
 | `vectors-version-rule.json` | 57 | §2.5, the version rule alone (§10.7's second form) | all with `version`, none with an `envelope` | `tests/unit/updates-payload.test.ts`'s version-rule runner (T4.4, 2026-11-26: the T4.2 sheet's Q5 put both runners in that file; _Was:_ `tests/unit/updates-version.test.ts`) |
 | `vectors-caps.json` | 9 | the large boundary vectors: the 4,194,304-byte envelope (as `parts` with `repeat`), 4,096 / 4,097 `files[]` entries, and the largest payload an envelope at the cap can carry (3,145,523 bytes) | all with an `envelope` | the pipeline's tests |
 | `vectors-edges.json` | 20 | the cases the adversarial review found without a vector: a payload's unused base64 bits beyond the lowest one (§2.3), a line feed after a `sha256`, a `version` and an `issued`, a parameter with build metadata as written, a `payloadType` equal to the release type only after Unicode normalisation, and three versions that only the writers' duties forbid (its own section below) | all with an `envelope` | the pipeline's tests |
+| `vectors-review2.json` | 4 | the second review's cases: a signature by the embedded key that satisfies only the equation with the factor 8 of RFC 8032 §5.1.7, with its control; lone surrogates, written as JSON escapes, in strings release 1 never interprets; a `files[]` `size` written `-0`, carried as 0 (its own section below) | all with an `envelope` | the pipeline's tests |
 | `generate.mjs` | — | how the set was made | — | — |
 
 Each file is a JSON array with one vector per line, plain ASCII (every other character is a `\u` escape). An envelope
@@ -135,6 +155,12 @@ A second script, written after the generator from the record's tables and kept w
 the repository), rebuilt every envelope's bytes from its vector, decoded each base64 string strictly, rebuilt the PAE,
 verified the signatures with `node:crypto` and derived the whole `expect` again: 849 of 849 agree. It shares this
 writer's reading of the record, so it proves the vectors are what they claim, not that the reading is right.
+
+**A limit: the checkers are not in the repository.** Every self-check script of this set (this section's, the one of
+`vectors-edges.json`, the one of `vectors-review2.json`) and every reviewer's checker and mutation run named in this
+file are working papers of the wave, kept outside the repository. A later reader cannot run them again from the
+repository: what the repository holds is the vectors, this generator and the tests that read the vectors. The
+agreement counts in this file are a record of runs made on 2026-11-26, not something the repository proves.
 
 The reviewer's checker is the independent half: another model's reading of the same record rows, written before it
 opened this generator or the self-check. It agrees with all 849 vectors, every field of `expect` compared, and its
@@ -196,8 +222,9 @@ repeat an older one) and writes this file alone; the run made 709 key pairs, of 
 the five of the first writing with other keys and signatures than the committed ones. Both forms refuse a folder that
 holds a vectors file, so neither can replace a committed file: **the committed files are the golden**, and of the six
 only `vectors-edges.json` is the output of the `generate.mjs` committed with it; the other five are the output of
-the generator as it stood before this file was added (sha256 `59421ef8…5baf`, in the phase's history), whose
-vector-building code for them is unchanged. Keys as in "Keys and signatures" above: made in memory, the private half
+the generator as it stood before this file was added (sha256
+`59421ef8ce1b023e11925c0eb366dc15f373dc052730f5ed3204d50687b05baf`: the `generate.mjs` of commit `d2784a2b`, "add the
+negative and spec contract vectors", in the phase's history), whose vector-building code for them is unchanged. Keys as in "Keys and signatures" above: made in memory, the private half
 never written, the generator's last step scanning what it wrote.
 
 **Self-check.** A second script (with the task's working papers, not in the repository), written after the generator
@@ -209,6 +236,106 @@ payload, rebuilt each envelope's bytes, verified the signatures with `node:crypt
 lowest bit there, and a skipped signature entry is never a refusal of its own). The line-feed vectors hold U+000A
 only, at the end (and, for `sha256`, at the start), not other control characters.
 
+## `vectors-review2.json` (added 2026-11-26; the second review, T4.5)
+
+The second review of F-1–F-4 (Fable 5.2, at `f1864cbf`; its lens: a later maintainer writes a second reader from the
+record alone) found no disagreement between code and record, and named cases that no vector held: its M-1, m-7
+and m-6. The same writer as the rest of this set (Fable 5.2, task "T4.4b review-2 vectors") wrote the four vectors
+**from the record at commit `f1864cbf`, RFC 8032 §5.1 and the review's disposition table only** (with the
+orchestrator's note of the same day on m-6). Every `expect` is
+stated by hand in `generate.mjs`; none comes from the code under test. The verifier's payload check was being changed
+in the tree at that time; neither the verifier, its tests nor their working papers were opened.
+
+**What the writer opened for this file:** its brief (`impl/p4/T4.4b/review2-brief.md`) and `impl/p4/brief-common.md`;
+the review's disposition table (`impl/p4/T4.5/review-disposition.md`: one line per finding, and the orchestrator's
+measurement for M-1; not the review itself, nor its scripts); the record's §2.3, §2.4, §2.7, §2.10, §4.3, §4.4 and
+§10.7 at `f1864cbf`; RFC 8032 §5.1's table of constants and §5.1.3, §5.1.6, §5.1.7 in the reference copy;
+`impl/p4/inputs/SOURCES.md`; this set's committed files, the `PROVENANCE.md` of the `spec/` and `positive/` sets, and
+`spec/ed25519.json` (RFC 8032 §7.1's five vectors, read by the self-check to prove its arithmetic); the reports of
+this set's earlier rounds; the update lines of `golden-fixtures.sha256`; `git log` of the phase branch. Nothing else:
+not `envelope.ts`, `payload.ts`, `keys.ts`, `keys.json`, `member-name.ts`, `bundle-check.ts`, `src/shared/updates/`,
+`tests/unit/updates-envelope.test.ts`, `updates-payload.test.ts`, `tests/helpers/update-vectors.ts`, the positive
+set's vectors or generator, nor the working papers of the verifier's tasks.
+
+| Finding | Vector | Expect | Record row |
+|---|---|---|---|
+| M-1: RFC 8032 §5.1.7 allows two group equations, and they disagree on some signatures | `rev2-verify-cofactored-only-order-8-in-r`: one signature, made with the embedded key's private half and named by its `keyid`, that satisfies `[8][S]B = [8]R + [8][k]A` and not `[S]B = R + [k]A` | `UPD-NOT-GENUINE` (envelope) | §2.3 "Verification" (Ed25519 "through `crypto.verify(null, …)`"), as the disposition states it: `S` below L and `[S]B = R + [k]A` without the factor 8; "No signature verifies" (an entry names an embedded key's id) |
+| M-1, the control | `rev2-verify-cofactored-only-control-standard-signature-accepted`: the same key, payload and envelope with the key's standard RFC 8032 signature | accepted | §2.3 "Verification" |
+| m-7: an escaped lone surrogate in a string release 1 does not interpret | `rev2-lone-surrogates-in-ignored-strings-accepted`: the JSON escapes for U+D800 and U+DFFF in an ignored key of the envelope and its value, in the `keyid` of a first signature entry that no embedded key verifies (the embedded key's entry follows), in an ignored key of the payload, its value and a nested value, and in the `group` and the `install_as` of two `files[]` entries | accepted; `group` and `installAs` carried as written (the code units) | §2.3 "JSON" (`JSON.parse`; unknown keys ignored; keys compared code unit for code unit), "`keyid`", "Verification" (the first entry that one key verifies accepts); §2.4 "`group`", "`install_as`"; §2.10 "An accepted payload" |
+| m-6: a `files[]` `size` written `-0` | `rev2-files-size-minus-zero-carried-as-zero-accepted`: the base payload with its first entry's `size` written `-0` | accepted; that entry's `size` is 0 | §4.3 "`files[]` entries" (the value `JSON.parse` gives is a safe integer from 0 to 8,589,934,591: -0 is one); §2.10 "An accepted payload"; that the entry carries 0 and never -0 is the orchestrator's decision of 2026-11-26 on m-6 ("`-0` is 0") |
+
+**Where the M-1 answer comes from.** The record at `f1864cbf` names RFC 8032 §5.1.7 and `crypto.verify`; §5.1.7 step
+3 gives the equation with the factor 8 and says the one without it is sufficient, so the RFC alone does not decide
+this vector. The answer is the review's disposition (the orchestrator, 2026-11-26): release 1 checks `S` below L and
+`[S]B = R + [k]A` without the factor 8, which is what Node 24.13.0's OpenSSL 3.5.4 and Electron 43.8.10's BoringSSL
+both decide; the record's §2.3 "Verification" is to say so in a commit after `f1864cbf`, which this file cannot name
+yet. If that wording does not land, this vector has no record row and is an owner call.
+
+**How the M-1 signature was made.** The generator holds Ed25519's curve arithmetic of its own in BigInt (RFC 8032
+§5.1: the constants, the encoding, §5.1.3's decoding, the addition law; proved in the run on the base point as the
+RFC prints it and on its order L). It makes one key pair at run time, takes the pair's scalar as §5.1.5 derives it
+from the seed (checked: the scalar times the base point is the pair's public key), draws a random nonce r, and forms
+`R` = [r]B + T and `S` = (r + k * scalar) mod L, with k the SHA-512 of `R`, the key and the PAE as §5.1.6 step 4 says.
+T is a point of order 8: the first of the two `y` values that §2.7 "A weak key" prints, sign bit clear, decoded by
+§5.1.3 and proved in the run ([8]T is the neutral point, [4]T is not). Before the vector is written the run proves,
+with that arithmetic and no library: `R` decodes and is in its canonical form; `S` is below L; the equation with the
+factor 8 holds; the one without it does not; `R` is no small-order point and its part outside the prime-order group
+has order exactly 8; the key is a point of order L (so no weak key of §2.7); the control's signature satisfies both
+equations. Then `crypto.verify` is asked: it refuses the signature and accepts the control's, or the run stops.
+
+**Both runtimes** (the self-check, below, run once on each, over the committed file): Node 24.13.0 (OpenSSL 3.5.4)
+and the unpacked Electron 43.8.10 (BoringSSL; its Node 24.22.1, with `ELECTRON_RUN_AS_NODE`) both give `false` for
+the M-1 signature and `true` for the control's, and the same answers for the two entries of the third vector.
+
+**The private half.** The pair's seed, its scalar and the nonce stay in the variables of the generator's block; none
+is exported to a file, printed or logged, and all are gone when the process ends (C8; §10.7 "No private key"). The
+block checks that none of them stands in the two envelopes' bytes, and the last step scans the written file's text
+for them (hex, base64, base64url) with the other seeds of the run. A signature with a random nonce reveals nothing
+about the key as long as the nonce is not reused or revealed; this nonce signed once.
+
+**The m-7 strings.** A lone surrogate has no UTF-8 form (§2.3 "Text"), so it stands in a JSON text only as an escape,
+and the text is plain ASCII: the envelope holds `\uD800` twice and `\uDFFF` once, the payload `\uD800` six times and
+`\uDFFF` five times. One `group` is U+D800 alone and the other is U+DFFF followed by U+D800 (two lone surrogates, no
+pair), so a reader that replaced them (by U+FFFD, on a way through UTF-8) would hand back other strings than the
+`expect` holds, and could no longer tell the two groups' code units apart from any other replaced string. In the
+vector file the `expect`'s strings are `\ud800` and `\udfff` escapes as well. §2.4's "Later writers" rows do not yet
+forbid such strings; the disposition gives the writers that duty (write none), and the release tools are to refuse
+them. This vector pins release 1's reader only.
+
+**The m-6 size.** `JSON.stringify` writes the number -0 as `0`, so the payload's text is made by replacing the first
+entry's number with the two characters `-0`; the run checks that `JSON.parse` gives -0 for it (`Object.is`). The
+record at `f1864cbf` accepts the value (§4.3: a safe integer in the range) and does not say which zero an accepted
+payload carries; the orchestrator's decision on m-6 is that it carries 0, and the record's §4.3 is to say "`-0` is 0"
+in a commit after `f1864cbf`, which this file cannot name yet. The vector's `expect` holds `0`, as JSON writes either
+zero: **a test whose equality does not tell -0 from 0 (a comparison of JSON texts, or `==`) does not prove this
+vector's point**; one that does (`Object.is`, or a deep equality that tells the two apart) does.
+
+**How the file was made.** `node generate.mjs --out <an empty folder> --only=vectors-review2.json`, Node 24.13.0
+(OpenSSL 3.5.4), Windows 11. Like the `--only=vectors-edges.json` form it builds every vector of the set (so an id of
+the new file cannot repeat an older one) and writes this file alone; the run made 713 key pairs, of which this file's
+vectors use four (the M-1 pair, the third vector's embedded key and the key of its first signature entry, which the
+verifier does not embed, and the fourth vector's key). Both `--only` forms and a full run refuse a folder that holds a vectors file. **The
+committed files are the golden**, and of the seven only `vectors-review2.json` is the output of the `generate.mjs`
+committed with it: `vectors-edges.json` is the output of the generator at `f1864cbf` (sha256
+`2d8dddb9279cadee790abf5e674ba78ddd62c89c1ecc1c736067966236e62a78`), and the first five of the generator at
+`d2784a2b` (sha256 `59421ef8ce1b023e11925c0eb366dc15f373dc052730f5ed3204d50687b05baf`); the vector-building code for
+those six is unchanged, and a full run of this generator to a scratch folder gave their 869 ids with the same `why`,
+`host` and `expect` as the committed files.
+
+**Self-check.** A second script (with the task's working papers, not in the repository), written after the generator
+with curve arithmetic of its own in another form (extended coordinates, RFC 8032 §5.1.4), its own strict base64
+reading and its own PAE: its arithmetic verifies RFC 8032 §7.1's five vectors (`spec/ed25519.json`) under both
+equations; it re-derived each `expect` (4 of 4 agree), confirmed each claim above for the M-1 signature and its
+control, counted the escapes, found no replacement character, found the one `-0` in the fourth payload's text, and tried every 32-byte window of each envelope,
+payload and signature as an Ed25519 seed, and each signature half as a scalar, against the vectors' keys (none). It
+shares this writer's reading of the record. No reviewer has seen these four vectors.
+
+**Limits.** One M-1 vector: the part of order 8 stands in `R`, of a signature whose key is an ordinary one. A key
+with such a part is not covered here (§2.7's weak-key row covers only the small-order keys, as it says). The vector
+holds a part of order 8, not one of order 2 or 4. The m-7 vector holds U+D800 and U+DFFF only, and no lone surrogate
+in a field release 1 interprets: `payloadType` (refused: `env-type-…` in `vectors-envelope.json`) and `summary`
+(ignored: `pay-summary-lone-surrogate-…`) have their vectors; a member `name` with one breaks §4.4's character rule.
+
 ## Limits a reader should know
 
 - `now` has whole seconds (§10.7), so the vectors past the 24-hour and 365-day boundaries are 1,000 ms past them, not
@@ -217,9 +344,11 @@ only, at the end (and, for `sha256`, at the start), not other control characters
 - `env-verify-signature-s-not-below-l` holds under Node's OpenSSL here; T4.4c runs it under Electron's BoringSSL.
 - Not covered, because §10.7's schema cannot say it: a host `osVersion` of `null` on `win32` or `darwin` (the schema
   types it as `process.getSystemVersion()`'s string there).
-- Left out, though the record decides it: a `files[]` `size` of `-0`. `JSON.parse` gives -0, a safe integer in range,
-  so §4.3's row accepts it; but `JSON.stringify` writes -0 as `0`, so a vector's `expect` cannot hold the value, and
-  a test's deep equality tells -0 from 0.
+- A `files[]` `size` written `-0` is accepted and carried as 0 (`JSON.parse` gives -0, a safe integer in §4.3's range;
+  the orchestrator's decision of 2026-11-26 on the second review's m-6: "`-0` is 0"). Its vector is
+  `rev2-files-size-minus-zero-carried-as-zero-accepted` in `vectors-review2.json`. _Was:_ "Left out, though the
+  record decides it: … a vector's `expect` cannot hold the value" (true of -0 itself; the expected value is now 0,
+  which a vector can hold).
 - `cap-payload-largest-accepted` carries its padding inside the payload; one letter in an ignored envelope key fits
   the base64's blocks of four characters to the cap. The other cap vectors pad an ignored envelope key around a small
   payload.

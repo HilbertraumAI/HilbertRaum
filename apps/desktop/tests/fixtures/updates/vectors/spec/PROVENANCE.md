@@ -4,9 +4,12 @@ Written on 2026-11-26 by the wave's negative-vector writer (Fable 5.2, task T4.4
 `930b7d4c` (`docs/app-updates.md` §2.3, §2.7, §10.7), from the sources below only. Before which code existed: written
 at `930b7d4c`, before the verifier was committed; T4.1 was writing it (the envelope's verifier, the key-set parser and
 their tests) in the same tree, and this writer saw only its file names in one `git status` line and opened none of
-them. No expected value was taken from the code under test. The record commit stays citable only while the phase's
-pull request keeps it reachable (a merge commit, not a squash). Frozen with F-1 and F-3: a new case is a new vector; a changed vector after release 1 is an owner
-call (§1.5). Locked by `../../../golden-fixtures.sha256`.
+them. No expected value was taken from the code under test. Frozen with F-1 and F-3: a new case is a new vector; a
+changed vector after release 1 is an owner call (§1.5). Locked by `../../../golden-fixtures.sha256`.
+
+**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `63201772` and `5e01fff0`) is a commit of
+the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if the phase's pull request is
+merged with a merge commit, not squashed or rebased.
 
 **Changed on 2026-11-26, before release 1 (weak keys; owner's decision after T4.4c, Δ-78).** The record's §2.7 gained
 the row "A weak key" at commit `63201772`: the key-set parser refuses a weak key, and with it the whole set. The same
@@ -36,18 +39,23 @@ since commit `5e01fff0`. The same writer (Fable 5.2) added them from the record 
   before (the generator ran again); their expected values are of the same form. No other vector changed, and none was
   removed. `pae.json` and `ed25519.json` are byte for byte the files of the first writing.
 
+**Changed on 2026-11-26, before release 1 (the second review's m-12): this file only.** Every sha256 it cites is
+written out in full, the merge rule above covers every cited commit, and "Limits" says that the checkers are not in
+the repository. No vector and no other file of the set changed.
+
 ## Sources
 
 | Source | Version | Used for |
 |---|---|---|
-| DSSE `protocol.md` | `secure-systems-lab/dsse` commit `75a79b6ed61c63dabf291657e076d120d95a39a1` (the copy's sha256 `6c0d9654…76253`) | `pae.json` |
-| RFC 8032, §7.1 "Test Vectors for Ed25519" | RFC 8032, January 2017, plain text (the copy's sha256 `ed63657f…3c4c3`) | `ed25519.json`, the keys of `key-set.json` |
+| DSSE `protocol.md` | `secure-systems-lab/dsse` commit `75a79b6ed61c63dabf291657e076d120d95a39a1` (the copy's sha256 `6c0d965475162230f9f461acf634b4d4b409eab1a1839d31a9c24c76b3676253`) | `pae.json` |
+| RFC 8032, §7.1 "Test Vectors for Ed25519" | RFC 8032, January 2017, plain text (the copy's sha256 `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3`) | `ed25519.json`, the keys of `key-set.json` |
 | `docs/app-updates.md` §2.7 ("Shape", "The empty set", "A key's id", "A set that does not read", "The file readers"), §2.3 ("The base64 grammar", "JSON"), §10.7 | commit `930b7d4c` | `spki`, `keyId`, every `expect` of `key-set.json` but the weak-key vectors' |
 | `docs/app-updates.md` §2.7 ("A weak key", and "A set that does not read" as it then stands) | commit `63201772` | the `expect` of the `weak-…`, `not-weak-…` and `any-32-bytes-…` vectors |
 | `docs/app-updates.md` §2.7 ("A weak key"), §10.7 ("`spec/key-set.json`": "one value strictly between: `y` = p + 2 and 2^255 − 2, each sign bit") | commit `5e01fff0` | the `expect` of the four `weak-non-canonical-y-p-plus-2…` and `…-y-2-255-minus-2…` vectors |
 | RFC 8032, §5.1.3 "Decoding" and §5.1's curve constants | the same copy | a cross-check of the row's five `y` values (below); no expected value comes from it |
 
-The two copies are working papers of the wave and are not in the repository.
+The two copies are working papers of the wave and are not in the repository; a reader who fetches the same versions
+can compare the sha256 values above.
 
 ## The files
 
@@ -109,7 +117,10 @@ keys are the same values. The generator also checks that each RFC signature veri
 | `not-weak-order-8-b-last-byte-minus-1` | `c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03f9` | `823202f3229e7efc8a014bc3feddf31a314e24c3637816b5b32beb8b50e785c7` | `MCowBQYDK2VwAyEAxxdqcD1N2E+6PAt2DRBnDyogU/osOczGTsf9d5KsA/k=` |
 
 The two `any-32-bytes-…` vectors (32 bytes `00`, 32 bytes `ff`) held an id each until the weak-key change
-(`722abd12…fa2efe0c`, `78dc9cff…fa1f1e44`); they now expect an invalid set and hold none.
+(`722abd12e99a5367f375aeb9672a8e07712e03c2add16fa8d6914d1cfa2efe0c` for the 32 bytes `00`,
+`78dc9cff8cfe1cf8348551902edb54b43b5509bdeb242207698344b5fa1f1e44` for the 32 bytes `ff`: the SHA-256 of §2.7's
+12-byte prefix followed by those bytes, computed again with `xxd` and `sha256sum` when these values were written out
+in full); they now expect an invalid set and hold none.
 
 The ids of the run-time keys in `sixteen-keys`, `seventeen-keys` and the three `not-weak-generated-key-…` vectors are
 computed by the generator alone; the id form they follow is the one the fourteen rows above hold twice.
@@ -159,6 +170,12 @@ The weak-key vectors and the nine boundary controls use key bytes written from a
 made a private key for them.
 
 ## Limits a reader should know
+
+- **The checkers are not in the repository.** The self-check scripts of this set, the writer's notes on the weak-key
+  values and every reviewer's checker are working papers of the wave, kept outside the repository, as are the two
+  reference copies. A later reader cannot run them again from the repository: what it holds is the vectors, this
+  generator (which needs the two copies as its inputs) and the tests that read the vectors. The second-tool lines
+  above ("`spki` and `keyId`, computed twice") can be run again by anyone, from the hex this file prints.
 
 - The four controls that are no curve point (`not-weak-y-2`, `not-weak-y-p-minus-2`,
   `not-weak-order-8-a-first-byte-plus-1`, `not-weak-order-8-b-first-byte-minus-1`) expect a set that reads, as §2.7
