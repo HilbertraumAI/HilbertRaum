@@ -1400,7 +1400,10 @@ Each build leg runs one step, "Check the packaged app's embedded update keys (ap
 
 What it checks: the file's packed row reads every file under `out/main` in that archive (chunks and
 any `.map` included) and passes only when the key-set marker is found there exactly once, in a `.js`,
-`.mjs` or `.cjs` file, as one string literal opened and closed by the same quote, its value reads
+`.mjs` or `.cjs` file, as one string literal opened and closed by the same quote (a byte search, not a
+parse: a copy of the set without quotes, as in a plain comment, fails, while a quoted copy in a comment
+or inside another string is not told apart from one in code; [`security-model.md`](security-model.md)
+"Update trust"), its value reads
 through the app's one key-set parser, and that value equals the checkout's `keys.json` set byte for
 byte (in order too). An empty set on both sides passes, so a dispatch or walk build made before the
 owner's key ceremony is fine here; refusing an empty set is the sell gate's and the pre-publish

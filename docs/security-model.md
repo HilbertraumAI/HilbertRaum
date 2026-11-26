@@ -4345,7 +4345,7 @@ reasons) is in the design record's §2, and the recorded limits are in
 
 **The envelope verifier** (`services/updates/envelope.ts`, `verifyEnvelope`; record §2.3). One pure
 function is given the bytes of the update file's signed envelope (a DSSE envelope), the embedded keys
-and the running version. An empty key set refuses before a byte is read. A file over 4 MiB, or with
+and the running version. An empty key set refuses before a byte is read. An envelope over 4 MiB, or with
 more than 64 signature entries, is "too new for this version", never "not genuine": the caps leave
 room for later releases. The bytes must be strict UTF-8 without a byte-order mark and one JSON object
 with a `signatures` array and a string `payloadType` and `payload`, the payload in a strict base64
@@ -4358,8 +4358,15 @@ id, otherwise "signed with a newer key". Only after a signature verified does th
 what the file is (a release, a file for a newer HilbertRaum, or no update at all), so no field outside
 the signature decides how a file is read. The verified payload bytes are handed on exactly as they
 were signed, in a buffer of their own, never re-encoded or read again from the envelope. The function
-never throws. The tests and the release tools run on Node's OpenSSL, the app on Electron's BoringSSL;
-when P4 ran the contract vectors on both, every answer was the same (record §10.7).
+never throws. The tests and the release tools run on Node's OpenSSL, the app on Electron's BoringSSL.
+Measured at P4's exit, all 1,047 committed contract vectors (at commit `8ea9d58c`) gave the same answer
+in the packaged app (Electron 43.8.10, BoringSSL) as on Node 24.13 (OpenSSL 3.5.4), each the answer the
+vector expects; the run's records are kept outside the repository (record §10.7). The two libraries are
+known to differ in two cases that a genuine release never meets: under a weak key, which release 1
+never embeds (below), and on a signature whose `R` is the curve's neutral point, which only the key's
+holder can make and which a standard RFC 8032 signer makes with a chance of about 1 in 2^252. OpenSSL
+accepts that signature and BoringSSL refuses it; the release side's duty to sign with a standard signer
+is what keeps the two in step (record §2.3, "Verification" and "Writers: the caps and the signer").
 
 **The payload check** (`services/updates/payload.ts`, `checkPayload`; record §2.4, §2.5). It reads
 only the verified bytes, with the envelope's JSON rules; a payload it cannot read is "too new", since a
@@ -4389,13 +4396,14 @@ build made before it; refusing an empty set at sale belongs to the sell gate and
 (P5, not built yet).
 
 **Weak keys** (owner, 2026-11-26; record §2.7, "A weak key"). The parser also refuses a weak key: an
-encoding of one of Ed25519's small-order points, or a non-canonical encoding. Under such a key a
-signature made without any private key can verify, and whether it does depends on the crypto library:
+encoding of one of Ed25519's small-order points, or a non-canonical encoding. Under a small-order key
+a signature made without any private key can verify, and whether it does depends on the crypto library:
 measured in P4, Node 24.13's OpenSSL, on which the tests and the release tools run, accepts such
-signatures, and Electron 43.8.10's BoringSSL, which the app runs on, refuses them. Release 1 refuses the
-key itself rather than rest a frozen rule on a library's behaviour. A key made by an Ed25519 key
-generator is never weak. The rule does not make a key the owner's: a key whose private half is public
-reads as valid and verifies in both libraries, and the key proof below keeps such a key out.
+signatures, and Electron 43.8.10's BoringSSL, which the app runs on, refuses them. A non-canonical
+key encoding is refused together with the small-order ones. Release 1 refuses the key itself rather
+than rest a frozen rule on a library's behaviour. A key made by an Ed25519 key generator is never weak.
+The rule does not make a key the owner's: a key whose private half is public reads as valid and
+verifies in both libraries, and the key proof below keeps such a key out.
 
 **The release guard** (`services/updates/bundle-check.ts`, `checkBundleKeys`; record §2.7;
 [`packaging.md`](packaging.md) "The release workflow"). Each build leg of `release.yml` (Windows,

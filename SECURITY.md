@@ -71,10 +71,13 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   built; [`docs/security-model.md`](docs/security-model.md) "Update trust"). An update file counts only
   when one of the Ed25519 public keys embedded in the app verifies its signature: no online service, no
   trust on first use and no key a user can add. The private keys never leave the owner's offline
-  custody (never on GitHub, never in CI). Three keys are embedded, any one of which signs alone, so a
-  lost key is replaced by another; a Kit cannot withdraw a key, so a stolen one stays trusted on every
+  custody (never on GitHub, never in CI). Release 1 embeds three keys, any one of which signs alone, so
+  a lost key is replaced by another; a Kit cannot withdraw a key, so a stolen one stays trusted on every
   Kit that does not install the release that drops it, and again on a Kit that goes back to a version
-  that still embeds it. Each release build checks that its embedded keys are exactly the committed ones
+  that still embeds it. Each release build checks that the key-set text in its main bundle equals the
+  committed `keys.json`; that check does not see what the code makes of that text, so the owner's key
+  proof with each real key and a check of the key count the app reports, both planned before each
+  release that embeds the keys, cover the rest
   ([`docs/known-limitations.md`](docs/known-limitations.md) "App updates: the trust core" has the
   limits). This version holds the check, but no key yet and nothing that imports an update file.
   Report a suspected problem with an update file as any other vulnerability (above).

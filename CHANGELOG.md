@@ -61,7 +61,8 @@ from its first public `1.0.0` release onward.
   entirely offline, and refuses anything else with a reason. Nothing in the app can import an update file yet, and
   this version carries no update key, so it would accept none. Each start now notes in the app's diagnostics log
   how many update keys the app carries (a number only, never a key), and the project's release builds for
-  Windows, macOS and Linux check that the keys inside each package are exactly the ones in the source code.
+  Windows, macOS and Linux check that the key list inside each package matches the one in the source code's key
+  file.
 - **For Kit builders:** `build-commercial-drive` needs the Kit's support end, `-SupportEnd YYYY-MM`
   (`--support-end`), on every run but `-VerifyOnly`, writes it once to `config/kit-support.txt`, and writes the
   drive's release record as its last write before the final check; that check also refuses a Kit without these,

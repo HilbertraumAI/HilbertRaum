@@ -12,10 +12,10 @@ in the same tree, and this writer saw only its file names in one `git status` li
 verifier was committed later the same day (`d6618f79`, `937f6e7b`); the eleven vectors of the review round (below)
 were added after that, again without opening it.
 
-**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `5e01fff0` and `f1864cbf`; the verifier's
-`d6618f79` and `937f6e7b`; the review's `aeda35af`; `d2784a2b`, which holds the generator of the first five files)
-is a commit of the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if the phase's
-pull request is merged with a merge commit (as PR #1055 was), not squashed or rebased.
+**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `5e01fff0`, `f1864cbf` and `8ea9d58c`;
+the verifier's `d6618f79` and `937f6e7b`; the review's `aeda35af`; `d2784a2b`, which holds the generator of the first
+five files) is a commit of the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if
+the phase's pull request is merged with a merge commit (as PR #1055 was), not squashed or rebased.
 
 An independent review (Opus 5.5, the same day) re-derived every `expect` from the record with its own code, written
 before it opened this generator: no `expect` was wrong. Its mutation run (231 deliberate verifier bugs) found eight
@@ -35,6 +35,11 @@ core, T4.4d). The five files above stay byte for byte as committed; the new file
 its M-1, m-7 and m-6). The six files above stay byte for byte as committed; the new file has its own section below
 ("`vectors-review2.json`"). The same round wrote out in full every sha256 this file cites, named the commit of the
 earlier generator, and stated the merge rule above and the limit on working papers below (the review's m-12).
+
+**Changed on 2026-11-26, before release 1 (after P4's docs at `8ea9d58c`; their review's m-10): this file only.** The
+two places in "`vectors-review2.json`" that waited for a later commit of the record (the M-1 wording and "`-0` is 0")
+name `8ea9d58c`, and one limit says what the run of every vector under Electron at P4's exit settles, each with its
+_Was:_; the merge rule names `8ea9d58c`. No vector and no other file of the set changed.
 
 ## Sources
 
@@ -268,8 +273,9 @@ set's vectors or generator, nor the working papers of the verifier's tasks.
 3 gives the equation with the factor 8 and says the one without it is sufficient, so the RFC alone does not decide
 this vector. The answer is the review's disposition (the orchestrator, 2026-11-26): release 1 checks `S` below L and
 `[S]B = R + [k]A` without the factor 8, which is what Node 24.13.0's OpenSSL 3.5.4 and Electron 43.8.10's BoringSSL
-both decide; the record's §2.3 "Verification" is to say so in a commit after `f1864cbf`, which this file cannot name
-yet. If that wording does not land, this vector has no record row and is an owner call.
+both decide; the record's §2.3 "Verification" says so since commit `8ea9d58c` (T4.D, P4's docs), which is this
+vector's record row. _Was:_ "is to say so in a commit after `f1864cbf`, which this file cannot name yet. If that
+wording does not land, this vector has no record row and is an owner call."
 
 **How the M-1 signature was made.** The generator holds Ed25519's curve arithmetic of its own in BigInt (RFC 8032
 §5.1: the constants, the encoding, §5.1.3's decoding, the addition law; proved in the run on the base point as the
@@ -305,10 +311,11 @@ them. This vector pins release 1's reader only.
 **The m-6 size.** `JSON.stringify` writes the number -0 as `0`, so the payload's text is made by replacing the first
 entry's number with the two characters `-0`; the run checks that `JSON.parse` gives -0 for it (`Object.is`). The
 record at `f1864cbf` accepts the value (§4.3: a safe integer in the range) and does not say which zero an accepted
-payload carries; the orchestrator's decision on m-6 is that it carries 0, and the record's §4.3 is to say "`-0` is 0"
-in a commit after `f1864cbf`, which this file cannot name yet. The vector's `expect` holds `0`, as JSON writes either
-zero: **a test whose equality does not tell -0 from 0 (a comparison of JSON texts, or `==`) does not prove this
-vector's point**; one that does (`Object.is`, or a deep equality that tells the two apart) does.
+payload carries; the orchestrator's decision on m-6 is that it carries 0, and the record's §4.3 says "`-0` is 0"
+since commit `8ea9d58c` (_Was:_ "is to say … in a commit after `f1864cbf`, which this file cannot name yet"). The
+vector's `expect` holds `0`, as JSON writes either zero: **a test whose equality does not tell -0 from 0 (a
+comparison of JSON texts, or `==`) does not prove this vector's point**; one that does (`Object.is`, or a deep
+equality that tells the two apart) does.
 
 **How the file was made.** `node generate.mjs --out <an empty folder> --only=vectors-review2.json`, Node 24.13.0
 (OpenSSL 3.5.4), Windows 11. Like the `--only=vectors-edges.json` form it builds every vector of the set (so an id of
@@ -341,7 +348,9 @@ in a field release 1 interprets: `payloadType` (refused: `env-type-…` in `vect
 - `now` has whole seconds (§10.7), so the vectors past the 24-hour and 365-day boundaries are 1,000 ms past them, not
   1 ms.
 - No vector expects a depth refusal, and none nests deeper than a few levels (§10.7 "Depth").
-- `env-verify-signature-s-not-below-l` holds under Node's OpenSSL here; T4.4c runs it under Electron's BoringSSL.
+- `env-verify-signature-s-not-below-l` holds under Node's OpenSSL here, and gave the same answer under Electron
+  43.8.10's BoringSSL, with every vector of this set as committed at `8ea9d58c` (measured at P4's exit, outside the
+  repository). _Was:_ "T4.4c runs it under Electron's BoringSSL."
 - Not covered, because §10.7's schema cannot say it: a host `osVersion` of `null` on `win32` or `darwin` (the schema
   types it as `process.getSystemVersion()`'s string there).
 - A `files[]` `size` written `-0` is accepted and carried as 0 (`JSON.parse` gives -0, a safe integer in §4.3's range;

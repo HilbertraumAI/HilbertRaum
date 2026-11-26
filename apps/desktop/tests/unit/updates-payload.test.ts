@@ -27,10 +27,10 @@ import { envelopeBytes, vectorSetFiles } from '../helpers/update-vectors'
 
 // The update file's signed payload (app-update W-2, W-63, W-75; F-2, F-4, F-18's names; T4.2): every row is a row of the
 // record's tables (docs/app-updates.md §2.4 "The payload's values", §2.5 "The version rule's values", §2.10 "The
-// verdicts", §4.3's `files[]` row, §4.5's order), written out by hand. Release 1 answers these for ever. The payload check
-// takes the verified arm of verifyEnvelope's result (the T4.2 sheet's Q8: "verify before parsing" holds in the type), so
-// these rows build `{ verified: true, payload }` directly; the golden vectors below run the whole pipeline over signed
-// envelopes. Non-ASCII test strings are written as `\u{…}` escapes.
+// verdicts", §4.3's `files[]` row, §4.5's order), written out by hand. Release 1 answers these for ever. The payload
+// check's type asks for the verified arm of verifyEnvelope's result; that the bytes were verified is the caller's duty
+// (payload.ts's header, CF-51), so these rows build `{ verified: true, payload }` directly; the golden vectors below run
+// the whole pipeline over signed envelopes. Non-ASCII test strings are written as `\u{…}` escapes.
 
 const sha = (label: string): string => createHash('sha256').update(label).digest('hex')
 

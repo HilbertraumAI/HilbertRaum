@@ -222,7 +222,9 @@ describe('checkBundleKeys: where the embedded value ends, and what else the bund
     expect(checkBundleKeys([file('index.mjs', text)], keysJson(set))).toEqual(notQuoted)
   })
 
-  // Review R-2: a comment holds no quoted literal of the form the bundler writes, so a set that stands only in one fails.
+  // Review R-2: a set that stands only in a comment without quotes fails. A quoted copy in a comment or inside another
+  // string passes (the guard reads bytes and does not parse JavaScript: the recorded limit of its bounded claim, record
+  // §2.7 "The release guard's reading"); these rows hold the unquoted form only.
   it.each<[string, string, string]>([
     ['a line comment', `// ${set}\nexport {};\n`, set],
     ['a line comment at the end of the file', `// ${set}`, set],

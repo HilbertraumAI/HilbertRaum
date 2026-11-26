@@ -4835,12 +4835,12 @@ release guard that checks those keys in every release build ([`security-model.md
 from then on. What P4's reviews accepted as built:
 
 **The verifier and the payload check**
-- **A hostile file at the caps holds the check for about a second.** The check is synchronous, and a
-  file at the 4 MiB cap whose 64 signatures verify under no key costs 64 signature checks per embedded
-  key. Measured in a packaged build (Electron 43.8.10, BoringSSL): about 0.9 s with release 1's three
-  keys and 4.8 to 4.9 s with sixteen, the most a key set may hold; a genuine file takes 14 to 23 ms.
-  Whether the import runs the check off the app's main thread is P6's decision; until then this is the
-  bound.
+- **A hostile file at the caps holds the check for about a second.** The check is synchronous, and an
+  update file whose signed envelope is at the 4 MiB cap and whose 64 signatures verify under no key
+  costs 64 signature checks per embedded key. Measured in a packaged build (Electron 43.8.10,
+  BoringSSL): about 0.9 s with release 1's three keys and 4.8 to 4.9 s with sixteen, the most a key
+  set may hold; a genuine file takes 14 to 23 ms. Whether the import runs the check off the app's main
+  thread is P6's decision; until then this is the bound.
 - **A forged file can read "signed with a newer key".** When no signature verifies and none names a key
   the app embeds, the answer is "signed with a newer key: install the in-between update first", also for
   a forgery or a file with no signature at all. It is refused either way, but the message may send
@@ -4852,9 +4852,10 @@ from then on. What P4's reviews accepted as built:
   side's pre-publish check (P5, not built yet) is where all three are refused
   ([`app-updates.md`](app-updates.md) §2.4, "Later writers: `version`").
 - **A key whose private half is public reads as valid.** The parser refuses weak keys (the small-order
-  and non-canonical encodings, under which a signature can verify without any private key), but it
-  cannot tell a real key from one whose private half is known. The key proof with each real private key
-  and the key count keep such a key out of a release ([`app-updates.md`](app-updates.md) §2.7, §2.8).
+  encodings, under which a signature can verify without any private key, and with them the
+  non-canonical ones), but it cannot tell a real key from one whose private half is known. The key
+  proof with each real private key and the key count keep such a key out of a release
+  ([`app-updates.md`](app-updates.md) §2.7, §2.8).
 - **A lower system version from the operating system refuses a floor.** A Windows program started in a
   compatibility mode, or a Mac process with `SYSTEM_VERSION_COMPAT=1`, may be given a lower system
   version; an update that names a floor above it is then refused as needing a newer system (fail closed;

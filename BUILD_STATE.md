@@ -354,7 +354,7 @@ manual release acceptance, one phase on its branch (22), one drafted phase (30).
    `services/{workspace-vault,db,policy,drive,commercial-drive,workspace,models,resolve-model,assets,runtime-download}.ts`,
    `services/{fs-retry,binary-verifier,engine-health,ocr-install,logging,log-redact,failure-for-log,chat,vision/history}.ts`,
    `services/{audit,collections,retrieval-scope,evidence-reviews,local-api/token,analysis/summary-cache}.ts`, `ipc/{chat-stream,registerAuditIpc}.ts`,
-   `services/updates/{update-log,drive-release,kit-support,version,envelope,payload,keys,member-name,bundle-check}.ts`, `services/updates/keys.json`, `services/{settings,runtime/gpu-failure}.ts`, `ipc/{registerModelIpc,registerBenchmarkIpc}.ts`,
+   `services/updates/{update-log,drive-release,kit-support,version,envelope,payload,keys,member-name}.ts` and `bundle-check.ts` (the release guard: replaceable, record §2.7), `services/updates/keys.json`, `services/{settings,runtime/gpu-failure}.ts`, `ipc/{registerModelIpc,registerBenchmarkIpc}.ts`,
    `services/{security/crypto,transcriber/cli,zim/tools,zim/identity,zim/packs,zim/transients}.ts`, `services/runtime/{sidecar,engine-load}.ts`,
    `services/ingestion/{index,stored-copy,stored-copy-leaf}.ts`, `services/skills/{run,invoice-run,registry,loader,installer}.ts`, `{index,backend-start,shutdown,close-guard}.ts`,
    `tools/assert-commercial-drive.ts`, `ipc/{registerEngineIpc,engine-recheck,registerSkillsIpc,registerStartFailureIpc}.ts`,

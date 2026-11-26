@@ -7,9 +7,9 @@ their tests) in the same tree, and this writer saw only its file names in one `g
 them. No expected value was taken from the code under test. Frozen with F-1 and F-3: a new case is a new vector; a
 changed vector after release 1 is an owner call (§1.5). Locked by `../../../golden-fixtures.sha256`.
 
-**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `63201772` and `5e01fff0`) is a commit of
-the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if the phase's pull request is
-merged with a merge commit, not squashed or rebased.
+**The merge rule.** Every commit this file cites (the record's `930b7d4c`, `63201772`, `5e01fff0` and `8ea9d58c`) is a
+commit of the phase branch `feat/updates-trust-core`. Each stays reachable, and so citable, only if the phase's pull
+request is merged with a merge commit, not squashed or rebased.
 
 **Changed on 2026-11-26, before release 1 (weak keys; owner's decision after T4.4c, Δ-78).** The record's §2.7 gained
 the row "A weak key" at commit `63201772`: the key-set parser refuses a weak key, and with it the whole set. The same
@@ -42,6 +42,11 @@ since commit `5e01fff0`. The same writer (Fable 5.2) added them from the record 
 **Changed on 2026-11-26, before release 1 (the second review's m-12): this file only.** Every sha256 it cites is
 written out in full, the merge rule above covers every cited commit, and "Limits" says that the checkers are not in
 the repository. No vector and no other file of the set changed.
+
+**Changed on 2026-11-26, before release 1 (after P4's docs at `8ea9d58c`; their review's m-10): this file only.** Two
+limits below say what the record at `8ea9d58c` and the run of every vector under Electron at P4's exit now settle
+(the duplicate `key_set`; the controls that are no curve point), each with its _Was:_, and the merge rule names
+`8ea9d58c`. No vector and no other file of the set changed.
 
 ## Sources
 
@@ -180,8 +185,12 @@ made a private key for them.
 - The four controls that are no curve point (`not-weak-y-2`, `not-weak-y-p-minus-2`,
   `not-weak-order-8-a-first-byte-plus-1`, `not-weak-order-8-b-first-byte-minus-1`) expect a set that reads, as §2.7
   says: only a weak key is refused, and no library is asked whether a key is a point. Node 24.13.0's OpenSSL loads
-  them. Whether Electron's BoringSSL loads them is T4.4c's run; a throw there would make them invalid by §2.7's own
-  `createPublicKey` clause. No signature verifies under such a key.
+  them, and so does Electron 43.8.10's BoringSSL: every vector of `key-set.json` as committed at `8ea9d58c` gave the
+  same answer there as on Node (measured at P4's exit, outside the repository). A throw there would have made them
+  invalid by §2.7's own `createPublicKey` clause. No signature verifies under such a key. _Was:_ "Whether Electron's
+  BoringSSL loads them is T4.4c's run; a throw there would make them invalid …"
 - The weak-key vectors hold the ends of the non-canonical range (p, p + 1, 2^255 - 1) and two values inside it
   (p + 2, 2^255 - 2), not all 19 values.
-- A `keys.json` with a duplicate `key_set` key has no vector: §2.7 does not say which one counts.
+- A `keys.json` with a duplicate `key_set` key has no vector. The record's §2.7 ("The file readers") says the last one
+  counts, as built, since commit `8ea9d58c` (T4.5 m-9); no vector holds it. _Was:_ "§2.7 does not say which one
+  counts."

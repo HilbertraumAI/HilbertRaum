@@ -8,10 +8,12 @@
 // of a multibyte character is below 0x80, so a byte search is exact and nothing is decoded that might not decode. The
 // one occurrence must stand as one quoted literal (review R-1): the same quote directly before the marker and directly
 // after the run of value characters, so the string the app reads at run time is exactly the run that is compared (no
-// escape, line continuation or other character can carry it on, and a set in a comment has no such quotes). What it
-// does not check: that the files are the whole bundle (the caller lists them), that the build is the one that ships (the
-// caller reads the packed app.asar), that the quoted literal is code rather than text inside a comment or another
-// string (it searches bytes, it does not parse JavaScript), or what other code in the bundle does with keys. A weak key
+// escape, line continuation or other character can carry it on). A set in a comment without quotes fails; a quoted
+// copy in a comment or inside another string passes, the recorded limit of the guard's bounded claim (§2.7 "The
+// release guard's reading"). What it does not check: that the files are the whole bundle (the caller lists them),
+// that the build is the one that ships (the caller reads the packed app.asar), that the quoted literal is code rather
+// than text inside a comment or another string (it searches bytes, it does not parse JavaScript), or what other code
+// in the bundle does with keys. A weak key
 // (§2.7 "A weak key") is refused by `parseKeySet` on either side, so it fails here as an unreadable set. The JSON.parse("...") form a bundler can write for a JSON import has
 // escaped quotes around the value, so it fails here (loudly); this build writes the plain literal.
 //

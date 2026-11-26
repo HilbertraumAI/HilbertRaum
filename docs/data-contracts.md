@@ -2362,9 +2362,9 @@ first caller.
   padding (60 characters); other fields are ignored. A key's id is the lower-case hex SHA-256 of its 44
   bytes, the `keyid` the release tools write. The committed set is the empty one until the owner's key
   ceremony. The app embeds `key_set` through the bundler's JSON import, as one plain string literal in
-  the main bundle, where the release guard finds it; no file under `src/` spells the marker with its
-  colon. Only `keys.ts` imports `keys.json`; the release tools, the release guard and the walk read it as
-  a file (`readKeysFile`).
+  the main bundle, where the release guard finds it; no other file under `src/` spells the marker with
+  its colon. Only `keys.ts` imports `keys.json`; the release guard and the repository rule read it as a
+  file (`readKeysFile`), and the release tools (P5) and the walk are to call the same function.
 - **The functions P5 and P6 call** (pure; none throws):
   - `verifyEnvelope(bytes, keys, runningVersion)` (`envelope.ts`) → `{ verified: true, payload }` (the
     payload bytes as signed, a `Buffer` of their own) or `{ verified: false, refusal }` (record §2.3).
