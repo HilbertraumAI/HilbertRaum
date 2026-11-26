@@ -121,15 +121,22 @@ describe('checkBundleKeys: the marker is found exactly once across out/main, in 
     expect(checkBundleKeys(files, keysJson(set))).toEqual({ ok: false, failure: { check: 'keys', reason: 'marker-not-found' } })
   })
 
-  // Sheet decision 1 (T4.3): a set found only in a file that is not code is a build whose code carries no set.
+  // Sheet decision 1 (T4.3): a set found only in a file that is not code is a build whose code carries no set. Review
+  // R-4: the reason names what is tested (a name that does not end .js, .mjs or .cjs), not only a source map.
   it.each<[string, BundleFile]>([
     ['a .map (the source text, not the code)', file('index.mjs.map', sourceMap(`{\n  "key_set": "${set}"\n}\n`))],
-    ['a JSON file', file('keys-1a2b.json', `{"key_set":"${set}"}`)]
-  ])('once, only in %s: marker-only-in-map', (_label, only) => {
+    ['a JSON file', file('keys-1a2b.json', `{"key_set":"${set}"}`)],
+    ['a file without an extension', file('chunks/keys', bundleText(set))]
+  ])('once, only in %s: marker-not-in-code', (_label, only) => {
     expect(checkBundleKeys([file('index.mjs', 'export {};\n'), only], keysJson(set))).toEqual({
       ok: false,
-      failure: { check: 'keys', reason: 'marker-only-in-map', path: only.path }
+      failure: { check: 'keys', reason: 'marker-not-in-code', path: only.path }
     })
+  })
+
+  // Review R-4: the extension is compared in any letter case, so `.JS` and `.MJS` name code too.
+  it.each(['INDEX.MJS', 'chunks/keys-1a2b.JS', 'chunks/keys-3c4d.Cjs'])('once, in %s (the extension in another letter case): ok', (path) => {
+    expect(checkBundleKeys([bundle(set, path)], keysJson(set))).toEqual(ok(3, path))
   })
 })
 
@@ -169,16 +176,59 @@ describe("checkBundleKeys: a value either side's parser refuses fails as unreada
 
 describe('checkBundleKeys: where the embedded value ends, and what else the bundle holds', () => {
   const set = setOf([A, B, C])
+  // Review R-1: the literal is the committed string and nothing more, so the same quote stands directly before the
+  // marker and directly after the run of value characters, in any of the three quote styles.
   it.each<[string, string]>([
     ['a double quote', `const key_set = "${set}";\n`],
     ['a single quote', `const key_set = '${set}';\n`],
-    ['a backtick', `const key_set = \`${set}\`;\n`],
-    ['an escaped quote (a JSON.parse string)', `const keysJson = JSON.parse("{\\"key_set\\":\\"${set}\\"}");\n`],
-    ['a parenthesis', `use(${set});\n`],
-    ['a line end', `// ${set}\nexport {};\n`],
-    ['the end of the file', `// ${set}`]
-  ])('closed by %s: ok, the run of value characters exactly', (_label, text) => {
+    ['a backtick', `const key_set = \`${set}\`;\n`]
+  ])('opened and closed by %s: ok, the run of value characters exactly', (_label, text) => {
     expect(checkBundleKeys([file('index.mjs', text)], keysJson(set))).toEqual(ok(3))
+  })
+
+  const notQuoted: BundleKeysResult = { ok: false, failure: { check: 'keys', reason: 'marker-not-quoted', path: 'index.mjs' } }
+  /** A backslash, spelled so that no escape sequence stands in this file's text. */
+  const BS = String.fromCharCode(0x5c)
+  // The string goes on past the run the guard reads, so the running app's string is longer than the committed one:
+  // after an escape or a line continuation it holds a third key that keys.json lacks (review R-1's probe); after any
+  // other character it is a set the app's own parser refuses, so that build would embed no key at all.
+  const two = setOf([A, B])
+  it.each<[string, string]>([
+    ['an escaped comma (x2c) and a third key', `const key_set = "${two}${BS}x2c${C}";\n`],
+    ['an escaped comma (u002c) and a third key', `const key_set = "${two}${BS}u002c${C}";\n`],
+    ['a line continuation and a third key', `const key_set = "${two}${BS}\n,${C}";\n`],
+    ['a hyphen and a third key', `const key_set = "${two}-${C}";\n`],
+    ['a letter outside the value characters', `const key_set = "${two}${String.fromCodePoint(0xe9)}${C}";\n`]
+  ])('the string runs on past the value with %s: marker-not-quoted', (_label, text) => {
+    expect(checkBundleKeys([file('index.mjs', text)], keysJson(two))).toEqual(notQuoted)
+  })
+
+  it.each<[string, string]>([
+    ['another quote than the opening double quote', `const key_set = "${set}';\n`],
+    ['another quote than the opening single quote', `const key_set = '${set}\`;\n`],
+    ['another quote than the opening backtick', `const key_set = \`${set}";\n`],
+    ['an escaped quote (a JSON.parse string)', `const keysJson = JSON.parse("{\\"key_set\\":\\"${set}\\"}");\n`],
+    ['a line end, no closing quote', `const key_set = "${set}\nexport {};\n`],
+    ['the end of the file, no closing quote', `const key_set = "${set}`]
+  ])('the value is followed by %s: marker-not-quoted', (_label, text) => {
+    expect(checkBundleKeys([file('index.mjs', text)], keysJson(set))).toEqual(notQuoted)
+  })
+
+  it.each<[string, string]>([
+    ['a parenthesis (no quote at all)', `use(${set});\n`],
+    ['another character inside the string', `const key_set = "x${set}";\n`],
+    ['nothing (the file starts with the marker)', `${set}";\n`]
+  ])('the marker is preceded by %s: marker-not-quoted', (_label, text) => {
+    expect(checkBundleKeys([file('index.mjs', text)], keysJson(set))).toEqual(notQuoted)
+  })
+
+  // Review R-2: a comment holds no quoted literal of the form the bundler writes, so a set that stands only in one fails.
+  it.each<[string, string, string]>([
+    ['a line comment', `// ${set}\nexport {};\n`, set],
+    ['a line comment at the end of the file', `// ${set}`, set],
+    ['a block comment, the empty set on both sides', `/* ${MARKER} */ export {};\n`, MARKER]
+  ])('the set stands only in %s: marker-not-quoted', (_label, text, committed) => {
+    expect(checkBundleKeys([file('index.mjs', text)], keysJson(committed))).toEqual(notQuoted)
   })
 
   it('keys.json with a field of its own beside key_set (a fork may add one): ok', () => {
