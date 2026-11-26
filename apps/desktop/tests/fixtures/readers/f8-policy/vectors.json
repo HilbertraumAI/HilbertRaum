@@ -1,0 +1,874 @@
+{
+  "contract": "F-8, the update policy keys of config/policy.json (plan Appendix B; docs/app-updates.md §8.1, §3.6; W-13)",
+  "readers": {
+    "updatePolicy": "readUpdatePolicy(configDir) (src/main/services/policy.ts): install allowed|managed|invalid, maxVersion (the max_version text, or null), file read|none|unreadable; dev and packaged alike (the reader takes no build)",
+    "verdict": "updateInstallVerdict(policy, version): allowed|managed|invalid|above-max",
+    "privacy": "loadPolicy (dev and packaged): equal to the same file without its updates block, for every vector whose bytes parse (as UTF-8, nothing stripped) to an object"
+  },
+  "parts": "as f24-markers: a vector's bytes are its parts joined, `text` as UTF-8, `base64` decoded, `repeat` repeated `times` times. Bytes the repo hygiene nets refuse in a text file under tests/ (a NUL, a byte-order mark) and bytes that are not UTF-8 are held as base64. `absent`: no policy.json. `folder`: a folder at policy.json. `link`: policy.json is a symbolic link, to a file holding the parts (`file`) or to nothing (`dangling`). `denyRead`: the file holds the parts and the reader is refused reading it. `drive`: config/drive.json exists (default true)",
+  "maxVersionField": "a vector's maxVersion is the text of the max_version the reader returns, or null. It is null whenever install is not allowed: a cap means nothing while every install is blocked",
+  "writers": {
+    "why": "the HEAD writers emit X: buildPolicyJson and both prepare-drive twins, and the Kit builders pass the Kit switch",
+    "kit": { "updates": { "allow_online_check": true } },
+    "diy": "no updates key",
+    "dev": "no updates key"
+  },
+  "junk": {
+    "why": "each value replaces the key's value in `base` (for `updates`, the whole block; for `allow_online_check`, the key is added to the block); every one gives `expect`. The max_version row also runs every string of semver.invalid (expect invalid) and every string of semver.valid (expect allowed, maxVersion that string)",
+    "base": "{\"updates\":{\"allow_user_install\":true,\"max_version\":\"1.5.0\"}}",
+    "allow_user_install": { "values": ["false", "true", "no", "", 0, 1, null, [], [false], {}, { "value": false }], "expect": "invalid" },
+    "max_version": { "values": [1.5, 150, true, false, null, [], ["1.5.0"], {}, "v1.5.0", "1.5", " 1.5.0"], "expect": "invalid" },
+    "updates": { "values": [null, "x", 0, true, [], [{}]], "expect": "invalid" },
+    "allow_online_check": { "values": ["ask", 0, null, [], {}], "expect": "allowed" }
+  },
+  "vectors": [
+    {
+      "name": "no policy.json and no drive.json (a dev run, a standalone install)",
+      "class": "file",
+      "absent": true,
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "none",
+      "why": "O-1: such a root never had a policy file (loadPolicy's unprovisioned dir, #93)"
+    },
+    {
+      "name": "no policy.json on a prepared drive (drive.json there)",
+      "class": "file",
+      "absent": true,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, record §8.1: a missing policy.json keeps the signed import allowed and is shown as policy file unreadable (O-1)"
+    },
+    {
+      "name": "an empty file",
+      "class": "file",
+      "parts": [{ "text": "" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14: a damaged file keeps the import allowed"
+    },
+    {
+      "name": "whitespace only",
+      "class": "file",
+      "parts": [{ "text": " \n\t\r\n " }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14"
+    },
+    {
+      "name": "a trailing comma after an admin's block",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, O-16: the block is lost with the file, and the loss is shown (an admin's typo that lifted a block stays visible)"
+    },
+    {
+      "name": "a comment in front of an admin's block",
+      "class": "file",
+      "parts": [{ "text": "// managed by IT\n{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, O-16: JSON has no comments"
+    },
+    {
+      "name": "an admin's block cut short",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":fal" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, O-16"
+    },
+    {
+      "name": "two documents in one file",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}\n{}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, O-16"
+    },
+    {
+      "name": "a malformed file on a root with no drive.json",
+      "class": "file",
+      "parts": [{ "text": "{ not json" }],
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-1: a file is there, so this is damage, not a root without a policy"
+    },
+    {
+      "name": "one UTF-8 byte-order mark in front of an admin's block",
+      "class": "file",
+      "parts": [{ "base64": "77u/" }, { "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-2: exactly one leading U+FEFF is skipped (Windows PowerShell 5.1's Set-Content -Encoding UTF8 writes one); honouring the block is the closed direction"
+    },
+    {
+      "name": "one byte-order mark in front of a file with no updates block",
+      "class": "file",
+      "parts": [{ "base64": "77u/" }, { "text": "{\"network\":{\"allow_model_downloads\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-2, record §8.1: absent keys"
+    },
+    {
+      "name": "two byte-order marks in front of an admin's block",
+      "class": "file",
+      "parts": [{ "base64": "77u/77u/" }, { "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-2: only one mark is skipped; the second is not JSON"
+    },
+    {
+      "name": "UTF-16LE with its mark (FF FE)",
+      "class": "file",
+      "parts": [
+        { "base64": "//4=" },
+        { "base64": "ewAiAHUAcABkAGEAdABlAHMAIgA6AHsAIgBhAGwAbABvAHcAXwB1AHMAZQByAF8AaQBuAHMAdABhAGwAbAAiADoAZgBhAGwAcwBlAH0AfQA=" }
+      ],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14: the file is read as UTF-8 only"
+    },
+    {
+      "name": "UTF-16BE with its mark (FE FF)",
+      "class": "file",
+      "parts": [
+        { "base64": "/v8=" },
+        { "base64": "AHsAIgB1AHAAZABhAHQAZQBzACIAOgB7ACIAYQBsAGwAbwB3AF8AdQBzAGUAcgBfAGkAbgBzAHQAYQBsAGwAIgA6AGYAYQBsAHMAZQB9AH0=" }
+      ],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14"
+    },
+    {
+      "name": "a NUL byte after an admin's block",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}" }, { "base64": "AA==" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14: a NUL is not JSON whitespace"
+    },
+    {
+      "name": "a raw NUL inside an unrelated string",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},\"note\":\"a" }, { "base64": "AA==" }, { "text": "b\"}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14: a control character in a JSON string must be escaped"
+    },
+    {
+      "name": "the top level is an empty list",
+      "class": "file",
+      "parts": [{ "text": "[]" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3: not a policy file"
+    },
+    {
+      "name": "the top level is a list holding an admin's block",
+      "class": "file",
+      "parts": [{ "text": "[{\"updates\":{\"allow_user_install\":false}}]" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3"
+    },
+    {
+      "name": "the top level is a string",
+      "class": "file",
+      "parts": [{ "text": "\"x\"" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3"
+    },
+    {
+      "name": "the top level is a number",
+      "class": "file",
+      "parts": [{ "text": "1" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3"
+    },
+    {
+      "name": "the top level is null",
+      "class": "file",
+      "parts": [{ "text": "null" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3"
+    },
+    {
+      "name": "the top level is true",
+      "class": "file",
+      "parts": [{ "text": "true" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-3"
+    },
+    {
+      "name": "a folder at policy.json, on a root with no drive.json",
+      "class": "file",
+      "folder": true,
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-5, O-1: something is at the name, so this is damage, not a root that never had a policy"
+    },
+    {
+      "name": "a file the reader may not read, holding an admin's block, on a root with no drive.json",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "denyRead": true,
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "G-14, O-1: a read error is damage, not a missing file"
+    },
+    {
+      "name": "an admin's block in a file of exactly 1,048,576 bytes",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},\"pad\":\"" }, { "repeat": "a", "times": 1048527 }, { "text": "\"}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-4: the cap is 1,048,576 bytes, and a file at the cap is read"
+    },
+    {
+      "name": "an admin's block in a file of 1,048,577 bytes",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},\"pad\":\"" }, { "repeat": "a", "times": 1048528 }, { "text": "\"}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-4: over the cap the file is not read whole; the result is allowed, so the cap blocks nothing"
+    },
+    {
+      "name": "a link at policy.json to a file holding an admin's block",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "link": "file",
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-5: a link is followed, as loadPolicy follows it"
+    },
+    {
+      "name": "a dangling link at policy.json on a prepared drive",
+      "class": "file",
+      "link": "dangling",
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "O-5, O-1: as a missing file on a prepared drive"
+    },
+    {
+      "name": "allow_user_install twice, true last",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false,\"allow_user_install\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-6: the last one wins, as JSON.parse and loadPolicy read it"
+    },
+    {
+      "name": "allow_user_install twice, false last",
+      "class": "file",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":true,\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-6"
+    },
+    {
+      "name": "bytes that are not UTF-8 inside an unrelated string",
+      "class": "file",
+      "parts": [{ "text": "{\"note\":\"" }, { "base64": "/w==" }, { "text": "\",\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "F15: decoded as U+FFFD, the rest of the file is read"
+    },
+    {
+      "name": "an own __proto__ key at the top level holding an admin's block",
+      "class": "updates",
+      "parts": [{ "text": "{\"__proto__\":{\"updates\":{\"allow_user_install\":false}}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "own-property reads: __proto__ is a key like any other, and it is not `updates`"
+    },
+    {
+      "name": "a valid file with no updates block",
+      "class": "updates",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U1, record §8.1: absent keys mean today's behaviour"
+    },
+    {
+      "name": "an empty object",
+      "class": "updates",
+      "parts": [{ "text": "{}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "record §8.1"
+    },
+    {
+      "name": "an empty updates block",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U2, ED 5: every key absent"
+    },
+    {
+      "name": "updates is null",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":null}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U3, ED 5: a present updates that is not an object is junk (O-8 for null)"
+    },
+    {
+      "name": "updates is a list holding an object that allows",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":[{\"allow_user_install\":true}]}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U3, ED 5"
+    },
+    {
+      "name": "unknown keys inside updates",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"channel\":\"beta\",\"auto_install\":false,\"max_versions\":\"0.0.1\"}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U4, O-7: a later version's key never puts release 1 into an error"
+    },
+    {
+      "name": "a typo of allow_user_install, false",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_instal\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U4, O-7: names are exact (the admin section says to check that Settings, Updates says managed)"
+    },
+    {
+      "name": "case variants of allow_user_install, false",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"Allow_User_Install\":false,\"ALLOW_USER_INSTALL\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U4, O-7: names are case-sensitive"
+    },
+    {
+      "name": "a case variant of the updates block",
+      "class": "updates",
+      "parts": [{ "text": "{\"Updates\":{\"allow_user_install\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-7"
+    },
+    {
+      "name": "an own __proto__ key inside updates holding allow_user_install false",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"__proto__\":{\"allow_user_install\":false}}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "U5: own-property reads"
+    },
+    {
+      "name": "allow_user_install absent beside the Kit's key",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_online_check\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "A1, W-13: absent = allowed"
+    },
+    {
+      "name": "allow_user_install true",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "A2, record §8.1"
+    },
+    {
+      "name": "allow_user_install false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "A3, record §8.1: every install blocked (UPD-POLICY-MANAGED)"
+    },
+    {
+      "name": "allow_user_install false on a root with no drive.json",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "drive": false,
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "O-13: no build or posture axis; drive.json only tells a missing file apart"
+    },
+    {
+      "name": "allow_user_install is the string false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":\"false\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "A4, ED 5: junk blocks (UPD-POLICY-INVALID); never bool(value, base), whose every base is allowed"
+    },
+    {
+      "name": "allow_user_install is null",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":null}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "A4, O-8: null is present and not a boolean (the allow_local_api precedent)"
+    },
+    {
+      "name": "max_version a release",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1.5.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.5.0",
+      "file": "read",
+      "why": "M2, W-13: versions up to X allowed"
+    },
+    {
+      "name": "max_version a pre-release with build metadata, allow_user_install true",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":true,\"max_version\":\"2.0.0-rc.1+kit.3\"}}" }],
+      "install": "allowed",
+      "maxVersion": "2.0.0-rc.1+kit.3",
+      "file": "read",
+      "why": "M2, O-10"
+    },
+    {
+      "name": "max_version is null",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":null}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "M3, O-8"
+    },
+    {
+      "name": "max_version is a number",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":1.5}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "M3, W-13: a junk value blocks (UPD-POLICY-INVALID)"
+    },
+    {
+      "name": "max_version with a v in front",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"v1.5.0\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "M4, O-10: strict SemVer 2.0.0"
+    },
+    {
+      "name": "max_version with two parts",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1.5\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "M4, O-10"
+    },
+    {
+      "name": "allow_user_install false and a valid max_version",
+      "class": "combination",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false,\"max_version\":\"1.5.0\"}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "record §8.1 row 1: false with anything blocks every install"
+    },
+    {
+      "name": "allow_user_install false and a junk max_version",
+      "class": "combination",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false,\"max_version\":\"latest\"}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "record §8.1 row 1: managed before invalid"
+    },
+    {
+      "name": "a junk max_version first, allow_user_install false after it",
+      "class": "combination",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":7,\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "record §8.1 row 1: the order of the keys in the file does not matter"
+    },
+    {
+      "name": "a junk allow_user_install and a valid max_version",
+      "class": "combination",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":\"no\",\"max_version\":\"1.5.0\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "W-13, ED 5: junk with anything"
+    },
+    {
+      "name": "allow_user_install true and a junk max_version",
+      "class": "combination",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":true,\"max_version\":\"1.x\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "record §8.1 row 4"
+    },
+    {
+      "name": "allow_online_check false",
+      "class": "allow_online_check",
+      "parts": [{ "text": "{\"updates\":{\"allow_online_check\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "C1, G-14: release 1 does not act on the reserved key"
+    },
+    {
+      "name": "allow_online_check junk beside allow_user_install false",
+      "class": "allow_online_check",
+      "parts": [{ "text": "{\"updates\":{\"allow_online_check\":\"ask\",\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "C2, O-9: no value of the reserved key changes a verdict"
+    },
+    {
+      "name": "allow_online_check junk beside a valid max_version",
+      "class": "allow_online_check",
+      "parts": [{ "text": "{\"updates\":{\"allow_online_check\":[\"x\"],\"max_version\":\"1.5.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.5.0",
+      "file": "read",
+      "why": "C2, O-9: and it does not make the block invalid"
+    },
+    {
+      "name": "updates twice at the top level, an empty block last",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install\":false},\"updates\":{}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (review R1-5 (a)): the last updates block wins, as JSON.parse and loadPolicy read a duplicate key (O-6)"
+    },
+    {
+      "name": "updates twice at the top level, an admin's block last",
+      "class": "updates",
+      "parts": [{ "text": "{\"updates\":{},\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (a)): O-6, the other way round"
+    },
+    {
+      "name": "allow_user_install spelt with a JSON escape, false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_\\u0069nstall\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (b)): a name is compared after its JSON escapes are decoded (RFC 8259 §7), so this is allow_user_install"
+    },
+    {
+      "name": "max_version spelt with a JSON escape",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"\\u0031.0.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.0.0",
+      "file": "read",
+      "why": "Round 2 (R1-5 (b)): a value too: the cap is 1.0.0"
+    },
+    {
+      "name": "max_version twice, junk last",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1.5.0\",\"max_version\":\"latest\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (c)): the last max_version wins (O-6), and it is junk"
+    },
+    {
+      "name": "max_version twice, a release last",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"latest\",\"max_version\":\"1.5.0\"}}" }],
+      "install": "allowed",
+      "maxVersion": "1.5.0",
+      "file": "read",
+      "why": "Round 2 (R1-5 (c), the converse): the last one wins (O-6), so a duplicate is not junk in itself"
+    },
+    {
+      "name": "one byte-order mark, then whitespace, then an admin's block",
+      "class": "file",
+      "parts": [{ "base64": "77u/" }, { "text": "\r\n  {\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (d)): the one leading mark is skipped (O-2), and JSON allows whitespace before the value"
+    },
+    {
+      "name": "whitespace, then one byte-order mark, then an admin's block",
+      "class": "file",
+      "parts": [{ "text": " " }, { "base64": "77u/" }, { "text": "{\"updates\":{\"allow_user_install\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "Round 2 (R1-5 (d)): only a mark at the very start is skipped (O-2), and U+FEFF is not JSON whitespace (RFC 8259 §2)"
+    },
+    {
+      "name": "allow_user_install with a trailing space in its name, false",
+      "class": "allow_user_install",
+      "parts": [{ "text": "{\"updates\":{\"allow_user_install \":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (e)): names are exact (O-7), so a misspelt key blocks nothing"
+    },
+    {
+      "name": "max_version with a major of 300 digits",
+      "class": "max_version",
+      "parts": [{ "text": "{\"updates\":{\"max_version\":\"1" }, { "repeat": "0", "times": 299 }, { "text": ".0.0\"}}" }],
+      "install": "invalid",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (h)): 304 characters, over the 256-character cap (O-10) whatever the digits"
+    },
+    {
+      "name": "an admin's block pretty-printed with CRLF line ends",
+      "class": "file",
+      "parts": [{ "text": "{\r\n  \"updates\": {\r\n    \"allow_user_install\": false\r\n  }\r\n}\r\n" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "Round 2 (R1-5 (i)): CR LF is JSON whitespace (RFC 8259 §2), and Windows editors write it"
+    },
+    {
+      "name": "a dangling link at policy.json on a root with no drive.json",
+      "class": "file",
+      "link": "dangling",
+      "drive": false,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "none",
+      "why": "Round 2 (R1-5 (f), decided as built): a dangling link reads as absent, as loadPolicy follows links (O-5), and absent on a root with no drive.json is none (O-1)"
+    },
+    {
+      "name": "a folder at policy.json on a prepared drive",
+      "class": "file",
+      "folder": true,
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "unreadable",
+      "why": "Round 2 (R1-5, decided): a folder at the name is unreadable either way (O-5); the folder vector above is its twin on a root with no drive.json"
+    },
+    {
+      "name": "the DIY posture (prepare-drive's default)",
+      "class": "posture",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false,\"allow_local_api\":false},\"workspace\":{\"encryption_required\":true,\"allow_plaintext_dev_mode\":false},\"models\":{\"allow_unverified_models\":false,\"require_manifest\":true,\"require_sha256_match\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "P1: DIY drives carry no updates key"
+    },
+    {
+      "name": "the dev posture",
+      "class": "posture",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false,\"allow_local_api\":true},\"workspace\":{\"encryption_required\":false,\"allow_plaintext_dev_mode\":true},\"models\":{\"allow_unverified_models\":true,\"require_manifest\":true,\"require_sha256_match\":false}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "P2"
+    },
+    {
+      "name": "the Kit posture",
+      "class": "posture",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false,\"allow_local_api\":false},\"workspace\":{\"encryption_required\":true,\"allow_plaintext_dev_mode\":false},\"models\":{\"allow_unverified_models\":false,\"require_manifest\":true,\"require_sha256_match\":true},\"updates\":{\"allow_online_check\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "P3, U1 (b): every Kit carries the reserved key, written true"
+    },
+    {
+      "name": "a pre-wave drive's policy",
+      "class": "posture",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false},\"workspace\":{\"encryption_required\":true,\"allow_plaintext_dev_mode\":false},\"models\":{\"allow_unverified_models\":false,\"require_manifest\":true,\"require_sha256_match\":true}}" }],
+      "install": "allowed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "P4: absent keys mean today's behaviour"
+    },
+    {
+      "name": "the Kit posture with an admin's allow_user_install false",
+      "class": "posture",
+      "parts": [{ "text": "{\"network\":{\"allow_model_downloads\":true,\"allow_update_checks\":false,\"allow_local_api\":false},\"workspace\":{\"encryption_required\":true,\"allow_plaintext_dev_mode\":false},\"models\":{\"allow_unverified_models\":false,\"require_manifest\":true,\"require_sha256_match\":true},\"updates\":{\"allow_online_check\":true,\"allow_user_install\":false}}" }],
+      "install": "managed",
+      "maxVersion": null,
+      "file": "read",
+      "why": "P5: a managed Kit"
+    }
+  ],
+  "maxVersion": [
+    { "max": "1.5.0", "version": "1.4.9", "verdict": "allowed", "why": "below" },
+    { "max": "1.5.0", "version": "1.5.0", "verdict": "allowed", "why": "up to X includes X" },
+    { "max": "1.5.0", "version": "1.5.0+build.7", "verdict": "allowed", "why": "build metadata has no precedence (SemVer §10)" },
+    { "max": "1.5.0", "version": "1.5.0-rc.1", "verdict": "allowed", "why": "a pre-release is below its release (§11.3)" },
+    { "max": "1.5.0", "version": "1.5.1-rc.1", "verdict": "above-max", "why": "a pre-release of a later patch" },
+    { "max": "1.5.0", "version": "1.5.1", "verdict": "above-max", "why": "above" },
+    { "max": "1.5.0", "version": "1.6.0", "verdict": "above-max", "why": "above" },
+    { "max": "1.5.0", "version": "2.0.0", "verdict": "above-max", "why": "above" },
+    { "max": "0.10.0", "version": "0.9.0", "verdict": "allowed", "why": "numbers, not text" },
+    { "max": "0.9.0", "version": "0.10.0", "verdict": "above-max", "why": "numbers, not text" },
+    { "max": "1.5.0-rc.1", "version": "1.5.0-rc.1", "verdict": "allowed", "why": "equal" },
+    { "max": "1.5.0-rc.1", "version": "1.5.0-beta.9", "verdict": "allowed", "why": "beta < rc (ASCII)" },
+    { "max": "1.5.0-rc.1", "version": "1.5.0-rc.2", "verdict": "above-max", "why": "§11.4" },
+    { "max": "1.5.0-rc.1", "version": "1.5.0-rc.1.1", "verdict": "above-max", "why": "§11.4: more identifiers, all before equal" },
+    { "max": "1.5.0-rc.1", "version": "1.5.0", "verdict": "above-max", "why": "the release is above its pre-release" },
+    { "max": "1.5.0-rc.9", "version": "1.5.0-rc.10", "verdict": "above-max", "why": "numeric identifiers compare as numbers" },
+    { "max": "1.5.0-rc.a9", "version": "1.5.0-rc.a10", "verdict": "allowed", "why": "alphanumeric ones as ASCII text (a10 < a9)" },
+    { "max": "1.5.0-RC.1", "version": "1.5.0-rc.1", "verdict": "above-max", "why": "ASCII: R (0x52) < r (0x72)" },
+    { "max": "1.5.0-alpha", "version": "1.5.0-1", "verdict": "allowed", "why": "a numeric identifier is below an alphanumeric one" },
+    { "max": "1.5.0+kit.3", "version": "1.5.0", "verdict": "allowed", "why": "the cap's build metadata is ignored too" },
+    { "max": "9007199254740993.0.0", "version": "9007199254740992.0.0", "verdict": "allowed", "why": "exact digits (O-11)" },
+    { "max": "9007199254740992.0.0", "version": "9007199254740993.0.0", "verdict": "above-max", "why": "exact digits (O-11)" },
+    { "max": "1.5.0", "version": "1.5", "verdict": "above-max", "why": "O-12: a version that does not parse is above any cap" },
+    { "max": "1.5.0", "version": "v1.4.0", "verdict": "above-max", "why": "O-12" },
+    { "max": "1.5.0", "version": "", "verdict": "above-max", "why": "O-12" },
+    { "max": null, "version": "1.5.0", "verdict": "allowed", "why": "O-12: no cap, the policy says nothing (the version rule is P4's)" },
+    { "max": null, "version": "1.5", "verdict": "allowed", "why": "O-12" }
+  ],
+  "semver": {
+    "why": "strict SemVer 2.0.0 (semver.org §2, §9, §10, §11), O-10: at most 256 characters. An entry is a string or `{ \"name\", \"parts\" }` with the parts above",
+    "valid": [
+      "0.0.0",
+      "1.2.3",
+      "1.0.0-0",
+      "1.0.0-alpha",
+      "1.0.0-alpha.1",
+      "1.0.0-0.3.7",
+      "1.0.0-x.7.z.92",
+      "1.0.0-x-y-z.--",
+      "1.0.0-0a",
+      "1.0.0-0123a",
+      "1.0.0+001",
+      "1.0.0-alpha+001",
+      "1.0.0+20130313144700",
+      "1.0.0-beta+exp.sha.5114f85",
+      "1.0.0+21AF26D3----117B344092BD",
+      "1.0.0--",
+      "1.0.0-rc.1+build.1-x",
+      "9007199254740993.0.0",
+      { "name": "256 characters", "parts": [{ "text": "1.0.0-" }, { "repeat": "a", "times": 250 }] },
+      { "name": "256 characters ending in build metadata", "parts": [{ "text": "1.0.0+" }, { "repeat": "b", "times": 250 }] }
+    ],
+    "invalid": [
+      "v1.2.3",
+      "V1.2.3",
+      "=1.2.3",
+      "1.2",
+      "1",
+      "1.2.3.4",
+      "01.2.3",
+      "1.02.3",
+      "1.2.03",
+      "00.0.0",
+      "-1.2.3",
+      "1.2.-3",
+      "1.2.3-",
+      "1.2.3+",
+      "1.2.3-+a",
+      "1.2.3-01",
+      "1.2.3-rc.01",
+      "1.2.3-00",
+      "1.2.3-rc..1",
+      "1.2.3-rc.",
+      "1.2.3-.rc",
+      "1.2.3+a..b",
+      "1.2.3+a+b",
+      "1.2.3-a_b",
+      "1.2.3-ä",
+      "１.２.３",
+      " 1.2.3",
+      "1.2.3 ",
+      "1.2.3\n",
+      "1.2.3\t",
+      "",
+      "latest",
+      "*",
+      "1.x",
+      "1.2.x",
+      ">=1.2.3",
+      "^1.2.3",
+      "~1.2.3",
+      "1.2.3 - 1.4.0",
+      "1.2.3 || 2.0.0",
+      { "name": "257 characters", "parts": [{ "text": "1.0.0-" }, { "repeat": "a", "times": 251 }] }
+    ],
+    "ascending": ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "2.0.0", "2.1.0", "2.1.1"],
+    "below": [
+      ["0.9.0", "0.10.0", "numbers, not text"],
+      ["1.9.0", "1.10.0", "numbers, not text"],
+      ["1.0.9", "1.0.10", "numbers, not text"],
+      ["9.0.0", "10.0.0", "numbers, not text"],
+      ["9007199254740992.0.0", "9007199254740993.0.0", "exact digits (O-11)"],
+      ["1.0.0-1", "1.0.0-alpha", "a numeric identifier is below an alphanumeric one"],
+      ["1.0.0-RC.1", "1.0.0-rc.1", "ASCII order"],
+      ["1.0.0-rc.a10", "1.0.0-rc.a9", "alphanumeric identifiers as ASCII text"],
+      ["1.0.0-rc.9", "1.0.0-rc.10", "numeric identifiers as numbers"],
+      ["1.0.0-rc.1", "1.0.0-rc.1.1", "fewer identifiers, all before equal"],
+      ["1.0.0-0", "1.0.0", "a pre-release is below its release"],
+      ["1.0.0", "1.0.1-0", "a pre-release of a later version is above"],
+      ["1.0.0-alpha.1", "1.0.0-alpha-1", "an identifier holding a hyphen is one identifier"]
+    ],
+    "equal": [["1.0.0", "1.0.0+x"], ["1.0.0-rc.1+a", "1.0.0-rc.1+b"], ["1.0.0+001", "1.0.0+1"]]
+  }
+}

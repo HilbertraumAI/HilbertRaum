@@ -2106,6 +2106,8 @@ export const it: UiCatalog<'it'> = {
   'diag.accel.gpuAvailable': '{name} (GPU disponibile)',
   'diag.app.title': 'App e motore',
   'diag.app.version': 'Versione dell’app',
+  'diag.app.driveVersion': 'Versione registrata sull’unità',
+  'diag.app.driveVersionNone': 'non registrata',
   'diag.app.unknown': 'dato non disponibile',
   'diag.app.selectedModel': 'Modello selezionato',
   'diag.app.noneSelected': 'nessuno selezionato',
@@ -3075,6 +3077,9 @@ export const it: UiCatalog<'it'> = {
     'Su questa unità non è stato trovato nessun elenco dei modelli: manca la cartella ' +
     '«model-manifests».',
   'main.models.unknown': 'Questo modello non è più nell’elenco dei modelli di questa unità.',
+  'main.models.activeUnavailable':
+    'Il modello {model} non è disponibile in questa versione di HilbertRaum, quindi non è stato ' +
+    'avviato. Scegli un altro modello nella schermata Modello IA.',
   'main.models.notChat': '«{name}» non è un modello di chat, quindi non può essere avviato qui.',
   'main.models.startDamaged':
     'Il modello «{name}» non ha superato il controllo dei file, quindi non è stato avviato. ' +

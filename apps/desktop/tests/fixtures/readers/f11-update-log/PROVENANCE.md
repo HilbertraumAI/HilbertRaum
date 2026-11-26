@@ -1,0 +1,65 @@
+# F-11 golden `update.log` lines (app-update wave, T3.2)
+
+Hand-written on 2026-11-25 at commit `6ba8094f`, before the writer existed (tests first), from W-14, W-68 and F-11
+(plan section 2 and Appendix B, as edited for the P3 entry), the P3 entry decisions 3, 9, 10 and 21, the record's
+5.1 (G0), 5.3 (table B.2: the `update.log` line frame), 5.4, 5.6, 5.7 (the hand-off, start-file and notice events),
+5.9 (the support copy), 5.10 (table B.11) and 8.2 (`docs/app-updates.md`), the T3.2 blast-radius sheet (its part (a)
+grammar, part (b) size rule and part (c) vector list, with its two cmd lines as the sheet's base64) and the
+orchestrator's answers to the sheet's questions (Q1: the error code's key is `err=`, `code=` stays the `UPD-*`
+reference code's; Q2 and Q3: the failed-start line carries `syscall=` and `version=`; Q9: a cap of 65,536 bytes,
+a trim keeps the newest 32,768). The token rules name their outside sources: semver.org 2.0.0 for V, the drive-release
+reader's answer shape (`DriveReleaseRead`, F-13, T3.3a) for the record's states, and `start-failure.ts`'s gate codes
+for the `failure` inputs. No expected value was taken from the writer's output; the byte lengths in `why` were counted
+with a scratch script over the hand-written lines.
+
+Two files:
+
+- `vectors.json`:
+  - `tokens`, `frame` and `cap`: the grammar and the size rule in words;
+  - `accept`: lines any reader must accept from any writer (the app, cmd and bash start files, a later version's
+    `lb`, an apply script), each with the record's reading (`parse`) and what "Copy details for support" shows of it
+    (`copied`). Lines with bytes the repo hygiene nets refuse in a text file under `tests/` (a CR, a NUL) or that are
+    not ASCII (cmd's code-page bytes) are held as base64 (`bytes_b64`). `a11`, a line over 1,024 bytes, was left
+    out until its rule was settled; it joined in T3.7's fix round (below);
+  - `emit`: the exact lines the HEAD writer emits for fixed input (the time and the platform are inputs): the startup
+    line's token rules and sentinels, the worst case of each event, the failed-start line for real start errors (a
+    non-ASCII drive root among them, which must never appear) and the generic appender that later events use.
+- `PROVENANCE.md`: this file.
+
+Who reads which part: `tests/unit/update-log.test.ts` runs `emit` against the writer's pure rules and `accept`
+through a reading written from the record's text in that file; `tests/integration/update-log-drive.test.ts` and
+`tests/integration/backend-start-failure.test.ts` check lines the real writer appends on a scratch drive against
+`emit`, and that a trim keeps `accept`'s cmd bytes byte for byte. Locked by `../../golden-fixtures.sha256`. The unlock
+line (T3.10) adds its own `vectors-unlock.json` beside this file; no `line` or `bytes_b64` here is ever rewritten.
+
+T3.2 fix round 1 (2026-11-25, after review 1 of `9c35e175`; plan F-11 as edited by Δ-66), by hand, additions only to
+the vectors: `s46` (m-1: the true worst startup line, `drive_format=unreadable` with every other field at its F-11 cap,
+252 bytes; the line is `s45`'s with its 6-byte `drive_format` value replaced by the 10-byte sentinel) and `f15` (m-6:
+libuv's `UNKNOWN`, which the gate shows no code for, kept as `err=UNKNOWN`). Texts corrected, no line changed:
+`tokens.value` (the value rule alone does not stop a one-word file, host or account name), `tokens.E` (`UNKNOWN`), the
+new `tokens.registered` (the app's lines are content-free by each event's typed fields: only registered events, each
+field by its key's rule), `emit.how` and `generic.sources` (`generic` is the frame alone), `start_failed.sources` (where
+`err=UNKNOWN` comes from) and `s45`'s `why` (248 bytes, not the worst case). The byte lengths were counted with a scratch
+script over the hand-written lines, which also checked that every earlier vector is unchanged byte for byte.
+
+T3.10 (2026-11-26, written on `c024fc8e` and committed in `ed6a380f`), the new file `vectors-unlock.json`: the
+`unlock` line (`contract`, the token rules N and A in `tokens`, the field order and each result's fields in `fields`,
+the 61 `emit` vectors). Hand-written from part (a) of T3.10's blast-radius sheet (the line's fields per result, its
+rules B2 and D4) and T3.2's rules in `vectors.json` (`frame`, `tokens`, `registered`), before the writer's `unlock`
+code existed (tests first: the rows were red before it). The byte lengths (the longest line `u61`, 210 bytes) were
+counted with a scratch script over the hand-written lines. No expected value was taken from the writer's output, and
+`vectors.json` was not touched.
+
+T3.7 fix round (2026-11-26, after the second independent review of F-11 at `eae4ca82`, findings F11-2 and F11-3, and
+their disposition), by hand, additions only to the `accept` vectors: `a11` (a line of 1,025 bytes, a later start
+file's line whose one value runs to 983 bytes: G0's 1,024-byte rule drops no `update.log` line, and the support copy
+shows `[line of 1025 bytes not shown]`, the fixed placeholder with the line's length, never its bytes; this settles
+CF-34, and P6 builds the copy's reader against it), `a14` (a later app's startup line under a writer token release 1
+does not list, `app-2.3.0`, with a key it does not know), `a15` (an OS token no release-1 writer uses, `freebsd`) and,
+on the orchestrator's answer to the round's Q2, `a16` (`a11`'s line one byte shorter, exactly 1,024 bytes with nothing
+to trim: read and shown as is, so the bound is pinned from both sides).
+Sources: the review's text, the disposition's wording and the record's 5.3 and 5.9 as edited in the same round. Texts
+corrected, no line changed: `accept.reading` (the `long` reading, the placeholder, any writer, OS and event token) and
+`accept.left_out` (none left out). The byte lengths were counted with a scratch script over the hand-written lines,
+which also checked that every earlier vector is unchanged; no expected value was taken from a reader's output (the
+reader in `update-log.test.ts` gained the placeholder rule after `a11` was written, and was red on it before).

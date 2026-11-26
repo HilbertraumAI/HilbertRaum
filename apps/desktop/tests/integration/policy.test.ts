@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { EventEmitter } from 'node:events'
-import { writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { writeFileSync, mkdirSync, rmSync, symlinkSync, utimesSync, lstatSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -11,10 +12,13 @@ import {
   STRICT_POLICY,
   parsePolicy,
   loadPolicy,
+  readUpdatePolicy,
   resolveNetwork,
   buildPolicyStatus,
   isCommercialPolicy,
-  type EffectiveNetwork
+  updateInstallVerdict,
+  type EffectiveNetwork,
+  type UpdatePolicy
 } from '../../src/main/services/policy'
 import {
   isLoopbackHost,
@@ -25,6 +29,28 @@ import {
 } from '../../src/main/services/offlineGuard'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { repoText } from '../helpers/repo-files'
+import { allowReading, denyReading } from '../helpers/binary-fixtures'
+import { hangBudgetMs, testBudgetMs, within } from '../helpers/hang-budget'
+
+// One `statSync` of one path answers what is there, then `swap` changes the name before the reader's next call (the
+// F8-2 row below: a race cannot be timed portably). Every other call goes straight through.
+const statFault = vi.hoisted(() => ({ armed: null as null | { path: string; swap: () => void } }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const statSync = ((...args: Parameters<typeof actual.statSync>) => {
+    const fault = statFault.armed
+    if (fault === null || String(args[0]) !== fault.path) return actual.statSync(...args)
+    statFault.armed = null
+    try {
+      return actual.statSync(...args)
+    } finally {
+      fault.swap()
+    }
+  }) as typeof actual.statSync
+  const mocked = { ...actual, statSync }
+  return { ...mocked, default: mocked }
+})
 
 // ---- helpers --------------------------------------------------------------------
 
@@ -700,5 +726,239 @@ describe('isCommercialPolicy', () => {
     expect(isCommercialPolicy({ ...base, models: { ...base.models, requireSha256Match: false } })).toBe(
       false
     )
+  })
+})
+
+// ---- F-8 golden: the update policy keys (app-update wave, T3.1) -------------------------
+// Release 1 is the oldest version ever sold on a Kit: what it makes of `updates.allow_user_install`, `updates.max_version`
+// and a missing or damaged policy.json can never change in the field (plan Appendix B, F-8; docs/app-updates.md §8.1).
+// The expected values are the golden's (tests/fixtures/readers/f8-policy/), written by hand from the plan, the record and
+// the T3.1 sheet's parse matrix, never from the reader's output. The reader takes no build: the same file gives the same
+// tokens in a dev and a packaged build (O-13), so only loadPolicy's rows below run both.
+
+type F8Part = { text: string } | { base64: string } | { repeat: string; times: number }
+type F8Install = 'allowed' | 'managed' | 'invalid'
+type F8JunkKey = 'allow_user_install' | 'max_version' | 'updates' | 'allow_online_check'
+interface F8Vector {
+  name: string
+  parts?: F8Part[]
+  absent?: boolean
+  folder?: boolean
+  link?: 'file' | 'dangling'
+  denyRead?: boolean
+  drive?: boolean
+  install: F8Install
+  maxVersion: string | null
+  file: 'read' | 'none' | 'unreadable'
+}
+type F8Entry = string | { name: string; parts: F8Part[] }
+interface F8Golden {
+  writers: { kit: { updates: Record<string, unknown> } }
+  junk: { base: string } & Record<F8JunkKey, { values: unknown[]; expect: F8Install }>
+  vectors: F8Vector[]
+  maxVersion: Array<{ max: string | null; version: string; verdict: string }>
+  semver: { valid: F8Entry[]; invalid: F8Entry[] }
+}
+
+const F8 = JSON.parse(repoText('apps', 'desktop', 'tests', 'fixtures', 'readers', 'f8-policy', 'vectors.json')) as F8Golden
+
+const f8Bytes = (parts: F8Part[]): Buffer =>
+  Buffer.concat(
+    parts.map((p) =>
+      'text' in p ? Buffer.from(p.text, 'utf8') : 'base64' in p ? Buffer.from(p.base64, 'base64') : Buffer.from(p.repeat.repeat(p.times), 'utf8')
+    )
+  )
+
+/** What the golden records of a reader result: its three tokens, the cap as its text. */
+const f8Tokens = (p: UpdatePolicy): { install: string; maxVersion: string | null; file: string } => ({
+  install: p.install,
+  maxVersion: p.maxVersion === null ? null : p.maxVersion.text,
+  file: p.file
+})
+
+/** Symlink creation needs a privilege on Windows (Developer Mode / admin); the two link vectors skip without it. */
+const f8SymlinkOk = ((): boolean => {
+  try {
+    const base = tempRoot('f8-symtest')
+    writeFileSync(join(base, 't.json'), '{}')
+    symlinkSync(join(base, 't.json'), join(base, 'l.json'), 'file')
+    return true
+  } catch {
+    return false
+  }
+})()
+if (!f8SymlinkOk) console.warn('policy.test: symlink creation unavailable (Developer Mode/admin on Windows): the F-8 link vectors skip')
+
+/** A config dir holding the vector's policy.json as the vector says, and drive.json unless `drive: false`. */
+function f8Config(v: F8Vector): { cfg: string; undo: () => void } {
+  const cfg = configDir(v.drive === false ? {} : { drive: '{}' })
+  const file = join(cfg, 'policy.json')
+  let undo = (): void => undefined
+  if (v.folder) mkdirSync(file)
+  else if (v.link === 'dangling') symlinkSync(join(cfg, 'gone.json'), file, 'file')
+  else if (v.link === 'file') {
+    writeFileSync(join(cfg, 'target.json'), f8Bytes(v.parts!))
+    symlinkSync(join(cfg, 'target.json'), file, 'file')
+  } else if (!v.absent) {
+    writeFileSync(file, f8Bytes(v.parts!))
+    if (v.denyRead) {
+      denyReading(file)
+      undo = () => allowReading(file)
+    }
+  }
+  return { cfg, undo }
+}
+
+/** The junk rows' files: each value in place of its key in the golden's base. */
+const F8_JUNK = (['allow_user_install', 'max_version', 'updates', 'allow_online_check'] as const).flatMap((key) =>
+  F8.junk[key].values.map((value) => ({ key, value, want: F8.junk[key].expect, shown: JSON.stringify(value) }))
+)
+const F8_BASE_MAX = (JSON.parse(F8.junk.base) as { updates: { max_version: string } }).updates.max_version
+function withJunk(key: F8JunkKey, value: unknown): string {
+  const doc = JSON.parse(F8.junk.base) as { updates: Record<string, unknown> }
+  return JSON.stringify(key === 'updates' ? { ...doc, updates: value } : { ...doc, updates: { ...doc.updates, [key]: value } })
+}
+const f8Semver = (list: F8Entry[]): Array<{ label: string; text: string }> =>
+  list.map((e) => (typeof e === 'string' ? { label: JSON.stringify(e), text: e } : { label: e.name, text: f8Bytes(e.parts).toString('utf8') }))
+const policyWith = (updates: unknown): string => configDir({ drive: '{}', policy: JSON.stringify({ updates }) })
+
+describe('F-8 golden: readUpdatePolicy reads the update policy keys as release 1 does for ever', () => {
+  it.for(F8.vectors.map((v) => [v.name, v] as const))('%s', ([, v], ctx) => {
+    if (v.link && !f8SymlinkOk) ctx.skip()
+    if (v.denyRead && process.getuid?.() === 0) ctx.skip() // root reads any mode
+    const { cfg, undo } = f8Config(v)
+    try {
+      const got = readUpdatePolicy(cfg)
+      // Tokens only (O-14): no message, so nothing of the file can reach a log line (F-11).
+      expect(Object.keys(got).sort()).toEqual(['file', 'install', 'maxVersion'])
+      expect(f8Tokens(got)).toEqual({ install: v.install, maxVersion: v.maxVersion, file: v.file })
+      // Managed and invalid are known before the update's version is (record §3.6 item 2); a cap needs the version.
+      expect(updateInstallVerdict(got, '0.0.0')).toBe(v.install)
+      expect(updateInstallVerdict(got, '99999.0.0')).toBe(v.install === 'allowed' && v.maxVersion !== null ? 'above-max' : v.install)
+    } finally {
+      undo()
+    }
+  })
+
+  it.for(F8_JUNK.map((c) => [c.key, c.shown, c.want, c] as const))('a junk %s, %s, is %s', ([, , , { key, value, want }]) => {
+    const got = readUpdatePolicy(configDir({ drive: '{}', policy: withJunk(key, value) }))
+    expect(f8Tokens(got)).toEqual({ install: want, maxVersion: want === 'allowed' ? F8_BASE_MAX : null, file: 'read' })
+  })
+
+  it.for(f8Semver(F8.semver.valid).map((c) => [c.label, c.text] as const))('max_version %s is a cap', ([, text]) => {
+    expect(f8Tokens(readUpdatePolicy(policyWith({ max_version: text })))).toEqual({ install: 'allowed', maxVersion: text, file: 'read' })
+  })
+
+  it.for(f8Semver(F8.semver.invalid).map((c) => [c.label, c.text] as const))('max_version %s does not parse: invalid', ([, text]) => {
+    expect(f8Tokens(readUpdatePolicy(policyWith({ max_version: text })))).toEqual({ install: 'invalid', maxVersion: null, file: 'read' })
+  })
+
+  it.for(F8.maxVersion.map((r) => [String(r.max), r.version === '' ? '""' : r.version, r.verdict, r] as const))(
+    'max_version %s, an update of %s: %s',
+    ([, , , { max, version, verdict }]) => {
+      expect(updateInstallVerdict(readUpdatePolicy(policyWith(max === null ? {} : { max_version: max })), version)).toBe(verdict)
+    }
+  )
+
+  // Δ-58 row 7: an admin's edit is seen at the import, the hand-off and "Finish update" without a restart, so the reader
+  // goes to the disk at every call; loadPolicy's F-30 cache stays as it is (the row above it pins its miss).
+  it("reads the disk at every call: a same-size, same-mtime edit that loadPolicy's cache does not see (F-30)", () => {
+    const OPEN = '{"network":{"allow_model_downloads":true },"updates":{"allow_user_install":true }}'
+    const SHUT = '{"network":{"allow_model_downloads":false},"updates":{"allow_user_install":false}}'
+    expect(OPEN.length).toBe(SHUT.length) // the premise of "same size"
+    const cfg = configDir({ drive: '{}' })
+    const file = join(cfg, 'policy.json')
+    writePinned(file, OPEN)
+    expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true)
+    expect(readUpdatePolicy(cfg).install).toBe('allowed')
+    writePinned(file, SHUT)
+    expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true) // the cache still serves the old file
+    expect(readUpdatePolicy(cfg).install).toBe('managed')
+  })
+})
+
+// T3.7's review, F8-2 (macOS and Linux only: Windows has no named pipe at a file name). The reader stats the name, then
+// opens it; a named pipe put there between the two must not hold the main process at an open that waits for a writer.
+// The stat answers as the regular file there before the swap, and the name really holds the pipe the open meets. A
+// blocking open would stop this worker for good, so a rescue writer opens the pipe once the bound has passed: a read
+// that had to wait for it fails the row instead of hanging the run.
+describe.skipIf(process.platform === 'win32')('F-8: readUpdatePolicy opens policy.json without waiting (macOS and Linux)', () => {
+  /** Opens the pipe at HR_FIFO for writing after HR_AFTER_MS, which frees a reader blocked at its open. */
+  const RESCUE = [
+    "const fs = require('node:fs')",
+    'setTimeout(() => fs.closeSync(fs.openSync(process.env.HR_FIFO, fs.constants.O_WRONLY)), Number(process.env.HR_AFTER_MS))'
+  ].join('\n')
+
+  it('a named pipe swapped in after the stat: the open never waits for a writer, and the file is unreadable', async () => {
+    const cfg = configDir({ drive: '{}', policy: '{"updates":{"allow_user_install":false}}' })
+    const file = join(cfg, 'policy.json')
+    statFault.armed = {
+      path: file,
+      swap: () => {
+        unlinkSync(file)
+        const r = spawnSync('mkfifo', [file], { encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`mkfifo failed: ${r.stderr}`)
+      }
+    }
+    const bound = hangBudgetMs(5_000)
+    const rescue = spawn(process.execPath, ['-e', RESCUE], {
+      env: { ...process.env, HR_FIFO: file, HR_AFTER_MS: String(bound) },
+      stdio: 'ignore'
+    })
+    const exited = new Promise<void>((resolve) => rescue.once('exit', () => resolve()))
+    const started = Date.now()
+    let got: UpdatePolicy
+    try {
+      got = readUpdatePolicy(cfg)
+    } finally {
+      rescue.kill()
+    }
+    const took = Date.now() - started
+    await within(exited, 'the rescue writer exiting')
+    expect(statFault.armed, 'the swap ran').toBeNull()
+    expect(lstatSync(file).isFIFO()).toBe(true)
+    expect(took, 'the open waited for a writer: the pipe held the read until the rescue writer came').toBeLessThan(bound)
+    expect(f8Tokens(got)).toEqual({ install: 'allowed', maxVersion: null, file: 'unreadable' })
+  }, testBudgetMs(30_000))
+})
+
+// The new keys reach no existing reader (P3 entry decision 6): the privacy policy, the status line and the tripwire read
+// what they read before an `updates` block existed, whatever its shape.
+describe('F-8: an updates block changes nothing loadPolicy, the status line or the network ceiling reads', () => {
+  const objectFiles = [
+    ...F8.vectors.filter((v) => v.parts && !v.link && !v.denyRead).map((v) => ({ name: v.name, bytes: f8Bytes(v.parts!), drive: v.drive !== false })),
+    ...F8_JUNK.map((c) => ({ name: `a junk ${c.key}, ${c.shown}`, bytes: Buffer.from(withJunk(c.key, c.value)), drive: true }))
+  ].filter(({ bytes }) => {
+    try {
+      const doc: unknown = JSON.parse(bytes.toString('utf8'))
+      return doc !== null && typeof doc === 'object' && !Array.isArray(doc) && Object.hasOwn(doc, 'updates')
+    } catch {
+      return false // not an object as loadPolicy reads it (a byte-order mark included): nothing to compare
+    }
+  })
+
+  it('the golden holds such files', () => {
+    expect(objectFiles.length).toBeGreaterThan(40)
+  })
+
+  it.for(objectFiles.map((o) => [o.name, o] as const))('loadPolicy reads "%s" as the same file without its updates block, dev and packaged', ([, { bytes, drive }]) => {
+    const doc = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>
+    const without = Object.fromEntries(Object.entries(doc).filter(([key]) => key !== 'updates'))
+    const withBlock = configDir(drive ? { drive: '{}' } : {})
+    writeFileSync(join(withBlock, 'policy.json'), bytes)
+    const withoutBlock = configDir({ ...(drive ? { drive: '{}' } : {}), policy: JSON.stringify(without) })
+    for (const isDev of [true, false]) {
+      expect(loadPolicy(withBlock, undefined, { isDev }), `isDev ${isDev}`).toEqual(loadPolicy(withoutBlock, undefined, { isDev }))
+    }
+  })
+
+  // The Kit's own literal has downloads on, so it cannot tell: downloads off, and only the Kit block could open anything.
+  it.each([true, false])('updates.allow_online_check true opens no network, the setting on (isDev %s)', (isDev) => {
+    const cfg = configDir({ drive: '{}', policy: JSON.stringify({ network: { allow_model_downloads: false }, ...F8.writers.kit }) })
+    const status = buildPolicyStatus(cfg, true, undefined, { isDev })
+    expect(status.policy.network.allowUpdateChecks).toBe(false)
+    expect(status.networkAllowedByPolicy).toBe(false)
+    expect(status.networkAllowed).toBe(false)
+    expect(status.offlineMode).toBe(true)
   })
 })

@@ -30,6 +30,7 @@ import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import { failureForLog } from '../services/failure-for-log'
+import { writeUnlockLine, type UpdateLogPaths } from '../services/updates/update-log'
 import { workspaceFailureParams } from '../../shared/workspace-failure-keys'
 import { perfMark, perfMs } from '../services/perf'
 import {
@@ -289,6 +290,10 @@ export interface WorkspaceIpcHooks {
    *  states the gate is shown (`WorkspaceStateInfo.appVersion`), so the gate fills the same text before any unlock.
    *  Left out (the test contexts), the copy shows `{version}` as written, in English, and the states carry none. */
   appVersion?: string
+  /** App-update T3.10 (W-14, F-11): the drive whose `updates/update.log` gets the unlock line (`index.ts` passes the
+   *  start's paths, the startup line's; repo-hygiene.test.ts holds the call site). Left out (the test contexts), no line
+   *  is written and none is counted as skipped. */
+  updateLog?: UpdateLogPaths
 }
 
 export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks = {}): void {
@@ -299,6 +304,19 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
   const forGate = (state: WorkspaceStateInfo): WorkspaceStateInfo =>
     hooks.appVersion === undefined ? state : { ...state, appVersion: hooks.appVersion }
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => forGate(ctx.workspace.getState()))
+
+  // App-update T3.10 (the T3.10 sheet's (c)): a start that opened a plaintext workspace (dev builds only: it needs
+  // `isDev`) writes that open's unlock line too, with the same fields: here, the one place that writes the line, once
+  // per start, after the startup line. A newer database left closed is `workspace_newer`. Only with the drive given.
+  if (hooks.updateLog !== undefined) {
+    const startOpen = ctx.workspace.takeOpenFacts?.() ?? null
+    if (startOpen !== null) {
+      const opened = ctx.workspace.getState().state === 'unlocked'
+      if (opened || ctx.workspace.isNewerWorkspace?.() === true) {
+        writeUnlockLine(hooks.updateLog, { result: opened ? 'ok' : 'workspace_newer', open: startOpen, thrown: undefined })
+      }
+    }
+  }
 
   ipcHandle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
     // The renderer is the untrusted boundary in Electron (M-S2): args are TS-typed but
@@ -314,6 +332,25 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
     // diagnostics log into a buffer that already holds it (duplicating it), and restart the model,
     // the local API and the knowledge-pack session.
     if (ctx.workspace.isUnlocked()) return { ok: true, state: ctx.workspace.getState() }
+    // App-update T3.10 (W-14, F-11; CF-23): one `unlock` line in the drive's update.log per attempt, written once the
+    // answer is decided and from the answer itself, so no arm can forget it or write it twice (a step after the open
+    // that throws answers `error`, one line). The two answers above checked nothing and write none (a malformed call
+    // would let a renderer flush the log at no key derivation's cost). Nothing new runs before the password check.
+    let thrown: unknown
+    const result = attemptUnlock(password, (err) => {
+      thrown = err
+    })
+    writeUnlockLine(hooks.updateLog, {
+      result: result.ok ? 'ok' : result.reason,
+      open: ctx.workspace.takeOpenFacts?.() ?? null,
+      thrown
+    })
+    return result
+  })
+
+  /** The unlock attempt behind the handler above: the unlock, its post-unlock steps and the mapping of every refusal to
+   *  its answer. `keep` hears what a refused or failed attempt threw (for the update.log line's content-free fields). */
+  function attemptUnlock(password: string, keep: (err: unknown) => void): WorkspaceActionResult {
     try {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
@@ -371,10 +408,11 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       // flag that blamed the GPU, raw loader lines on failed documents) — the auto-start reads it.
       healEngineLoadState(ctx)
       const firstBenchmark = prepareFirstBenchmark(ctx)
-      // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no
-      // binary), so the ladder finds a settled device list instead of racing the weight upload
-      // for the driver. `maybeAutoStartActiveModel` re-checks admission and `startModelRuntime`
-      // the epoch, so a lock landing inside that ≈1 s is handled exactly as before.
+      // #380: the auto-start waits for the session's probe (≈1 s idle, plus the first engine check
+      // before the probe's spawn, #1012: seconds on a slow stick; resolved at once with no binary),
+      // so the ladder finds a settled device list instead of racing the weight upload for the
+      // driver. `maybeAutoStartActiveModel` re-checks admission and `startModelRuntime` the epoch,
+      // so a lock landing inside that wait is handled exactly as before.
       const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(ctx))
       void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
       // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).
@@ -391,6 +429,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       hooks.onUnlocked?.()
       return { ok: true, state }
     } catch (err) {
+      keep(err)
       logStageOutcome(ctx) // #973 (review round 2 F4): a staged copy removed before a later step failed
       // instanceof PLUS the name: the production rollup bundle can contain a second,
       // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
@@ -563,7 +602,7 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
     }
-  })
+  }
 
   ipcHandle(
     IPC.createWorkspace,

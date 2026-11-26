@@ -1,0 +1,333 @@
+{
+  "contract": "F-11, the updates/update.log line grammar: what the app's writer r1-app emits, and what any reader must accept from every writer (plan Appendix B F-11, W-14, W-68; docs/app-updates.md 5.1 G0, 5.3 table B.2, 8.2)",
+  "frame": "One append is the bytes LF, the line, LF, in one write call (G0: an empty line first, so a torn earlier append never joins it). The line: `r1-app <os> <event> <key>=<value> ... t=<YYYY-MM-DDTHH:MM:SSZ>`, bytes 0x21-0x7E only, exactly one space between tokens, at most 256 bytes without its two LFs. Never a CR, never `d=\"...\"` (that is cmd's).",
+  "tokens": {
+    "os": "process.platform when it matches [a-z0-9]{1,8}, else `unknown`",
+    "event": "[a-z][a-z0-9-]{0,31}; any other event is no line at all (skipped and counted)",
+    "key": "[a-z][a-z0-9_]{0,31}; `t` is the writer's own time key and never a caller's field; a duplicate key is dropped (the first one stays)",
+    "value": "1 to 64 bytes of [0-9A-Za-z._+-]: no `=`, `\"`, `\\`, `/`, `:`, space or byte outside ASCII, so no path, separator, quote or message can pass; a field whose key or value fails is dropped. This rule alone does not stop a one-word file, host or account name (`Steuer_2026.xlsx`, `DESKTOPDIT`, `peter`): the app's lines are content-free by each event's typed fields (`registered`)",
+    "time": "`t=` + the UTC time to the second, the milliseconds dropped (never rounded); a time that does not match ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ (an invalid date, a year past 9999) is omitted, as cmd lines carry none",
+    "V": "a version: SemVer 2.0.0, at most 24 bytes in this log",
+    "P": "an engine pin: [0-9A-Za-z][0-9A-Za-z._+-]{0,15} holding at least one digit",
+    "I": "an integer: [0-9]{1,6}, read from JSON only as an integer number",
+    "S": "the SQLite version: [0-9]{1,3}(\\.[0-9]{1,3}){2,3}",
+    "E": "an error code: E[A-Z0-9]{1,30} | ERR_[A-Z0-9_]{1,36} | SQLITE_[0-9]{1,5} | the literal UNKNOWN (libuv's code for an unmapped Windows error, seen on failing USB media), at most 40 bytes",
+    "C": "a system call: a bare name [a-z_]+ (bareSyscall), at most 16 bytes",
+    "sentinels": "`unknown` (the writer has no valid value of its own), `absent` (the source file or field is not there), `unreadable` (the source could not be read, or its value failed its rule), `none` (no stamp found; the unlock line's). None holds a digit, and every real version, pin, integer and SQLite version holds one, so a sentinel is never a value",
+    "registered": "The app writes only registered events, each with a fixed field schema in a fixed order (update-log.ts, UPDATE_LOG_EVENTS): each key names one token rule (V, P, I, S, E, C) with the sentinels that key admits, or a closed list of literal values. An unregistered event is no line (skipped and counted); an unregistered key, a value failing its key's rule, or a later field of a key already taken is dropped; the fields follow the schema's order. Registered here: startup and start-failed (below); unlock is T3.10's, and P6's and P7's events join the same table as data. So the app's lines are content-free by each event's typed fields, never by the value rule alone"
+  },
+  "cap": {
+    "line_max_bytes": 256,
+    "max_bytes": 65536,
+    "keep_bytes": 32768,
+    "rule": "Only the app trims. After an append, when the file is larger than max_bytes and updates/applying/ does not exist, the app keeps the newest keep_bytes from the byte after the first LF in them (no LF: nothing), as bytes, never decoded, written to update.log.tmp and renamed over update.log. A trim that fails keeps the file as it is and is tried again at the next append"
+  },
+  "accept": {
+    "reading": "The record's reading of a line (5.1 G0 and 5.3), which every reader of update.log follows: one CR before the LF removed; spaces and TABs trimmed at both ends; an empty line is `blank`; a line over 1,024 bytes after the trimming is `long` (G0's 1,024-byte rule drops no update.log line): never split and none of its bytes shown; the byte rule and the field split stop at ` d=\"`, after which the bytes are opaque (`time.kind` `d`); a line holding a byte outside 0x20-0x7E or TAB before that is `torn` (no reader drops it); otherwise the tokens split at runs of spaces and TABs: writer, os, event, then fields `key=value` split at the first `=`, a token without `=` or with an empty key ignored, the first of two equal keys kept, and a last field `t=` is the time (`time.kind` `t`; none: `none`). `copied` is what \"Copy details for support\" shows of the line: the trimmed line, every byte outside 0x20-0x7E replaced by `?`, or null for a blank line (only non-empty lines are copied), or for a `long` line the fixed placeholder `[line of <n> bytes not shown]`, `<n>` its length in decimal bytes after the trimming (5.3, 5.9). A line is read whatever its writer, os and event tokens are: a later writer's token (1 to 32 bytes of 0x21-0x7E without `=` and `\"`, 5.3) or a system release 1 does not run on is read and copied like a known one",
+    "left_out": "none since T3.7's fix round (2026-11-26): a11, a line over 1,024 bytes, joined the set once its rule was settled (record 5.3 and 5.9; CF-34)",
+    "vectors": [
+      {
+        "name": "a1",
+        "what": "the app's startup line (the HEAD writer's s01 below)",
+        "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "r1-app",
+          "os": "win32",
+          "event": "startup",
+          "fields": { "version": "0.1.66", "llama": "b12110", "whisper": "v1.8.6", "kiwix": "3.8.1", "release": "0.1.66", "release_format": "1", "drive_format": "1", "sqlite": "3.50.4" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a2",
+        "what": "the app's failed-start line (the HEAD writer's f01 below)",
+        "line": "r1-app win32 start-failed version=0.1.66 cause=other err=EEXIST syscall=mkdir t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "r1-app",
+          "os": "win32",
+          "event": "start-failed",
+          "fields": { "version": "0.1.66", "cause": "other", "err": "EEXIST", "syscall": "mkdir" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "r1-app win32 start-failed version=0.1.66 cause=other err=EEXIST syscall=mkdir t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a3",
+        "what": "a notice line of the app (record 5.7, L1-20: each shown notice is logged with its reference code)",
+        "line": "r1-app darwin notice code=UPD-UPDATED t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "r1-app",
+          "os": "darwin",
+          "event": "notice",
+          "fields": { "code": "UPD-UPDATED" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "r1-app darwin notice code=UPD-UPDATED t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a4",
+        "what": "a cmd start-file line (record 5.6, the fall-through) with no ISO time: CR LF, and four code-page bytes (GBK) inside d=\"...\"; 117 bytes",
+        "bytes_b64": "cjEtbGF1bmNoZXIgd2luMzIgbGF1bmNoZXItZmFsbHRocm91Z2ggcmVhc29uPW5vLXNjcmlwdCBjb2RlPVVQRC1MQVVOQ0gtRkFMTFRIUk9VR0ggZD0iMjAyNi8xMS8yNSDW3Mj9IDEwOjAwOjAwLjEyIg0K",
+        "parse": {
+          "writer": "r1-launcher",
+          "os": "win32",
+          "event": "launcher-fallthrough",
+          "fields": { "reason": "no-script", "code": "UPD-LAUNCH-FALLTHROUGH" },
+          "time": { "kind": "d" }
+        },
+        "copied": "r1-launcher win32 launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH d=\"2026/11/25 ???? 10:00:00.12\""
+      },
+      {
+        "name": "a5",
+        "what": "an ASCII cmd apply line whose %time% holds a leading space and a comma (record 5.3, L1-19); CR LF; 66 bytes",
+        "bytes_b64": "YXBwbHktMS4yLjAgd2luMzIgd2FpdGVkIGF0dGVtcHRzPTQxMiBkPSIyNS4xMS4yMDI2ICA5OjA1OjAzLDA3Ig0K",
+        "parse": {
+          "writer": "apply-1.2.0",
+          "os": "win32",
+          "event": "waited",
+          "fields": { "attempts": "412" },
+          "time": { "kind": "d" }
+        },
+        "copied": "apply-1.2.0 win32 waited attempts=412 d=\"25.11.2026  9:05:03,07\""
+      },
+      {
+        "name": "a6",
+        "what": "a bash start-file line with t= (record 5.6)",
+        "line": "r1-launcher linux launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "r1-launcher",
+          "os": "linux",
+          "event": "launcher-fallthrough",
+          "fields": { "reason": "no-script", "code": "UPD-LAUNCH-FALLTHROUGH" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "r1-launcher linux launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a7",
+        "what": "a later version's start file (lb) with an event and fields release 1 does not know",
+        "line": "lb darwin resume-checked tries=2 next_step=x.y t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "darwin",
+          "event": "resume-checked",
+          "fields": { "tries": "2", "next_step": "x.y" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb darwin resume-checked tries=2 next_step=x.y t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a8",
+        "what": "a line with no time field at all",
+        "line": "apply-1.2.0 linux started",
+        "parse": {
+          "writer": "apply-1.2.0",
+          "os": "linux",
+          "event": "started",
+          "fields": {},
+          "time": { "kind": "none" }
+        },
+        "copied": "apply-1.2.0 linux started"
+      },
+      {
+        "name": "a9",
+        "what": "a torn tail: a partial app line, then eight zero bytes and no line end (an append cut by an unplug)",
+        "bytes_b64": "cjEtYXBwIHdpbjMyIHN0YXJ0dXAgdmVyc2lvbj0wLjEuNgAAAAAAAAAA",
+        "parse": "torn",
+        "copied": "r1-app win32 startup version=0.1.6????????"
+      },
+      {
+        "name": "a10",
+        "what": "the empty line every append writes first",
+        "line": "",
+        "parse": "blank",
+        "copied": null
+      },
+      {
+        "name": "a11",
+        "what": "a line over 1,024 bytes: a later start file's line whose one value runs to 983 bytes, 1,025 bytes in all (no conforming writer writes one: every app line is at most 256 bytes). G0's 1,024-byte rule drops no update.log line, and the support copy shows the fixed placeholder with the line's length, never its bytes (record 5.3, 5.9; T3.7's review F11-3, CF-34)",
+        "line": "lb win32 noted pad=01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012 t=2026-11-25T10:00:00Z",
+        "parse": "long",
+        "copied": "[line of 1025 bytes not shown]"
+      },
+      {
+        "name": "a12",
+        "what": "G0's trimming: leading and trailing spaces and TABs, runs of spaces and TABs between tokens, CR LF; 74 bytes",
+        "bytes_b64": "IAlhcHBseS0xLjIuMAlkYXJ3aW4gICBtb3ZlZCBvcz1kYXJ3aW4gZGlyPW91dCAgdD0yMDI2LTExLTI1VDEwOjAwOjAwWiAJDQo=",
+        "parse": {
+          "writer": "apply-1.2.0",
+          "os": "darwin",
+          "event": "moved",
+          "fields": { "os": "darwin", "dir": "out" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "apply-1.2.0?darwin   moved os=darwin dir=out  t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a13",
+        "what": "a token without `=` and one with an empty key are ignored; of two equal keys the first is kept",
+        "line": "lb win32 counted n=1 stray n=2 =x t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "win32",
+          "event": "counted",
+          "fields": { "n": "1" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb win32 counted n=1 stray n=2 =x t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a14",
+        "what": "a later app's startup line: a writer token release 1 does not list (each later app writes its own, record 5.3) and a key release 1 does not know (T3.7's review F11-2)",
+        "line": "app-2.3.0 win32 startup version=2.3.0 release=2.3.0 release_format=2 sqlite=3.51.0 channel=stable t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "app-2.3.0",
+          "os": "win32",
+          "event": "startup",
+          "fields": { "version": "2.3.0", "release": "2.3.0", "release_format": "2", "sqlite": "3.51.0", "channel": "stable" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "app-2.3.0 win32 startup version=2.3.0 release=2.3.0 release_format=2 sqlite=3.51.0 channel=stable t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a15",
+        "what": "a later version's start file on a system release 1 does not run on: an OS token none of win32, darwin, linux and unknown (T3.7's review F11-2)",
+        "line": "lb freebsd launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "freebsd",
+          "event": "launcher-fallthrough",
+          "fields": { "reason": "no-script", "code": "UPD-LAUNCH-FALLTHROUGH" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb freebsd launcher-fallthrough reason=no-script code=UPD-LAUNCH-FALLTHROUGH t=2026-11-25T10:00:00Z"
+      },
+      {
+        "name": "a16",
+        "what": "a line of exactly 1,024 bytes, nothing to trim: a11's line one byte shorter (its one value 982 bytes). Not over 1,024 bytes, so it is read and shown as is, never the placeholder (record 5.3, 5.9; the bound of a11)",
+        "line": "lb win32 noted pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 t=2026-11-25T10:00:00Z",
+        "parse": {
+          "writer": "lb",
+          "os": "win32",
+          "event": "noted",
+          "fields": { "pad": "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901" },
+          "time": { "kind": "t", "value": "2026-11-25T10:00:00Z" }
+        },
+        "copied": "lb win32 noted pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901 t=2026-11-25T10:00:00Z"
+      }
+    ]
+  },
+  "emit": {
+    "how": "`line` is the exact line the HEAD writer emits for the input (the time and the platform are inputs), without its two LFs; null means no line at all (skipped and counted). Every emitted line is checked against the frame and the cap too, and holds no byte outside 0x21-0x7E but its single spaces. `generic` is the frame alone, for events nobody registered (see there)",
+    "startup": {
+      "sources": "version: app.getVersion(). llama, whisper, kiwix: the families llama_cpp, whisper_cpp, kiwix_tools of the app's own bundled runtime-sources.yaml (absent: no such file, or no block for the family; unreadable: a read error, text that does not parse or validate, or a pin that fails P). release, release_format: the drive-release reader's answer (T3.3a, F-13): release is the record's valid app_version (absent: no file, or no valid app_version; unreadable: a read error, a damaged file, or a version over 24 bytes); release_format only when the record was read and its format is an integer that passes I, else omitted. drive_format: config/drive.json's drive_format_version (absent: no such field, or not an integer; unreadable: no file, a read error, not JSON, not an object, over 65,536 bytes, or an integer that fails I). sqlite: process.versions.sqlite. Field order fixed: version, llama, whisper, kiwix, release, release_format, drive_format, sqlite, t",
+      "input": "runtime_sources and drive_json: {kind: absent | unreadable} or {kind: text, text | yaml (a name in `yaml`)}; drive_release: the drive-release reader's result exactly (src/main/services/updates/drive-release.ts DriveReleaseRead); `with` replaces the named keys of `base`",
+      "yaml": {
+        "three-families": "llama_cpp:\n  version: b12110\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/llama.zip', sha256: placeholder, extract_to: runtime/llama.cpp/win}\nwhisper_cpp:\n  version: v1.8.6\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/whisper.zip', sha256: placeholder, extract_to: runtime/whisper.cpp/win}\nkiwix_tools:\n  version: '3.8.1'\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/kiwix.zip', sha256: placeholder, extract_to: runtime/kiwix-tools/win}\n",
+        "llama-only": "llama_cpp:\n  version: b12110\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/llama.zip', sha256: placeholder, extract_to: runtime/llama.cpp/win}\n",
+        "not-yaml": "llama_cpp: [\n  version: b12110\n",
+        "no-llama": "whisper_cpp:\n  version: v1.8.6\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/whisper.zip', sha256: placeholder, extract_to: runtime/whisper.cpp/win}\n",
+        "odd-pins": "llama_cpp:\n  version: b12110\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/llama.zip', sha256: placeholder, extract_to: runtime/llama.cpp/win}\nwhisper_cpp:\n  version: none\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/whisper.zip', sha256: placeholder, extract_to: runtime/whisper.cpp/win}\nkiwix_tools:\n  version: 3.8.1/x\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/kiwix.zip', sha256: placeholder, extract_to: runtime/kiwix-tools/win}\n",
+        "long-pins": "llama_cpp:\n  version: b12110-abcdefghij\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/llama.zip', sha256: placeholder, extract_to: runtime/llama.cpp/win}\nwhisper_cpp:\n  version: v1.8.6-abcdefghi\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/whisper.zip', sha256: placeholder, extract_to: runtime/whisper.cpp/win}\n",
+        "worst-pins": "llama_cpp:\n  version: b123456789012345\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/llama.zip', sha256: placeholder, extract_to: runtime/llama.cpp/win}\nwhisper_cpp:\n  version: v1.8.6-abcdefghi\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/whisper.zip', sha256: placeholder, extract_to: runtime/whisper.cpp/win}\nkiwix_tools:\n  version: 3.8.1+abcdefghij\n  builds:\n    - {os: win, arch: x64, backend: cpu, url: 'https://example.invalid/kiwix.zip', sha256: placeholder, extract_to: runtime/kiwix-tools/win}\n"
+      },
+      "base": {
+        "platform": "win32",
+        "now": "2026-11-25T10:00:00.123Z",
+        "version": "0.1.66",
+        "runtime_sources": { "kind": "text", "yaml": "three-families" },
+        "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "0.1.66" }, "format": { "state": "valid", "value": 1 }, "highestVersionSeen": { "state": "absent" } },
+        "drive_json": { "kind": "text", "text": "{\"product\":\"HilbertRaum\",\"drive_format_version\":1}" },
+        "sqlite": "3.50.4"
+      },
+      "vectors": [
+        { "name": "s01", "why": "the typical line of a Kit (159 bytes)", "with": {}, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s02", "why": "a dev scratch root: config/drive.json is {} and there is no record", "with": { "drive_release": { "kind": "absent" }, "drive_json": { "kind": "text", "text": "{}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=absent drive_format=absent sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s03", "why": "no bundled runtime-sources.yaml: every pin absent", "with": { "runtime_sources": { "kind": "absent" } }, "line": "r1-app win32 startup version=0.1.66 llama=absent whisper=absent kiwix=absent release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s04", "why": "the bundled yaml could not be read: every pin unreadable", "with": { "runtime_sources": { "kind": "unreadable" } }, "line": "r1-app win32 startup version=0.1.66 llama=unreadable whisper=unreadable kiwix=unreadable release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s05", "why": "the bundled yaml does not parse: every pin unreadable", "with": { "runtime_sources": { "kind": "text", "yaml": "not-yaml" } }, "line": "r1-app win32 startup version=0.1.66 llama=unreadable whisper=unreadable kiwix=unreadable release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s06", "why": "the bundled yaml does not validate (no llama_cpp block): every pin unreadable", "with": { "runtime_sources": { "kind": "text", "yaml": "no-llama" } }, "line": "r1-app win32 startup version=0.1.66 llama=unreadable whisper=unreadable kiwix=unreadable release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s07", "why": "no block for whisper_cpp and kiwix_tools: those pins absent", "with": { "runtime_sources": { "kind": "text", "yaml": "llama-only" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=absent kiwix=absent release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s08", "why": "a pin with no digit (none) and a pin with a slash fail P", "with": { "runtime_sources": { "kind": "text", "yaml": "odd-pins" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=unreadable kiwix=unreadable release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s09", "why": "a 17-byte pin fails P, a 16-byte pin passes, no kiwix block", "with": { "runtime_sources": { "kind": "text", "yaml": "long-pins" } }, "line": "r1-app win32 startup version=0.1.66 llama=unreadable whisper=v1.8.6-abcdefghi kiwix=absent release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s10", "why": "the record could not be read just now: release unreadable, no release_format", "with": { "drive_release": { "kind": "unreadable", "code": "EBUSY" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=unreadable drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s11", "why": "a damaged record (not JSON): release unreadable", "with": { "drive_release": { "kind": "damaged", "fault": "not-json" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=unreadable drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s12", "why": "a damaged record (over 1 MiB): release unreadable", "with": { "drive_release": { "kind": "damaged", "fault": "too-large" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=unreadable drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s13", "why": "a record whose app_version is no version (B.11: counts as absent); its format is still logged", "with": { "drive_release": { "kind": "record", "appVersion": { "state": "invalid" }, "format": { "state": "valid", "value": 2 }, "highestVersionSeen": { "state": "absent" } } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=absent release_format=2 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s14", "why": "a record with neither app_version nor format", "with": { "drive_release": { "kind": "record", "appVersion": { "state": "absent" }, "format": { "state": "absent" }, "highestVersionSeen": { "state": "absent" } } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=absent drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s15", "why": "a valid app_version of 25 bytes is over this log's 24: release unreadable, format logged", "with": { "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "1.2.3-aaaaaaaaaaaaaaaaaaa" }, "format": { "state": "valid", "value": 1 }, "highestVersionSeen": { "state": "absent" } } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=unreadable release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s16", "why": "a format of 7 digits fails I: release_format omitted", "with": { "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "0.1.66" }, "format": { "state": "valid", "value": 1000000 }, "highestVersionSeen": { "state": "absent" } } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s17", "why": "a format the reader found invalid: release_format omitted", "with": { "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "0.1.66" }, "format": { "state": "invalid" }, "highestVersionSeen": { "state": "valid", "value": "0.1.70" } } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s18", "why": "drive_format_version is a string: not an integer, absent", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":\"1\"}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=absent sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s19", "why": "drive_format_version is 1.5: not an integer, absent", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":1.5}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=absent sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s20", "why": "drive_format_version is null: absent", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":null}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=absent sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s21", "why": "drive_format_version is -1: an integer that fails I, unreadable", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":-1}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s22", "why": "drive_format_version of 7 digits fails I: unreadable", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":1000000}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s23", "why": "drive_format_version 0 passes I", "with": { "drive_json": { "kind": "text", "text": "{\"drive_format_version\":0}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=0 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s24", "why": "drive.json is JSON but not an object: unreadable", "with": { "drive_json": { "kind": "text", "text": "[1]" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s25", "why": "drive.json is not JSON: unreadable", "with": { "drive_json": { "kind": "text", "text": "not json" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s26", "why": "drive.json starts with a byte-order mark: no JSON, unreadable (loadPolicy reads it the same way)", "with": { "drive_json": { "kind": "text", "text": "\ufeff{\"drive_format_version\":1}" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s27", "why": "drive.json gone since the start found it: unreadable", "with": { "drive_json": { "kind": "absent" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s28", "why": "drive.json could not be read: unreadable", "with": { "drive_json": { "kind": "unreadable" } }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=unreadable sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s29", "why": "a pre-release app version with build metadata is a V", "with": { "version": "0.1.67-rc.1+build.5" }, "line": "r1-app win32 startup version=0.1.67-rc.1+build.5 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s30", "why": "an app version with a v is no SemVer: unknown", "with": { "version": "v0.1.66" }, "line": "r1-app win32 startup version=unknown llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s31", "why": "an app version of 25 bytes is over 24: unknown", "with": { "version": "1.2.3-aaaaaaaaaaaaaaaaaaa" }, "line": "r1-app win32 startup version=unknown llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s32", "why": "an app version that is no string: unknown", "with": { "version": 1 }, "line": "r1-app win32 startup version=unknown llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s33", "why": "a four-part SQLite version passes S", "with": { "sqlite": "3.50.4.1" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4.1 t=2026-11-25T10:00:00Z" },
+        { "name": "s34", "why": "a two-part SQLite version fails S: unknown", "with": { "sqlite": "3.50" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=unknown t=2026-11-25T10:00:00Z" },
+        { "name": "s35", "why": "a SQLite version with a suffix fails S: unknown", "with": { "sqlite": "3.50.4-beta" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=unknown t=2026-11-25T10:00:00Z" },
+        { "name": "s36", "why": "a four-digit part fails S: unknown", "with": { "sqlite": "1234.1.1" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=unknown t=2026-11-25T10:00:00Z" },
+        { "name": "s37", "why": "no SQLite version at all: unknown", "with": { "sqlite": null }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=unknown t=2026-11-25T10:00:00Z" },
+        { "name": "s38", "why": "the milliseconds are dropped, never rounded", "with": { "now": "2026-11-25T23:59:59.999Z" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T23:59:59Z" },
+        { "name": "s39", "why": "an invalid date: the time is omitted", "with": { "now": "not a date" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4" },
+        { "name": "s40", "why": "a year past 9999 fails the time rule: omitted", "with": { "now": "+010000-01-01T00:00:00.000Z" }, "line": "r1-app win32 startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4" },
+        { "name": "s41", "why": "the linux OS token", "with": { "platform": "linux" }, "line": "r1-app linux startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s42", "why": "the darwin OS token", "with": { "platform": "darwin" }, "line": "r1-app darwin startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s43", "why": "a platform name over 8 bytes: unknown", "with": { "platform": "openharmony" }, "line": "r1-app unknown startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s44", "why": "a platform name with an upper-case letter: unknown", "with": { "platform": "Win32" }, "line": "r1-app unknown startup version=0.1.66 llama=b12110 whisper=v1.8.6 kiwix=3.8.1 release=0.1.66 release_format=1 drive_format=1 sqlite=3.50.4 t=2026-11-25T10:00:00Z" },
+        { "name": "s45", "why": "every field at its longest with an integer drive_format (248 bytes); the worst case is s46", "with": { "platform": "abcdefgh", "version": "100.200.300-rc.123456789", "runtime_sources": { "kind": "text", "yaml": "worst-pins" }, "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "999.999.999-alpha.beta.1" }, "format": { "state": "valid", "value": 999999 }, "highestVersionSeen": { "state": "absent" } }, "drive_json": { "kind": "text", "text": "{\"drive_format_version\":999999}" }, "sqlite": "999.999.999.999" }, "line": "r1-app abcdefgh startup version=100.200.300-rc.123456789 llama=b123456789012345 whisper=v1.8.6-abcdefghi kiwix=3.8.1+abcdefghij release=999.999.999-alpha.beta.1 release_format=999999 drive_format=999999 sqlite=999.999.999.999 t=2026-11-25T10:00:00Z" },
+        { "name": "s46", "why": "the worst case: every field at its longest, drive_format the 10-byte unreadable (252 bytes, under the 256 cap)", "with": { "platform": "abcdefgh", "version": "100.200.300-rc.123456789", "runtime_sources": { "kind": "text", "yaml": "worst-pins" }, "drive_release": { "kind": "record", "appVersion": { "state": "valid", "value": "999.999.999-alpha.beta.1" }, "format": { "state": "valid", "value": 999999 }, "highestVersionSeen": { "state": "absent" } }, "drive_json": { "kind": "unreadable" }, "sqlite": "999.999.999.999" }, "line": "r1-app abcdefgh startup version=100.200.300-rc.123456789 llama=b123456789012345 whisper=v1.8.6-abcdefghi kiwix=3.8.1+abcdefghij release=999.999.999-alpha.beta.1 release_format=999999 drive_format=unreadable sqlite=999.999.999.999 t=2026-11-25T10:00:00Z" }
+      ]
+    },
+    "start_failed": {
+      "sources": "version: the app version the start runner was handed (the startup line may never have been written). cause: the start failure's cause (drive_not_writable, drive_full or other; anything else other). err: the start failure's code when it passes E; else the literal UNKNOWN when that is the thrown value's code (read under try: libuv's code for an unmapped Windows error, which the gate does not show); else omitted. syscall: the thrown value's bare system call (read under try) when it passes C, else omitted. Never the message, the path or SQLite's description. Field order fixed: version, cause, err, syscall, t",
+      "input": "`thrown` is what the start threw: an Error with `message` and own `props`, or one whose `throwing_getter` property throws when read; `failure` is what the start runner hands the gate for it (src/main/services/start-failure.ts startFailureFrom, or {cause: other, code: null} when reading the value throws); `never` lists text the line must not hold",
+      "base": { "platform": "win32", "now": "2026-11-25T10:00:00.123Z", "version": "0.1.66" },
+      "vectors": [
+        { "name": "f01", "why": "a file where a folder should be", "thrown": { "message": "EEXIST: file already exists, mkdir 'C:\\Users\\someone\\Kit\\workspace'", "props": { "code": "EEXIST", "syscall": "mkdir", "path": "C:\\Users\\someone\\Kit\\workspace" } }, "failure": { "cause": "other", "code": "EEXIST" }, "never": ["someone", "Users", "workspace"], "line": "r1-app win32 start-failed version=0.1.66 cause=other err=EEXIST syscall=mkdir t=2026-11-25T10:00:00Z" },
+        { "name": "f02", "why": "a drive that refuses the folder, at a root whose path holds non-ASCII text", "thrown": { "message": "EPERM: operation not permitted, mkdir 'E:\\\u00c4rger \u65e5\u672c\\HilbertRaum\\updates'", "props": { "code": "EPERM", "syscall": "mkdir", "path": "E:\\\u00c4rger \u65e5\u672c\\HilbertRaum" } }, "failure": { "cause": "drive_not_writable", "code": "EPERM" }, "never": ["E:\\\u00c4rger \u65e5\u672c\\HilbertRaum", "\u00c4rger \u65e5\u672c", "HilbertRaum", "updates"], "line": "r1-app win32 start-failed version=0.1.66 cause=drive_not_writable err=EPERM syscall=mkdir t=2026-11-25T10:00:00Z" },
+        { "name": "f03", "why": "a raw Error whose message is that root, with no code", "thrown": { "message": "E:\\\u00c4rger \u65e5\u672c\\HilbertRaum", "props": {} }, "failure": { "cause": "other", "code": null }, "never": ["E:\\\u00c4rger \u65e5\u672c\\HilbertRaum", "\u00c4rger", "HilbertRaum"], "line": "r1-app win32 start-failed version=0.1.66 cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f04", "why": "a plaintext dev database that is no database: SQLite's code, never its description", "thrown": { "message": "file is not a database", "props": { "code": "ERR_SQLITE_ERROR", "errcode": 26, "errstr": "file is not a database" } }, "failure": { "cause": "other", "code": "SQLITE_26" }, "never": ["database", "ERR_SQLITE_ERROR"], "line": "r1-app win32 start-failed version=0.1.66 cause=other err=SQLITE_26 t=2026-11-25T10:00:00Z" },
+        { "name": "f05", "why": "a spawn error: its system call names the binary's path, so it is dropped", "thrown": { "message": "spawn E:\\\u00c4rger \u65e5\u672c\\HilbertRaum\\llama-server.exe ENOENT", "props": { "code": "ENOENT", "syscall": "spawn E:\\\u00c4rger \u65e5\u672c\\HilbertRaum\\llama-server.exe", "path": "E:\\\u00c4rger \u65e5\u672c\\HilbertRaum\\llama-server.exe" } }, "failure": { "cause": "other", "code": "ENOENT" }, "never": ["spawn", "llama-server", "HilbertRaum"], "line": "r1-app win32 start-failed version=0.1.66 cause=other err=ENOENT t=2026-11-25T10:00:00Z" },
+        { "name": "f06", "why": "an error whose code getter throws", "thrown": { "message": "x", "props": {}, "throwing_getter": "code" }, "failure": { "cause": "other", "code": null }, "never": [], "line": "r1-app win32 start-failed version=0.1.66 cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f07", "why": "an error whose syscall getter throws: the line still comes, without it", "thrown": { "message": "x", "props": { "code": "EPERM" }, "throwing_getter": "syscall" }, "failure": { "cause": "other", "code": null }, "never": [], "line": "r1-app win32 start-failed version=0.1.66 cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f08", "why": "a full drive", "thrown": { "message": "ENOSPC: no space left on device, write", "props": { "code": "ENOSPC", "syscall": "write" } }, "failure": { "cause": "drive_full", "code": "ENOSPC" }, "never": ["space"], "line": "r1-app win32 start-failed version=0.1.66 cause=drive_full err=ENOSPC syscall=write t=2026-11-25T10:00:00Z" },
+        { "name": "f09", "why": "an error built with the code alone", "thrown": { "message": "EPERM", "props": { "code": "EPERM" } }, "failure": { "cause": "drive_not_writable", "code": "EPERM" }, "never": [], "line": "r1-app win32 start-failed version=0.1.66 cause=drive_not_writable err=EPERM t=2026-11-25T10:00:00Z" },
+        { "name": "f10", "why": "a 32-byte E code the gate may show fails E (E[A-Z0-9]{1,30}): omitted", "thrown": { "message": "x", "props": { "code": "EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } }, "failure": { "cause": "other", "code": "EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }, "never": ["EAAAA"], "line": "r1-app win32 start-failed version=0.1.66 cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f11", "why": "the writer never trusts its caller: a cause outside the three and a code with free text become other and nothing", "thrown": { "message": "x", "props": {} }, "failure": { "cause": "drive_on_fire", "code": "EPERM: mkdir 'C:\\x'" }, "never": ["fire", "EPERM"], "line": "r1-app win32 start-failed version=0.1.66 cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f12", "why": "a 17-byte system call fails C: omitted", "thrown": { "message": "x", "props": { "code": "EIO", "syscall": "abcdefghijklmnopq" } }, "failure": { "cause": "other", "code": "EIO" }, "never": ["abcdefghijklmnopq"], "line": "r1-app win32 start-failed version=0.1.66 cause=other err=EIO t=2026-11-25T10:00:00Z" },
+        { "name": "f13", "why": "an app version that is no SemVer: unknown", "version": "", "thrown": { "message": "x", "props": {} }, "failure": { "cause": "other", "code": null }, "never": [], "line": "r1-app win32 start-failed version=unknown cause=other t=2026-11-25T10:00:00Z" },
+        { "name": "f14", "why": "the worst case: every field at its longest (179 bytes)", "platform": "abcdefgh", "version": "100.200.300-rc.123456789", "thrown": { "message": "x", "props": { "syscall": "abcdefghijklmnop" } }, "failure": { "cause": "drive_not_writable", "code": "ERR_ABCDEFGHIJKLMNOPQRSTUVWXYZ_012345678" }, "never": [], "line": "r1-app abcdefgh start-failed version=100.200.300-rc.123456789 cause=drive_not_writable err=ERR_ABCDEFGHIJKLMNOPQRSTUVWXYZ_012345678 syscall=abcdefghijklmnop t=2026-11-25T10:00:00Z" },
+        { "name": "f15", "why": "libuv's UNKNOWN (an unmapped Windows error, seen on failing USB media): the gate shows no code, the line carries err=UNKNOWN", "thrown": { "message": "UNKNOWN: unknown error, read", "props": { "code": "UNKNOWN", "errno": -4094, "syscall": "read" } }, "failure": { "cause": "other", "code": null }, "never": ["unknown error"], "line": "r1-app win32 start-failed version=0.1.66 cause=other err=UNKNOWN syscall=read t=2026-11-25T10:00:00Z" }
+      ]
+    },
+    "generic": {
+      "sources": "The frame alone (formatUpdateLogLine), the last check of every registered event's typed fields: every key and value is checked again and a field that fails is dropped; an invalid event, or a line still over 256 bytes, is no line at all. These rows run the frame on its own: the appender writes an event only once it is registered (tokens.registered; an unregistered one is skipped and counted), and they pin the frame every later registration (record 3.x, 5.4, 5.7) must fit",
+      "base": { "platform": "win32", "now": "2026-11-25T10:00:00.123Z" },
+      "vectors": [
+        { "name": "g01", "why": "a notice with its reference code (record 5.7, L1-20)", "event": "notice", "fields": [["code", "UPD-UPDATED"]], "line": "r1-app win32 notice code=UPD-UPDATED t=2026-11-25T10:00:00Z" },
+        { "name": "g02", "why": "a hand-off event with a version and a count (record 5.4)", "event": "handoff-started", "fields": [["version", "1.2.0"], ["ms", "1534"]], "line": "r1-app win32 handoff-started version=1.2.0 ms=1534 t=2026-11-25T10:00:00Z" },
+        { "name": "g03", "why": "fields that fail are dropped: a path, an upper-case key, a second equal key, the reserved t, an empty value, a value with =, a space, a quote, 65 bytes, a non-ASCII value", "event": "import-refused", "fields": [["reason", "C:\\Users\\someone\\x"], ["Code", "UPD-X"], ["n", "3"], ["n", "4"], ["t", "2020-01-01T00:00:00Z"], ["empty", ""], ["eq", "a=b"], ["space", "a b"], ["quote", "d=\"x"], ["long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["word", "\u00c4rger"], ["code", "UPD-IN-PROGRESS"]], "line": "r1-app win32 import-refused n=3 code=UPD-IN-PROGRESS t=2026-11-25T10:00:00Z" },
+        { "name": "g04", "why": "a value of exactly 64 bytes and a key of 32 are kept, a key of 33 is dropped", "event": "staging-swept", "fields": [["reason", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["kaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1"], ["kaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "2"]], "line": "r1-app win32 staging-swept reason=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa kaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=1 t=2026-11-25T10:00:00Z" },
+        { "name": "g05", "why": "an event of 32 bytes is an event", "event": "eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fields": [], "line": "r1-app win32 eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa t=2026-11-25T10:00:00Z" },
+        { "name": "g06", "why": "an event with an upper-case letter is no line", "event": "Notice", "fields": [["code", "UPD-UPDATED"]], "line": null },
+        { "name": "g07", "why": "an event starting with a digit is no line", "event": "9notice", "fields": [], "line": null },
+        { "name": "g08", "why": "an event holding a space is no line", "event": "no tice", "fields": [], "line": null },
+        { "name": "g09", "why": "an event of 33 bytes is no line", "event": "eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fields": [], "line": null },
+        { "name": "g10", "why": "three 64-byte fields fit (241 bytes)", "event": "x", "fields": [["k1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["k2", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["k3", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]], "line": "r1-app win32 x k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa k2=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa k3=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa t=2026-11-25T10:00:00Z" },
+        { "name": "g11", "why": "four 64-byte fields would be 309 bytes, over the cap: no line", "event": "x", "fields": [["k1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["k2", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["k3", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], ["k4", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]], "line": null }
+      ]
+    }
+  }
+}

@@ -291,6 +291,8 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
     onNavigate: Mock<(s: string) => void>,
     opts: {
       activeModelId?: string | null
+      /** W-70: the status says this version cannot list the active model. */
+      activeModelUnavailable?: boolean
       running?: boolean
       docCount?: number
       problems?: string[]
@@ -300,7 +302,13 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
     const docCount = opts.docCount ?? 2
     if (opts.lang) window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, opts.lang)
     stubHomeApi({
-      getAppStatus: vi.fn(async () => appStatus({ activeModelId: opts.activeModelId ?? null, machineRamGb: 16 })),
+      getAppStatus: vi.fn(async () =>
+        appStatus({
+          activeModelId: opts.activeModelId ?? null,
+          machineRamGb: 16,
+          ...(opts.activeModelUnavailable === undefined ? {} : { activeModelUnavailable: opts.activeModelUnavailable })
+        })
+      ),
       getRuntimeStatus: vi.fn(async () =>
         opts.running
           ? runtimeStatus({ modelId: opts.activeModelId ?? 'm1', port: null, message: '' })
@@ -382,6 +390,28 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
     expect(
       await screen.findByText(/qwen3-4b-instruct-q4 is selected — it may still be loading/)
     ).toBeInTheDocument()
+  })
+
+  // W-70 (app-update plan, T3.11; owner 2026-11-25: reuse "Choose a model"): an active model this version cannot list
+  // is never started (the unlock's notice C09 says why), so "Getting ready…" / "Starting" would wait for ever. Home
+  // shows its no-model state instead, with "Choose a model" as the loud primary.
+  it('an active model this version cannot list reads as no model: "Choose a model" leads, never "Getting ready…"', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { activeModelId: 'qwen9-from-a-newer-version', activeModelUnavailable: true, running: false })
+    // The workspace row fills in only once the status has arrived; before it, the model row is the no-model one anyway.
+    expect(await screen.findByText('Plaintext (developer mode)')).toBeInTheDocument()
+
+    expect(screen.getByText('Almost set up.')).toBeInTheDocument()
+    expect(screen.queryByText('Getting ready…')).not.toBeInTheDocument()
+    expect(screen.getByText('No model selected yet')).toBeInTheDocument()
+    expect(screen.getByText('Needs a model')).toBeInTheDocument()
+    expect(screen.queryByText(/is selected — it may still be loading/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Starting')).not.toBeInTheDocument()
+    await waitFor(() => expect(loudPrimaries()).toHaveLength(1))
+    expect(loudPrimaries()[0]).toHaveTextContent(t('en', 'home.model.choose'))
+    await user.click(loudPrimaries()[0]!)
+    expect(onNavigate).toHaveBeenCalledWith('models')
   })
 
   it('the model row points at the AI Model screen when no model is selected', async () => {

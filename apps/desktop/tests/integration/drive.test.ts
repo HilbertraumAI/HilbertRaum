@@ -11,10 +11,18 @@ import {
   verifyDriveModels
 } from '../../src/main/services/drive'
 import { resolvePaths } from '../../src/main/services/workspace'
-import { parsePolicy, STRICT_POLICY } from '../../src/main/services/policy'
+import { parsePolicy, readUpdatePolicy, STRICT_POLICY } from '../../src/main/services/policy'
 import type { ModelManifest } from '../../src/shared/manifest'
 import { tempRoot } from '../helpers/db-fixtures'
 import { sha256, validManifest, visionManifest, writeDriveFile } from '../helpers/manifest-fixtures'
+import { repoText } from '../helpers/repo-files'
+
+/** What every Kit's policy adds to the DIY posture (the F-8 golden's `writers.kit`, U1 (b)). */
+const F8_KIT = (
+  JSON.parse(repoText('apps', 'desktop', 'tests', 'fixtures', 'readers', 'f8-policy', 'vectors.json')) as {
+    writers: { kit: { updates: Record<string, unknown> } }
+  }
+).writers.kit
 
 describe('drive layout', () => {
   it('lays out the directories the code reads, with win/mac/linux sidecar dirs', () => {
@@ -111,6 +119,24 @@ describe('config generators', () => {
     expect(policy.models.requireSha256Match).toBe(false)
     expect(policy.network.allowModelDownloads).toBe(true)
     expect(policy.network.allowLocalApi).toBe(true)
+  })
+
+  // F-8, U1 (b): every Kit carries the reserved `updates.allow_online_check`, written true; DIY and dev drives carry no
+  // updates block at all, so their policy.json is what it was before the key existed. `'updates' in` (not toEqual, which
+  // would let an `updates: undefined` pass) says the key is absent.
+  it('policy.json (Kit) is the DIY posture plus exactly the Kit block; DIY and dev drives have no updates key', () => {
+    expect(buildPolicyJson({ kit: true })).toStrictEqual({ ...buildPolicyJson(), ...F8_KIT })
+    expect(buildPolicyJson({ dev: true, kit: true })).toStrictEqual({ ...buildPolicyJson({ dev: true }), ...F8_KIT })
+    expect('updates' in buildPolicyJson()).toBe(false)
+    expect('updates' in buildPolicyJson({ dev: true })).toBe(false)
+    expect('updates' in buildPolicyJson({ kit: false })).toBe(false)
+  })
+
+  // The producer→consumer coupling of the install keys: every posture's literal reads as allowed, no cap, file read.
+  it.each([[{}], [{ dev: true }], [{ kit: true }], [{ dev: true, kit: true }]])('readUpdatePolicy reads buildPolicyJson(%o) as allowed', (opts) => {
+    const root = tempRoot('drive-kit')
+    writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(opts), null, 2))
+    expect(readUpdatePolicy(join(root, 'config'))).toStrictEqual({ install: 'allowed', maxVersion: null, file: 'read' })
   })
 })
 

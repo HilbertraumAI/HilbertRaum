@@ -1,7 +1,7 @@
 import { waitForEngineSpawns } from './runtime/spawn-gate'
 import { engineChildEnv } from './runtime/engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
-import type { EngineProblemFamily } from '../../shared/types'
+import type { EngineBuildStamp, EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
 import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from './binary-verifier'
 import { rewriteEngineFailureRows, rewriteSearchModelFailureRows } from './ingestion/engine-failure'
@@ -17,6 +17,7 @@ import {
   type LoadFailureInput
 } from './runtime/engine-load'
 import { guardChildStdio, resolveLlamaServerPath, type ChildProcessLike, type SpawnFn } from './runtime/sidecar'
+import { ownEngineBuild } from './runtime/gpu-failure'
 import { getSettings, updateSettings } from './settings'
 import { resolveWhisperCliPath } from './transcriber/cli'
 import { workspaceAdmitsWork } from './workspace-vault'
@@ -62,13 +63,15 @@ export interface EngineHealResult {
  *    would otherwise follow the drive to every computer and keep the GPU off there too.
  *  - failed documents whose row holds the loader's raw line (with the absolute drive path) are
  *    rewritten to the canonical, display-mapped text.
+ *  - W-70 (app-update plan, T3.11): otherwise, a set `gpuAutoDisabled` whose stamp names another engine build than
+ *    the drive's own (`rearmGpuForOtherEngine`) is cleared with its stamp and error: the card gets a new try.
  *  - #634: then those whose row holds the search model's raw failure (a timeout's bare English, a
  *    start failure's stderr tail with the weight file's absolute path) — after #530's pass, so a
  *    load refusal keeps its own text.
  * Idempotent and admission-gated; never throws (a locked or locking workspace is simply skipped).
  */
 export function healEngineLoadState(
-  ctx: Pick<AppContext, 'db' | 'workspace'>,
+  ctx: Pick<AppContext, 'db' | 'workspace' | 'paths' | 'isDev'>,
   opts: Pick<LoadFailureInput, 'platform' | 'systemDllExists'> = {}
 ): EngineHealResult {
   const result: EngineHealResult = { gpuFlagCleared: false, rowsRewritten: 0, searchModelRowsRewritten: 0 }
@@ -76,9 +79,12 @@ export function healEngineLoadState(
     if (!workspaceAdmitsWork(ctx.workspace)) return result
     const s = getSettings(ctx.db)
     if (s.gpuAutoDisabled && s.gpuLastError && classifyLoadFailureMessage(s.gpuLastError, opts) !== null) {
-      updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
+      // W-70 (review R1-2): a clear writes the flag first and its stamp last (`rearmGpuForOtherEngine`).
+      updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: null })
       result.gpuFlagCleared = true
       log.info('Cleared a compatibility-mode flag that an engine load failure had set (not a GPU fault)')
+    } else if (s.gpuAutoDisabled && s.gpuAutoDisabledEngine !== null) {
+      rearmGpuForOtherEngine(ctx, s.gpuAutoDisabledEngine)
     }
     result.rowsRewritten = rewriteEngineFailureRows(ctx.db, opts)
     result.searchModelRowsRewritten = rewriteSearchModelFailureRows(ctx.db, opts)
@@ -86,6 +92,35 @@ export function healEngineLoadState(
     log.warn('Healing engine load-failure state failed', { error: String(err) })
   }
   return result
+}
+
+/**
+ * W-70 (app-update plan, T3.11; frozen: release 1 is the only version that runs after a "Go back"): a GPU auto-disable
+ * set under one engine build says nothing about another, so the card is tried again when the drive's own build
+ * (`ownEngineBuild`) differs from the flag's stamp in `version` OR `backend`, as exact text. Inequality, not F-24's
+ * order: an older, a newer and a tag this version cannot order are all another build. An unknown own build (no marker
+ * this app can read, a dev binary outside the folder) and a missing engine keep the flag until the next session
+ * start; so does a flag with no stamp this app can read (every workspace flagged before release 1), as decided by the
+ * owner on 2026-11-25. The same version built for another OS is another build too (the Mac's Metal against Vulkan
+ * elsewhere): one Kit moved between a Mac and a Windows or Linux computer re-arms on each move (owner, 2026-11-25: "the
+ * Mac gets its GPU back"; a known limit). One patch, the flag first and the stamp last (review R1-2): the store writes
+ * key by key with no transaction, so a write cut short leaves at worst a stamp beside a false flag, which nothing reads,
+ * never a set flag without its stamp, which would never re-arm. The #530 clear and "Try GPU again" keep the same order.
+ * No audit event (the #530 clear writes none either). A wrong re-arm costs one failed GPU start, which sets the flag
+ * again with this build's stamp. Runs in its own try: a failure here never stops the row heal.
+ */
+function rearmGpuForOtherEngine(ctx: Pick<AppContext, 'db' | 'paths' | 'isDev'>, stamped: EngineBuildStamp): void {
+  try {
+    const own = ownEngineBuild(ctx.paths.rootPath, ctx.isDev)
+    if (own === null || (own.version === stamped.version && own.backend === stamped.backend)) return
+    updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null, gpuAutoDisabledEngine: null })
+    log.info('Cleared a compatibility-mode flag set under another engine build: the graphics card gets a new try', {
+      stamped,
+      own
+    })
+  } catch (err) {
+    log.warn('Checking the engine build of a compatibility-mode flag failed', { error: String(err) })
+  }
 }
 
 /** The outcome of starting a program just far enough to know whether the OS loader accepts it. */

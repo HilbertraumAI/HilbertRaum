@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "app_version": "0.2.0",
+  "systems": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "files": [
+    {
+      "path": "HilbertRaum-0.2.0-mac-arm64.app.zip",
+      "sha256": "3a8b1355eba8b4df27ddf342479c8f269d5233cc9274ec43a692ed8d35ddbcc3"
+    },
+    {
+      "path": "HilbertRaum-0.2.0-portable.exe",
+      "sha256": "95cd5d8851973efb122f3ade7a0ab54bb669d3a05b708392cba3ba0c6e37d92a"
+    },
+    {
+      "path": "HilbertRaum-0.2.0.AppImage",
+      "sha256": "fe1adb7603653f4bab517cfe8d66c603429eb74349403bbecad56d131e18fa63"
+    },
+    {
+      "path": "READ ME FIRST.txt",
+      "sha256": "3f22095641508576e91dc7c6c7f7e08a093985d53ea998043c6619ad240dc92c"
+    },
+    {
+      "path": "Start HilbertRaum.cmd",
+      "sha256": "df93aa4c2727da9988f596acea699fa946d640ef9250cff5d12a147214febf59"
+    },
+    {
+      "path": "Start HilbertRaum.command",
+      "sha256": "d7f95b6e3270d3e85e8b54d512c758bdb567b922ab9fc6141e6e3c24de07c247"
+    },
+    {
+      "path": "runtime/llama.cpp/linux/llama-server",
+      "sha256": "f425d8f020c80b8ab815035de28f376637c8c4142d77af086e5ee4f062702094"
+    },
+    {
+      "path": "runtime/llama.cpp/mac/llama-server",
+      "sha256": "2bd3b81e5f39d71a3433dda2fc4ce93583cf3e673f6a55d568ac436028880496"
+    },
+    {
+      "path": "runtime/llama.cpp/win/.hilbertraum-runtime.json",
+      "sha256": "ed5b8120601641c516d02ed9dc643a59648524248d5e2af877da39ea253c723e"
+    },
+    {
+      "path": "runtime/llama.cpp/win/cpu/llama-server.exe",
+      "sha256": "a4165ea1f4fb8f54889d04d72f8eea9d5a3a059546dc9be8387e47fdf115b2c2"
+    },
+    {
+      "path": "runtime/llama.cpp/win/llama-server.exe",
+      "sha256": "abc04b8eb9c0526f03ea210c5914612d72ce83d4b98ffeeca0ee1d3fce31a299"
+    },
+    {
+      "path": "start-hilbertraum.sh",
+      "sha256": "63a35b08df8abe2fff8d6d8a9299681d4135d220ea99d343955c6daaffb2f677"
+    }
+  ]
+}

@@ -127,4 +127,40 @@ describe('settings persistence', () => {
     updateSettings(db, { theme: 'dark' })
     expect(rawSetting(db, 'uiLanguage')).toBe('xx')
   })
+
+  // W-70 (app-update plan, T3.11): release 1 reads the GPU flag's engine stamp only as `{ version, backend }`, two
+  // non-empty strings of at most 128 characters. A row of any other shape (a later version's, a hand edit, a
+  // half-written one) reads as no stamp, so the flag stays on the processor, and the read never rewrites the row.
+  it('a GPU engine stamp of another shape reads as none and its row is kept; fields it does not know are ignored', () => {
+    const db = freshDb()
+    seedSettings(db)
+    const plant = (text: string): void => {
+      db.prepare(
+        `INSERT INTO settings (key, value_json, updated_at) VALUES ('gpuAutoDisabledEngine', ?, '2026-11-25T10:00:00.000Z')
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`
+      ).run(text)
+    }
+    const stored = (): string =>
+      (db.prepare("SELECT value_json AS v FROM settings WHERE key = 'gpuAutoDisabledEngine'").get() as { v: string }).v
+    for (const text of [
+      '"b9849/vulkan"',
+      '["b9849","vulkan"]',
+      '{"version":"b9849"}',
+      '{"version":"b9849","backend":7}',
+      '{"version":"","backend":"vulkan"}',
+      JSON.stringify({ version: 'b9849', backend: 'v'.repeat(129) }),
+      '42',
+      'true'
+    ]) {
+      plant(text)
+      expect(getSettings(db).gpuAutoDisabledEngine).toBeNull()
+      updateSettings(db, { theme: 'dark' })
+      expect(stored()).toBe(text)
+    }
+    // A later version's extra field: the two strings release 1 compares are read, the rest is ignored (and kept).
+    const later = JSON.stringify({ version: 'b12110', backend: 'vulkan', signature: 'sha256:abc' })
+    plant(later)
+    expect(getSettings(db).gpuAutoDisabledEngine).toEqual({ version: 'b12110', backend: 'vulkan' })
+    expect(stored()).toBe(later)
+  })
 })

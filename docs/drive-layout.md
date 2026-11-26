@@ -43,7 +43,15 @@ From the root, these paths are derived and created (idempotently) on first run:
 │                          #   projector; translation = the TranslateGemma GGUF, its own sidecar)
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
+├── updates/               # on a prepared drive only (config/drive.json there), made by the first line:
+│   └── update.log         #   the plaintext, content-free support log, readable before unlock: one line
+│                          #   per start, failed start and unlock attempt (app-updates.md §8.2); over
+│                          #   64 KiB the app keeps the newest 32 KiB through update.log.tmp + a rename
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
+                           #   drive-release.json: what the drive was built with (apps, start files,
+                           #   engines; written by the drive scripts, app-updates.md §8.5)
+                           #   kit-support.txt: a Kit's support end, one line YYYY-MM, written once by
+                           #   the Kit builder, never by the app (app-updates.md §8.4)
                            #   working-copy-lost.json: only after a lock that kept the last saved state
                            #   because the working file was gone or damaged (#875), or a start that
                            #   shredded the session an unclean end left (#892); content-free, bound
@@ -131,8 +139,21 @@ HILBERTRAUM/
 │                                                #   zim-transient/ are fine (#893)
 ├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
 │                                                #   drive, by the same sell-gate rule (#893)
+├── updates/                                    # update.log (a line per start, failed start and unlock attempt on a
+│                                                #   prepared drive; update.log.tmp only during a trim, or left by a
+│                                                #   failed one; app-updates.md §8.2) — none on a sold drive: the sell
+│                                                #   gate refuses any entry in it, an empty folder included (a Kit
+│                                                #   that was started; app-update W-33, T3.8); an empty updates/
+│                                                #   itself passes
 ├── docs/                                       # user guide, privacy, troubleshooting
-└── config/{drive.json,policy.json,checksums.json}  # + workspace.json once a workspace exists, and
+└── config/{drive.json,policy.json,checksums.json}  # + drive-release.json (the record of the apps, start
+                                                #   files and engines, the build's last write; on a DIY
+                                                #   drive when node was on PATH), kit-support.txt on a Kit
+                                                #   only (its support end, YYYY-MM, written once; the sell
+                                                #   gate requires both: the record naming the version the
+                                                #   root's apps carry and holding no highest_version_seen,
+                                                #   the stamp in the builder's 8 bytes, T3.8),
+                                                #   workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
                                                 #   saved state (#875) or a start shredded the session an
                                                 #   unclean end left (#892); a workspace created here removes a
@@ -162,9 +183,14 @@ HILBERTRAUM/
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
 > criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
-> plaintext off, models must verify, no phone-home — model downloads are a permitted user action, but
-> update-checks + telemetry are denied) and contains **no user data** — built + asserted
-> by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
+> plaintext off, models must verify, no phone-home — model downloads are a permitted user action;
+> `network.allow_update_checks` is `false` and there is no telemetry) plus the Kit's reserved
+> `"updates": {"allow_online_check": true}` (a name this version never reads, so it checks for no
+> update; below) and no `updates.max_version` below its own version, and contains **no user data** and no
+> `updates/` entry (it was never started) — built + asserted
+> by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). Its root
+> carries the macOS app as its zip, never an extracted `.app`, and no app there is read-only (release
+> 1's Windows start file would read a read-only app as running at every start). See
 > [`packaging.md`](packaging.md).
 
 > **Portability is a whole-stack property, not just the launcher (issue #188).** The launcher
@@ -207,6 +233,10 @@ drive is the same flow as building it, run again from a machine with the repo:
    notices (the workspace and weights are untouched). Run it **without** `--force`: an existing
    `config/drive.json` and `config/policy.json` are kept, and `--force` would rewrite both to the
    defaults, resetting a drive owner's policy (`docs/packaging.md`, "To move a drive to the repo's pin").
+   `config/drive-release.json` is different: it is derived from what the drive holds, so every run
+   (with node on `PATH`) writes it again, keeping the fields it does not know. Run `prepare-drive`
+   again after the new build is copied in (step 3), so the record names it. `config/kit-support.txt`
+   is never touched.
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
    An engine that the app updated past the drive's pin is kept as it is (#873); `--allow-downgrade`
    replaces it with the drive's pin.
@@ -243,7 +273,8 @@ interrupted password change, which run first; the copy it decrypted to try is re
 ## Preparing a drive (scripts)
 
 The `scripts/` directory lays out and verifies a drive. The scripts are **self-contained**
-(no Node/npm needed to prepare a drive); their logic mirrors the unit-tested
+(no Node/npm needed to prepare a drive; with node 22.18 or later on `PATH`, `prepare-drive` also
+writes the release record, below); their logic mirrors the unit-tested
 `services/drive.ts`. See [`packaging.md`](packaging.md) for the full flow.
 
 ```powershell
@@ -269,10 +300,47 @@ drive, copies the three **root license/attribution notices** (`LICENSE`, `THIRD-
 `DRIVE-NOTICES.md` — LIC-1, full-audit 2026-07-12b; unconditional, dev drives get them too), and
 generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
 (no-phone-home posture — model downloads permitted, update-checks + telemetry denied; `--dev`/`-Dev`
-for a plaintext developer drive). `DRIVE-NOTICES.md` is a committed, GENERATED file
+for a plaintext developer drive; `--kit`/`-Kit`, which only `build-commercial-drive` passes, adds the
+reserved `updates` block below). `DRIVE-NOTICES.md` is a committed, GENERATED file
 (`node scripts/generate-drive-notices.mjs` — derived from `model-manifests/**` + the pinned texts
 under `licenses/`); the commercial sell gate fails a drive where any of the three is missing or
 empty (see [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md)).
+
+**The `updates` block of `config/policy.json`** (app-update F-8, frozen: release 1 and every later
+version read these names this way; [`app-updates.md`](app-updates.md) §8.1). A DIY or developer
+drive has no `updates` key, its `policy.json` byte for byte what it was before the block existed; a
+Kit's has `"updates": {"allow_online_check": true}`. The update policy has its own reader
+(`readUpdatePolicy`, `services/policy.ts`), read from disk at each call; in this build only the sell
+gate calls it, since the in-app update it governs is not built yet.
+
+| Key | Written by | Meaning |
+|---|---|---|
+| `updates.allow_online_check` | the Kit builder only, `true` (`prepare-drive --kit`) | a reserved name: this version reads no value of it, junk included, and never adds it to the network ceiling or the status line; `network.allow_update_checks` stays `false` |
+| `updates.allow_user_install` | an administrator, by hand | absent or `true`: installing a signed update is allowed; `false`: every install is blocked ("managed"), whatever `max_version` says; any other value, `null` included: blocked as an invalid value |
+| `updates.max_version` | an administrator, by hand | absent: no cap; a strict SemVer 2.0.0 version (at most 256 characters, ASCII, no `v`, no spaces, no leading zeros): updates up to and including it, in SemVer order; any other value: blocked as invalid. The sell gate refuses a Kit whose cap is junk or below the Kit's own version (either would block every update for good) |
+
+A present `updates` that is not an object blocks as invalid; `"updates": {}` means every key absent;
+unknown keys inside are ignored, and key names are exact (a typo blocks nothing). A **missing
+`policy.json` on a prepared drive, or a damaged one** (empty, not JSON, not an object, a folder, a read
+error, over 1 MiB, saved as UTF-16), **leaves installing allowed** and is reported as "unreadable", while a
+junk *value* blocks: a blocked update is a management control, and a damaged policy must never block
+the signed repair ([`security-model.md`](security-model.md) "Policy precedence"). A later writer
+never widens the `max_version` grammar and never changes the types of `allow_user_install` or of
+`updates`: release 1 would read the new form as invalid and block every install.
+
+At its end `prepare-drive` writes **`config/drive-release.json`**, the record of what the drive was
+built with: the version of the apps at the root (only when exactly one app per system is there and all
+carry one version, or an existing value a root app still carries), the systems they are for, and the
+path and SHA-256 of each root app, start file and file under `runtime/` (app-update W-20,
+[`app-updates.md`](app-updates.md) §8.5). One node helper writes it,
+`scripts/lib/write-drive-release.mjs`, the same one the Kit builder runs as its last write, so it
+needs node 22.18 or later on `PATH`; without node the script says so in one line and goes on (an
+absent record means no constraint), and a helper that fails is a note, never the script's exit code.
+The record is rewritten on every run, `--force` or not, and keeps any field it does not know. With
+`--kit` (only `build-commercial-drive` passes it) the record is left to the builder, which writes it
+after the apps, start files and engines are on the drive. `prepare-drive` never writes
+`config/kit-support.txt`: a Kit's support end is written once, by `build-commercial-drive`
+(`--support-end`, [`packaging.md`](packaging.md)), and a DIY drive has none.
 
 By default it does **not** download artifacts. `--with-assets`/`-WithAssets`
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is
@@ -399,7 +467,8 @@ carries ONLY the language data under `ocr/`:
   without its `config/workspace.json` (the lock screen says the key file is missing or can't be
   read, #807), and `config/workspace.json` alone opens nothing (the lock screen says the encrypted
   workspace file is missing, #911). The rest of `config/`
-  (`drive.json`, `policy.json`, `checksums.json`) belongs to the drive and stays (troubleshooting,
+  (`drive.json`, `policy.json`, `checksums.json`, `drive-release.json`, a Kit's `kit-support.txt`)
+  belongs to the drive and stays (troubleshooting,
   "I forgot my workspace password", #931).
 
 ### Filesystem

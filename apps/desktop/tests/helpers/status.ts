@@ -94,6 +94,7 @@ export function driveStatus(over: Partial<DriveStatus> = {}): DriveStatus {
     writable: true,
     freeBytes: 10_000_000_000,
     imagesBytes: 0,
+    driveAppVersion: null,
     platform: 'win32',
     arch: 'x64',
     ...over

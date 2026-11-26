@@ -7,6 +7,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { readRuntimeMarkerState, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
@@ -42,6 +43,50 @@ const NUL = String.fromCharCode(0)
 /** #1028 final review: a C1 control (U+0085), and a UTF-8 locale this runner has (Ubuntu ships C.UTF-8; macOS and Git Bash en_US.UTF-8). */
 const C1 = String.fromCharCode(0x85)
 const UTF8_LOCALE = process.platform === 'linux' ? 'C.UTF-8' : 'en_US.UTF-8'
+
+/** A Kit's support end five years ahead (W-17): a builder run without the verify-only flag needs one (T3.3b). */
+const SUPPORT_END = `${new Date().getUTCFullYear() + 5}-06`
+
+// The F-13 golden (tests/fixtures/readers/f13-drive-release/): T3.3a's tree and the record the helper writes for it,
+// T3.3b's stamp bytes. prepare-drive calls the same helper as the Kit builders, so on every leg its twin over that tree
+// must leave exactly the golden record (06 T3.3a: "each CI leg's builder twin produces that same file").
+type F13Part = { text: string } | { base64: string }
+const F13_DIR = join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f13-drive-release')
+const F13 = JSON.parse(readFileSync(join(F13_DIR, 'vectors.json'), 'utf8')) as {
+  tree: { files: Record<string, string> }
+  writes: { vectors: Array<{ id: string; stdout?: string; existing?: F13Part[]; append?: string }> }
+}
+const F13_RECORD = readFileSync(join(F13_DIR, 'expected-record.json'))
+const F13_STAMP = (JSON.parse(readFileSync(join(F13_DIR, 'kit-support.json'), 'utf8')) as { builder: { text: string } }).builder.text
+const f13Write = (id: string) => F13.writes.vectors.find((v) => v.id === id)!
+const f13Bytes = (parts: F13Part[]): Buffer => Buffer.concat(parts.map((p) => ('text' in p ? Buffer.from(p.text, 'utf8') : Buffer.from(p.base64, 'base64'))))
+
+const NODE_NAMES = ['node', 'node.exe', 'node.cmd', 'node.bat']
+const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+/** This PATH without node: a Windows folder holding it is dropped, a POSIX one is mirrored without it (it holds the tools
+ *  the scripts need too). */
+function pathWithoutNode(): string {
+  const dirs: string[] = []
+  for (const dir of (process.env[pathKey] ?? '').split(delimiter)) {
+    if (!dir) continue
+    if (!NODE_NAMES.some((n) => existsSync(join(dir, n)))) dirs.push(dir)
+    else if (process.platform !== 'win32') {
+      const mirror = mkdtempSync(join(tmpdir(), 'hilbertraum-path-'))
+      for (const name of readdirSync(dir)) if (!NODE_NAMES.includes(name)) symlinkSync(join(dir, name), join(mirror, name))
+      dirs.push(mirror)
+    }
+  }
+  return dirs.join(delimiter)
+}
+
+/** A PATH whose first folder holds a stub node that writes `lines` to stderr and exits `code`, then this PATH without node:
+ *  a node.cmd for the .ps1 leg, a sh script for the .sh leg. No line holds a character cmd or sh reads specially. */
+function stubNodePath(ext: 'ps1' | 'sh', lines: string[], code: number): string {
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
+  if (ext === 'ps1') writeFileSync(join(dir, 'node.cmd'), ['@echo off', ...lines.map((l) => `>&2 echo ${l}`), `exit /b ${code}`, ''].join('\r\n'))
+  else writeFileSync(join(dir, 'node'), ['#!/bin/sh', ...lines.map((l) => `echo "${l}" >&2`), `exit ${code}`, ''].join('\n'), { mode: 0o755 })
+  return `${dir}${delimiter}${pathWithoutNode()}`
+}
 
 /** A runtime-sources.yaml whose sha256 fields are all `sha`; URLs on a reserved TLD. */
 function runtimeSourcesYaml(sha: string): string {
@@ -211,7 +256,11 @@ function sellableDrive(): string {
   )
   // A real drive keeps its manifests in per-role folders, and a folder is what a manifest walk must skip.
   mkdirSync(join(root, 'model-manifests', 'vision'))
-  writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
+  // The Kit's policy (the updates key) and the two files the Kit builder writes last (T3.3b Q-b, T3.8): the release
+  // record naming the one app's version and the support end in the builder's bytes (the F-13 golden's).
+  writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson({ kit: true }), null, 2))
+  writeDriveFile(root, 'config/drive-release.json', `${JSON.stringify({ format: 1, app_version: APP_VERSION }, null, 2)}\n`)
+  writeDriveFile(root, 'config/kit-support.txt', F13_STAMP)
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
   // The folders a Kit build lays out empty, and the ones the app creates on first use and may leave empty (#893).
@@ -519,6 +568,139 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
+    // W-33 (Δ-37, T1.11 P3-3; T3.8): release 1's Windows start file tells a running app by opening it for writing, so a
+    // read-only root app reads "in flight" at every start and the launch counter never counts. prepare-drive refuses such
+    // a drive before it writes anything, a dry run included, as its other refusals end (exit 1), and names each app.
+    it('prepare-drive refuses a read-only root app before writing anything, a dry run included (W-33, T3.8)', () => {
+      const preparer = `prepare-drive.${leg.ext}`
+      const root = scriptRoot('script-prep-readonly-')
+      const apps = [`HilbertRaum-${APP_VERSION}-portable.exe`, `HilbertRaum-${APP_VERSION}-mac-arm64.app.zip`, `HilbertRaum-${APP_VERSION}.AppImage`]
+      for (const name of apps) {
+        writeFileSync(join(root, name), 'app')
+        chmodSync(join(root, name), 0o444)
+      }
+      try {
+        for (const extra of [[], [f('DryRun')]]) {
+          const r = leg.run(preparer, [f('Target'), root, ...extra])
+          const out = outputOf(r)
+          expect(r.status, out).toBe(1)
+          expect(out).toContain('Refusing to prepare the drive: an app at the drive root is read-only')
+          for (const name of apps) expect(out).toContain(`  - ${name}`)
+          expect(readdirSync(root).sort(), 'nothing written').toEqual([...apps].sort())
+        }
+      } finally {
+        for (const name of apps) chmodSync(join(root, name), 0o666)
+      }
+      const r = leg.run(preparer, [f('Target'), root])
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(existsSync(join(root, 'config', 'policy.json'))).toBe(true)
+    })
+
+    // App-update W-20, F-13 (T3.3b): prepare-drive writes config/drive-release.json through the helper the Kit builders
+    // call, when node is on PATH; a DIY drive is still built on a machine without node, and a helper failure is a note,
+    // never the exit code. Under the Kit flag the builder writes the record as its last step instead. It never writes
+    // config/kit-support.txt (only the Kit builder does, once).
+    describe('prepare-drive writes the drive release record when node is there (W-20, F-13)', () => {
+      const preparer = `prepare-drive.${leg.ext}`
+      const record = (root: string): string => join(root, 'config', 'drive-release.json')
+      /** The F-13 golden tree under a `scriptRoot()`, with a Kit's stamp in the builder bytes; made here, never committed
+       *  (`models/`, `logs/`, `workspace/` and `*.log` are git-ignored). */
+      function goldenTree(prefix: string): string {
+        const root = scriptRoot(prefix)
+        for (const [rel, text] of Object.entries(F13.tree.files)) writeDriveFile(root, rel, text)
+        writeDriveFile(root, 'config/kit-support.txt', F13_STAMP)
+        return root
+      }
+
+      it('over the F-13 golden tree it leaves the golden record byte for byte, and the stamp as it was', () => {
+        const root = goldenTree('script-record-')
+        const r = leg.run(preparer, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(readFileSync(record(root))).toEqual(F13_RECORD)
+        expect(readFileSync(join(root, 'config', 'kit-support.txt'), 'latin1')).toBe(F13_STAMP)
+        expect(r.stdout).toContain(`  ${f13Write('W01').stdout}`)
+      })
+
+      // The record is derived from the drive, not an owner-edited file: rewritten on every run, while the two policy
+      // files keep the force-flag rule; an existing record's unknown fields stay (the golden's W15).
+      it('a re-run rewrites the record without the force flag and keeps its unknown fields, while drive.json and policy.json are skipped', () => {
+        const root = goldenTree('script-record-again-')
+        const w15 = f13Write('W15')
+        writeFileSync(record(root), f13Bytes(w15.existing!))
+        const r = leg.run(preparer, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        for (const name of ['drive.json', 'policy.json']) {
+          expect(out).toContain(`skip config/${name}`)
+          expect(readFileSync(join(root, 'config', name), 'utf8')).toBe(F13.tree.files[`config/${name}`])
+        }
+        expect(readFileSync(record(root))).toEqual(Buffer.from(F13_RECORD.toString('utf8').replace(/\n}\n$/, `,\n${w15.append}\n}\n`), 'utf8'))
+      })
+
+      it('without node on PATH it lays the drive out, says it left the record, and exits 0', () => {
+        const root = scriptRoot('script-record-no-node-')
+        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: pathWithoutNode() } })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        for (const dir of DRIVE_LAYOUT_DIRS) expect(existsSync(join(root, ...dir.split('/'))), dir).toBe(true)
+        expect(out).toContain('skip config/drive-release.json (no node on PATH; the drive works without it)')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      // A stub node that prints a line naming a path, then a line of the helper's own, and fails: the run shows the
+      // helper's line only, notes the failure, and still exits 0.
+      it("a node that fails is a note, never the exit code, and only the helper's own lines are shown", () => {
+        const pathLine = leg.ext === 'ps1' ? 'at C:\\someone\\checkout\\x.mjs:1' : 'at /home/someone/checkout/x.mjs:1'
+        const stubPath = stubNodePath(leg.ext, [pathLine, 'drive-release.json: stub refusal; nothing written'], 1)
+        const root = scriptRoot('script-record-stub-')
+        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: stubPath } })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(existsSync(join(root, 'config', 'policy.json')), 'the layout went on').toBe(true)
+        expect(out).toContain('  drive-release.json: stub refusal; nothing written')
+        expect(out).toContain('note: config/drive-release.json not written (exit 1); the drive works without it')
+        expect(out).not.toContain('someone')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      // P3 exit L-2: the record is optional, so its helper's failure must not reach a caller in any form. `powershell -File`
+      // exits 0 after a normal end, whatever ran last (the row above), but a caller in the same session reads
+      // $LASTEXITCODE, which still held the failed node's exit when the script ended without an exit code of its own. Bash
+      // has no such channel: the .sh twin's status is its last command's, an echo (the row above, on the .sh leg).
+      it.runIf(leg.ext === 'ps1')('a caller in the same PowerShell session reads $LASTEXITCODE 0 after a record helper that failed (P3 exit L-2)', () => {
+        const callerDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-caller-'))
+        writeFileSync(join(callerDir, 'caller.ps1'), ['param([string]$Script, [string]$Target)', '& $Script -Target $Target', '"caller: LASTEXITCODE=$LASTEXITCODE"', ''].join('\r\n'))
+        const root = scriptRoot('script-record-session-')
+        const r = leg.run('caller.ps1', [join(REPO_ROOT, 'scripts', preparer), root], {
+          scriptsDir: callerDir,
+          env: { PATH: stubNodePath(leg.ext, ['drive-release.json: stub refusal; nothing written'], 1) }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out, 'the record helper failed').toContain('note: config/drive-release.json not written (exit 1); the drive works without it')
+        expect(r.stdout).toContain('caller: LASTEXITCODE=0')
+      })
+
+      it('with the Kit flag it leaves the record to the builder, which writes it as its last step', () => {
+        const root = goldenTree('script-record-kit-')
+        const r = leg.run(preparer, [f('Target'), root, f('Kit')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain('skip config/drive-release.json (build-commercial-drive writes it as its last step)')
+        expect(existsSync(record(root))).toBe(false)
+      })
+
+      it('a dry run plans the record and writes none', () => {
+        const root = goldenTree('script-record-dry-')
+        const r = leg.run(preparer, [f('Target'), root, f('DryRun')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain('+ config/drive-release.json')
+        expect(existsSync(record(root))).toBe(false)
+      })
+    })
+
     describe('build-commercial-drive verify-only gate (#233)', () => {
       it.skipIf(!toolBuilt)('runs the canonical gate offline and prints NOT SELLABLE for an empty target', () => {
         const root = scriptRoot('script-gate-')
@@ -598,12 +780,51 @@ for (const leg of SCRIPT_LEGS) {
         const src = mkdtempSync(join(tmpdir(), 'hilbertraum-script-artifact-'))
         const artifact = join(src, 'HilbertRaum-0.1.59-portable.exe')
         writeFileSync(artifact, 'new')
-        const r = leg.run(builder, [f('Target'), root, f('AppArtifact'), artifact, f('DryRun')])
+        const r = leg.run(builder, [f('Target'), root, f('AppArtifact'), artifact, f('DryRun'), f('SupportEnd'), SUPPORT_END])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('HilbertRaum-0.1.58-portable.exe')
         expect(out).not.toMatch(/^\[1\] /m) // refused before step 1 ran (the root's own name holds a "[1]")
         expect(existsSync(join(root, 'HilbertRaum-0.1.59-portable.exe'))).toBe(false)
+      })
+
+      // T3.6 B-1: the stamp check before step 1 shows only the lines that start with "kit-support.txt", so a node that
+      // ended non-zero without one (a helper file missing from the checkout: Node's own "Cannot find module" line names a
+      // path) left the run at its two header lines and exit 1. A stub node stands in for it; a dry run, so nothing runs
+      // after the check even if it went on.
+      it('a stamp check that fails before step 1 without a line of its own is named in one fixed line, exit 1 (T3.6 B-1)', () => {
+        const missing = leg.ext === 'ps1'
+          ? 'Error: Cannot find module C:\\someone\\checkout\\scripts\\lib\\ts-sibling-imports.mjs'
+          : 'Error: Cannot find module /home/someone/checkout/scripts/lib/ts-sibling-imports.mjs'
+        const root = scriptRoot('script-check-dies-')
+        const r = leg.run(builder, [f('Target'), root, f('DryRun'), f('SupportEnd'), SUPPORT_END], {
+          env: { PATH: stubNodePath(leg.ext, [missing], 1) }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('  write-kit-support.mjs failed (exit 1) before step 1: run it by hand with --check to see why')
+        expect(out).not.toContain('someone')
+        expect(out).not.toMatch(/^\[1\] /m)
+        expect(readdirSync(root), 'nothing written').toEqual([])
+      })
+
+      // P3 exit L-1: that fixed line is for a check that ended without a word. A refusal of the helper's own (another month
+      // already on the drive, a stamp not in the builder's bytes, an old Node) has said why in its line; the fixed line after
+      // it called a deliberate refusal a broken toolchain and sent the owner to a hand run that only repeats it.
+      it('a stamp check that refuses with a line of its own shows that line alone, once, exit 1 (P3 exit L-1)', () => {
+        const refusal =
+          `kit-support.txt: this drive's support end is already 2099-11; refusing to change it to ${SUPPORT_END}. It is written once per Kit. ` +
+          'To re-stamp unsold stock, delete config/kit-support.txt on purpose and run again; nothing written'
+        const root = scriptRoot('script-check-refuses-')
+        const r = leg.run(builder, [f('Target'), root, f('DryRun'), f('SupportEnd'), SUPPORT_END], {
+          env: { PATH: stubNodePath(leg.ext, [refusal], 1) }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out.split(`  ${refusal}`), 'the helper\'s line, once').toHaveLength(2)
+        expect(out).not.toContain('write-kit-support.mjs failed')
+        expect(out).not.toMatch(/^\[1\] /m)
+        expect(readdirSync(root), 'nothing written').toEqual([])
       })
     })
 
@@ -1580,6 +1801,38 @@ for (const leg of SCRIPT_LEGS) {
         expect(readRuntimeMarkerState(dir)).toEqual({ kind: 'marker', marker: record })
         expect(verdictOf(root, 'commercial', { scriptsDir: scripts })).toBe('skip')
       })
+
+      // T3.8 (W-33; T3.12 review 1 M-2): the sell gate fails a file in an engine folder that the marker does not record, by
+      // the walk an install records. A copy this twin installed (a subfolder and macOS metadata in its archive) passes it:
+      // what the twin leaves out of its marker, the gate leaves out too.
+      it('a copy this twin installed has every file of its folder in its marker, by the walk of the sell gate (T3.8)', async () => {
+        const members: Record<string, string> = {
+          ...copy.files,
+          'backends/ggml-vulkan.dll': 'vulkan bytes',
+          '._ggml.dll': 'AppleDouble',
+          '.DS_Store': 'Finder',
+          '__MACOSX/._llama-server.exe': 'AppleDouble'
+        }
+        const archive = makeZip(Object.entries(members).map(([name, bytes]) => ({ name, data: Buffer.from(bytes) })))
+        const source = join(mkdtempSync(join(tmpdir(), 'hilbertraum-walk-src-')), 'llama-walk-bin-win-vulkan-x64.zip')
+        writeFileSync(source, archive)
+        const zipSha = createHash('sha256').update(archive).digest('hex')
+        const root = scratchTarget(zipSha, (y) => y.replace('https://example.invalid/llama-b9585-bin-win-vulkan-x64.zip', pathToFileURL(source).href))
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), copy.os], { env: downloadEnv(), scriptsDir: isolatedScripts() })
+        expect(r.status, outputOf(r)).toBe(0)
+        const dir = join(root, ...copy.extractTo.split('/'))
+        expect(existsSync(join(dir, 'backends', 'ggml-vulkan.dll')), 'the subfolder was installed').toBe(true)
+        const state = readRuntimeMarkerState(dir)
+        expect(state.kind === 'marker' ? Object.keys(state.marker.binaries ?? {}).sort() : state).toEqual(['backends/ggml-vulkan.dll', 'ggml.dll', 'llama-server.exe'])
+        expect(existsSync(join(dir, '._ggml.dll')), 'the metadata is on the disk, so the gate has it to leave out').toBe(true)
+        // The pin as the gate reads it (the file:// URL the twin fetched from is no URL a pin may hold; the gate reads none).
+        const pin = validateRuntimeSources(parseYaml(runtimeSourcesYaml(zipSha))).sources
+        expect(pin, 'the pin validates').toBeDefined()
+        const res = await assertCommercialDrive(root, [], pin, null, null)
+        expect(res.checks.runtimeCurrent, 'the other pinned builds are not installed: the engine check ran').toBe(false)
+        expect(res.problems.filter((p) => p.startsWith('runtime build win/x64 vulkan:'))).toEqual([])
+        expect(res.checks.runtimeHashed).toBe(true)
+      })
     })
 
     // build-commercial-drive provisions every OS from one host, so it leans on both rules. Each CI leg has
@@ -1620,6 +1873,23 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('NOT SELLABLE')
       })
 
+      // F-8, G-14 built the simpler way: the native pre-flight reads `network.allow_update_checks` only, so neither the
+      // Kit's `updates.allow_online_check: true` nor an administrator's install keys trip it, and the canonical gate agrees.
+      it.skipIf(!toolBuilt).each<[string, Record<string, unknown>]>([
+        ["the Kit's policy", {}],
+        ["the Kit's policy with an admin's allow_user_install false", { allow_user_install: false }]
+      ])('%s reaches SELLABLE (exit 0)', (_title, extra) => {
+        const root = sellableDrive()
+        const policy = buildPolicyJson({ kit: true })
+        expect(policy.updates, 'the Kit literal carries the block').toStrictEqual({ allow_online_check: true })
+        writeDriveFile(root, 'config/policy.json', JSON.stringify({ ...policy, updates: { ...policy.updates, ...extra } }, null, 2))
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+        expect(out).not.toContain('NOT SELLABLE')
+      })
+
       // The positive behind the two ocr flips below: a pre-flight that called every OCR file a mismatch would pass both.
       // The sh pre-flight also died with no verdict on the second file, or on a key after the block (#765); and on Git
       // Bash it hashed by filename, so a backslash target read every file as a mismatch.
@@ -1645,6 +1915,8 @@ for (const leg of SCRIPT_LEGS) {
         ['telemetry on', (root) => patchPolicy(root, 'network', 'allow_telemetry', true), 'policy: telemetry allowed'],
         ['sha256 match off', (root) => patchPolicy(root, 'models', 'require_sha256_match', false), 'policy: sha256 match not required'],
         ['a workspace database', (root) => writeDriveFile(root, 'workspace/hilbertraum.sqlite.enc', 'db'), 'user data present: workspace/hilbertraum.sqlite.enc'],
+        // T3.8 (W-33): a start on a prepared drive writes updates/update.log, so a Kit that was started before it shipped.
+        ['a started drive', (root) => writeDriveFile(root, 'updates/update.log', 'started'), 'user data present: updates/update.log'],
         ['an imported document', (root) => writeDriveFile(root, 'workspace/documents/a.enc', 'doc'), 'user data present: workspace/documents/*'],
         ['no app skills', (root) => rm(root, 'app-skills'), 'no app skills provisioned'],
         ['a user skill', (root) => writeDriveFile(root, 'user-skills/mine/SKILL.md', 'skill'), 'user skill present on a drive meant to ship empty: user-skills/mine'],
@@ -1921,6 +2193,36 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('    - canonical gate: not sellable (exit 1')
         expect(out).not.toContain('SELLABLE: canonical gate passed')
       })
+
+      // T3.3b F4 end to end (T3.8): apps copied by hand after the skip-package flag leave a record without an app version,
+      // and the verify-only check writes nothing, so it refuses the drive and names the way out; after that one command
+      // the same check passes. Neither check touched the record or the support end.
+      it.skipIf(!toolBuilt)('a record without an app version: NOT SELLABLE with the way out, SELLABLE once the record helper ran (T3.8)', () => {
+        const root = sellableDrive()
+        const record = join(root, 'config', 'drive-release.json')
+        const stamp = join(root, 'config', 'kit-support.txt')
+        writeFileSync(record, `${JSON.stringify({ format: 1, systems: [], files: [] }, null, 2)}\n`)
+        writeDriveFile(root, 'config/drive.json', '{}') // the helper writes only on a prepared drive
+        const before = [readFileSync(record), readFileSync(stamp)]
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain(
+          '  - config/drive-release.json records no app version — the apps were copied onto the drive after the record was ' +
+            'written: write it again: node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>, then run ' +
+            'the check again (-VerifyOnly / --verify-only writes nothing)'
+        )
+        expect([readFileSync(record), readFileSync(stamp)], 'the check wrote nothing').toEqual(before)
+        const helper = spawnSync(process.execPath, ['--no-warnings', join(REPO_ROOT, 'scripts', 'lib', 'write-drive-release.mjs'), '--target', root], {
+          encoding: 'utf8'
+        })
+        expect(helper.status, outputOf(helper)).toBe(0)
+        const again = verify(root)
+        const outAgain = outputOf(again)
+        expect(again.status, outAgain).toBe(0)
+        expect(outAgain).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+        expect(readFileSync(stamp), 'the support end as it was').toEqual(before[1])
+      })
     })
 
     // The whole dry pipeline (six child fetch runs, all dry) takes ~30 s per leg and needs
@@ -1930,7 +2232,7 @@ for (const leg of SCRIPT_LEGS) {
         'a dry run reaches the canonical verdict: NOT SELLABLE on an empty target',
         () => {
           const root = scriptRoot('script-dry-')
-          const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun')], { timeoutMs: 240_000 })
+          const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun'), f('SupportEnd'), SUPPORT_END], { timeoutMs: 240_000 })
           const out = outputOf(r)
           expect(r.status, out).toBe(1)
           expect(out).toContain('NOT SELLABLE')

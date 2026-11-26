@@ -4,6 +4,7 @@ import { safeFailureForLog } from './services/failure-for-log'
 import { tMain } from './services/i18n'
 import { log } from './services/logging'
 import { startFailureFrom } from './services/start-failure'
+import { writeStartFailedLine } from './services/updates/update-log'
 import type { ResolvedPaths } from './services/workspace'
 import type { BackendStartFailure } from '../shared/types'
 
@@ -25,6 +26,8 @@ export interface BackendStartDeps {
   /** The main window's sender set (index.ts, module scope). */
   trustedSenders: TrustedSenders
   isDev: boolean
+  /** This app's version (`app.getVersion()`), for the failed-start line of `updates/update.log` (W-14). */
+  appVersion: string
   /** The drive layout the start resolved before it threw, or null; read only after a throw. */
   paths: () => ResolvedPaths | null
 }
@@ -57,8 +60,15 @@ export function runBackendStart(start: () => void, deps: BackendStartDeps): Back
       failure = UNREADABLE_FAILURE
     }
     log.error('Backend initialization failed', safeFailureForLog(err))
-    // The update plan's P3 (W-14) writes the failure's class to `updates/update.log` here, best-effort (the drive may
-    // be what failed): `failure.cause` and `failure.code`, both content-free.
+    // App-update W-14 (F-11): the failed-start line in the drive's `updates/update.log`, the one trace of this start that
+    // outlives a quit before any unlock. Best-effort (the drive may be what failed): the cause, the code and the bare
+    // system call, content-free by the line's grammar; nothing on a root that is no prepared drive. In a `try` of its
+    // own, so neither the writer nor the layout getter can keep the failure state below from being registered.
+    try {
+      writeStartFailedLine(deps.paths(), { appVersion: deps.appVersion, thrown: err, failure })
+    } catch {
+      /* the writer never throws; the getter is the caller's */
+    }
     try {
       const released = releaseGuardedHandlers(registeredBefore)
       if (released > 0) log.info('Backend start: removed the channels the partial start had registered', { released })

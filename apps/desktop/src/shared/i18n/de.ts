@@ -2101,6 +2101,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.accel.gpuAvailable': '{name} (GPU verfügbar)',
   'diag.app.title': 'App & Laufzeit',
   'diag.app.version': 'App-Version',
+  'diag.app.driveVersion': 'Auf dem Laufwerk vermerkte Version',
+  'diag.app.driveVersionNone': 'nicht vermerkt',
   'diag.app.unknown': 'unbekannt',
   'diag.app.selectedModel': 'Ausgewähltes Modell',
   'diag.app.noneSelected': 'keins ausgewählt',
@@ -2807,7 +2809,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb sind die Antworten simuliert. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.engine.cannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.engine.filesUnreadable':
-    'Die KI-Engine konnte gerade eine ihrer Dateien nicht lesen. Möglicherweise wird die Datei gerade von einem anderen Programm verwendet (zum Beispiel von einem Virenscanner). Bitte versuche es in einer Minute erneut.',
+    'Die KI-Engine konnte eine ihrer Dateien gerade nicht lesen. Vielleicht verwendet ein anderes ' +
+    'Programm die Datei (zum Beispiel ein Virenscanner). Versuch es in einer Minute noch einmal.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
   'main.modelStarting': 'Das KI-Modell startet gerade. Versuch es gleich noch einmal.',
@@ -3034,7 +3037,7 @@ export const de: Record<keyof typeof en, string> = {
   // Kopien blieben, und der nächste Versuch (oder Start) setzt die neue ein.
   'main.engine.filesInUse':
     'Die Engine konnte nicht ersetzt werden, weil ein anderes Programm eine ihrer Dateien verwendet ' +
-    '(zum Beispiel ein Virenscanner). Bitte versuche es in einer Minute erneut.',
+    '(zum Beispiel ein Virenscanner). Versuch es in einer Minute noch einmal.',
   // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
   'main.ocr.badRequest':
     'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +
@@ -3100,6 +3103,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.models.noManifests':
     'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
   'main.models.unknown': 'Dieses Modell steht nicht mehr in der Modellliste dieses Laufwerks.',
+  'main.models.activeUnavailable':
+    '{model} ist in dieser Version von HilbertRaum nicht verfügbar und wurde deshalb nicht ' +
+    'gestartet. Wähle im KI-Modell-Bereich ein anderes Modell.',
   'main.models.notChat': '„{name}“ ist kein Chat-Modell und kann hier nicht gestartet werden.',
   'main.models.startDamaged':
     'Das Modell „{name}“ hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +

@@ -127,6 +127,18 @@ engine install put on the drive (session-only, like the verdict; the UI then off
 reinstall). Since #670 (§10 there) the verdict keeps it for every later `'files-damaged'` report
 until it is dropped, whichever program reports (on a Kit, the `cpu/` net); since #678 (§11) a `cpu/`
 net the reinstall replaced is a fresh copy too. The shape is unchanged.
+App-update W-70 (P3, T3.11; `docs/app-updates.md` §7.7): `AppStatus` gained the additive-optional
+`activeModelUnavailable?: boolean` (absent reads as `false`): `activeModelId` names a model this version
+cannot list, so the auto-start never starts it and Home shows its no-model state ("No model selected
+yet", "Needs a model", "Choose a model") instead of "Getting ready…" / "Starting". "Cannot list" = no
+entry of `discoverManifests().manifests` has the id (an id listed only as needing a newer version is not
+listed), and either the walk returned no errors or the id is in its `unsupported` list; worked out once per
+unlocked session and model id; a non-string or empty id reads `false`. The same session's auto-start
+after unlock, create or the plaintext start sends the notice `main.models.activeUnavailable` (copy deck
+C09, `{model}` = the id; `runtime:notice` target `models`, "Go to AI Model") once, starts nothing, and
+writes nothing: `activeModelId` stays byte for byte, no settings row, no audit event, no `update.log`
+line. A manual start of such a model keeps `main.models.unknown`. Settings gained
+`gpuAutoDisabledEngine` (under "Settings storage").
 The engine-downloader additions are listed under the downloader below. No new channel, no schema
 change.
 #1012 (`security-model.md` "Re-hash sidecar binaries before spawn"): a `'files-damaged'` verdict can
@@ -555,15 +567,34 @@ not register (a newer build's language on a shared drive) comes back as stored, 
 `'system'` (`resolveUiLanguage`, in main and in the renderer), and is never rewritten by the read,
 so the newer build still finds the choice. Before unlock the renderer cannot read it and uses its
 per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
+**The app-update wave's P3 added `gpuAutoDisabledEngine`** (W-70; `EngineBuildStamp | null`, default
+`null`, main-owned): the chat engine build `gpuAutoDisabled` was set under, `{ version, backend }` copied
+as written from the install marker of `runtime/llama.cpp/<os>/` (F-24's strings, compared as exact
+text), or `null` when that build was unknown. The GPU failure recorder (`createGpuFailureRecorder`,
+`runtime/gpu-failure.ts`) writes it before the flag in the same patch, on every set; the clears ("Try
+GPU again", the #530 clear, the re-arm) write the flag first and the stamp last. At every session
+start (unlock, create, the plaintext start, a healed "Check again"), after the #530 clear,
+`healEngineLoadState` clears a set flag, its stamp and `gpuLastError` when the drive's own
+build differs from the stamp in `version` or `backend` (`rearmGpuForOtherEngine`); a missing or
+unreadable stamp, an unknown own build (no readable marker) or no engine leaves the flag. The write gate
+and the read both take only a plain object whose own `version` and `backend` are non-empty strings of at
+most 128 characters (`engineBuildStampOf`), and keep only those two fields; any other stored shape reads
+as `null`. **Frozen for every later writer** (release 1 reads it so for life; F-27): write the stamp with
+every `gpuAutoDisabled: true`, before the flag, from the marker of the engine folder that ran, or `null`
+when unknown, never an older stamp beside a new flag; keep `gpuAutoDisabled` a JSON boolean and the stamp
+`null` or that object (anything more goes in a new key, which release 1's clear leaves behind, so it must
+never be trusted without the flag and stamp beside it); keep the marker's `version` and `backend` as F-24
+has them. `activeModelId` stays a manifest id string of at most 512 characters (release 1 names it in
+the unavailable-model notice).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
 `workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it (#858).
-**Who writes which key (#868).** `settings:update` accepts only the keys [`SETTINGS_WRITERS`](../apps/desktop/src/shared/settings-writers.ts) marks renderer-owned (`satisfies Record<keyof AppSettings, 'renderer' | 'main'>`, so a new key fails typecheck until it has an owner). A main-owned key (`workspaceMode`, `activeModelId`, `activeEmbeddingModelId`, `lastBenchmark`, `benchmarkHistory`, `modelPlacements`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`, `checksumCache`) is dropped with a log line and the rest of the patch is saved; a key that is no setting is dropped and only counted in that line, never named. The main process writes its keys through `updateSettings(db, …)` directly (the active ids through `models:select` / `runtime:use`). The preload's `updateSettings(patch: RendererSettingsPatch)` makes a literal patch with a main-owned key fail typecheck in the renderer too. The 19 renderer-owned keys are the 14 the screens write plus the five retrieval tuning keys, which no screen writes; the write gate bounds those: `ragTopKInitial` and `ragTopKFinal` to 1–200 and `ragMaxContextTokens` to 256–131,072, each floored to a whole number and clamped, `ragMinSimilarity` clamped to 0–1, and a non-finite value of these four is dropped with the previous value kept; `contextTokens` keeps its 2,048 floor (a non-finite value still falls back to it) and is clamped to 131,072.
+**Who writes which key (#868).** `settings:update` accepts only the keys [`SETTINGS_WRITERS`](../apps/desktop/src/shared/settings-writers.ts) marks renderer-owned (`satisfies Record<keyof AppSettings, 'renderer' | 'main'>`, so a new key fails typecheck until it has an owner). A main-owned key (`workspaceMode`, `activeModelId`, `activeEmbeddingModelId`, `lastBenchmark`, `benchmarkHistory`, `modelPlacements`, `gpuAutoDisabled`, `gpuAutoDisabledEngine`, `gpuLastError`, `gpuProbe`, `checksumCache`) is dropped with a log line and the rest of the patch is saved; a key that is no setting is dropped and only counted in that line, never named. The main process writes its keys through `updateSettings(db, …)` directly (the active ids through `models:select` / `runtime:use`). The preload's `updateSettings(patch: RendererSettingsPatch)` makes a literal patch with a main-owned key fail typecheck in the renderer too. The 19 renderer-owned keys are the 14 the screens write plus the five retrieval tuning keys, which no screen writes; the write gate bounds those: `ragTopKInitial` and `ragTopKFinal` to 1–200 and `ragMaxContextTokens` to 256–131,072, each floored to a whole number and clamped, `ragMinSimilarity` clamped to 0–1, and a non-finite value of these four is dropped with the previous value kept; `contextTokens` keeps its 2,048 floor (a non-finite value still falls back to it) and is clamped to 131,072.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
 (rootPath, workspacePath, modelsPath, logsPath, configPath, dbPath, isPreparedDrive).
-`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, and `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable). See `docs/drive-layout.md`.
+`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable, and `driveAppVersion`: on a prepared drive the valid `app_version` of `config/drive-release.json`, read through `updates/drive-release.ts` at every call, else `null`, Diagnostics' "Version recorded on the drive", W-16). See `docs/drive-layout.md`.
 
 ### Core IPC (Phase 1 live)
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
@@ -1449,6 +1480,32 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `policy.json`, `opts.isDev: false`, a packaged build, takes `STRICT_POLICY` on a provisioned dir and
   `STANDALONE_POLICY` on an unprovisioned one). The result is cached per config dir; each warning is
   told once, to the first reader that passes `onWarn`, whichever read found it (#752).
+  `policyFilePresent` (also `PolicyStatus`'s) is `true` once `policy.json` was found and read, a
+  malformed one included (its parse falls back to the base), `false` when it is missing or the read
+  failed: it never says the file parsed (app-update CF-29).
+- **The update policy (app-update F-8, frozen; `docs/app-updates.md` §8.1).** Its own reader beside
+  `loadPolicy`, never a `PrivacyPolicy` field (their missing-file answers are opposite on purpose):
+  **`readUpdatePolicy(configDir)`** → `UpdatePolicy { install: 'allowed' | 'managed' | 'invalid';
+  maxVersion: Semver | null; file: 'read' | 'none' | 'unreadable' }`, tokens only (no message, so
+  nothing of the file reaches a log line), from disk at every call (never the F-30 cache), never
+  throws, never logs. `install`: no `updates` key, or `allow_user_install` absent or `true` → `allowed`;
+  `false` → `managed` (whatever `max_version` says); any other value, `null` included, a present
+  `updates` that is no object, or a `max_version` that fails the strict SemVer 2.0.0 parse
+  (`updates/version.ts`: at most 256 characters, ASCII, no `v`, no spaces, no leading zeros) →
+  `invalid`. `maxVersion` is the parsed cap, and `null` whenever there is none or `install` is not
+  `allowed`. `file`: `read`; `none` when neither `policy.json` nor `drive.json` is there (a root that
+  never had one); `unreadable` when `policy.json` is missing on a prepared drive or damaged (empty,
+  not JSON, top level no object, a folder, a read error, over 1,048,576 bytes, UTF-16; invalid UTF-8
+  inside a string only reads as U+FFFD), with `install: 'allowed'` (G-14's exception: a damaged
+  policy never blocks the signed repair; a junk value blocks). Own keys only, exact names; one leading UTF-8 byte-order mark skipped; a duplicate
+  key: the last wins; a link is followed. **`updateInstallVerdict(policy, version)`** →
+  `'allowed' | 'managed' | 'invalid' | 'above-max'`: `managed` and `invalid` before the version is
+  known; with a cap, a version above it in SemVer 2.0.0 order (pre-releases ordered, build metadata
+  ignored), or one that does not parse, is `above-max`. `updates.allow_online_check` is reserved: no
+  reader reads a value of it, and nothing ORs it into `resolveNetwork`, `networkAllowedByPolicy` or
+  the status line. In this build only the sell gate calls `readUpdatePolicy`. **Later writers** never
+  widen the `max_version` grammar and never change the types of `allow_user_install` or of `updates`
+  (release 1 would read the new form as `invalid`). Golden: `tests/fixtures/readers/f8-policy/`.
 - **`resolveNetwork(policy, allowNetworkSetting)`** → `{ networkAllowedByPolicy, networkAllowed,
   offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
   onWarn?, opts?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
@@ -2030,8 +2087,13 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   registered inside `registerStartFailureIpc`, so a release that cannot start can still take the update that repairs
   it. Their registrar takes a narrow context built from `StartFailureContext` (the senders, the drive root from
   `paths`, `isDev`, the app version), **never the full `AppContext`**: that context does not exist in this state, and
-  the same registrar call serves the normal start. P3's `update.log` line (W-14) goes in `runBackendStart`'s catch,
-  `failure.cause` and `failure.code` only.
+  the same registrar call serves the normal start. The `update.log` failed-start line (app-update W-14, F-11) is
+  written in `runBackendStart`'s catch (`writeStartFailedLine`, best-effort, never throws, only on a prepared drive
+  and only when the start had resolved its paths): `start-failed` with `version` (the app version the runner was
+  handed), `cause` (`drive_not_writable` | `drive_full` | `other`; anything else reads as `other`), `err` (the gate's
+  `code` when it passes the log's error-code rule; when the gate has none and the thrown value's code is libuv's
+  `UNKNOWN`, `err=UNKNOWN`; else left out) and `syscall` (the thrown error's bare system call, at most 16 bytes, else
+  left out). Never a message, a path or SQLite's text (`update-log.ts`, below).
   **After the back end (review M-2):** the app protocol, the menu and the window start inside `runWindowStart`
   (`main/backend-start.ts`). A throw there logs `App start failed after the back end` (`safeFailureForLog`), shows
   `dialog.showErrorBox(tMain('app.fatal.title'), tMain('gate.startFailed.other') + '\n\n' + tMain('gate.startFailed.help'))`
@@ -2076,15 +2138,23 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
 - `DRIVE_LAYOUT_DIRS` (the list itself: see
   [`drive-layout.md`](drive-layout.md); `script-drift` holds both prepare-drive scripts to it).
 - `buildDriveJson(opts) → DriveJson` (the `config/drive.json` marker, spec §6 shape);
-  `buildPolicyJson({dev?}) → PolicyJson` (snake_case; `allow_model_downloads: true`, update checks off;
-  commercial vs dev posture). `script-drift` holds the scripts to both shapes; no app code writes them.
+  `buildPolicyJson({dev?, kit?}) → PolicyJson` (snake_case; `allow_model_downloads: true`,
+  `allow_update_checks: false`; commercial vs dev posture). `kit: true` (app-update F-8, U1 (b)) adds
+  `updates: { allow_online_check: true }`, the Kit's reserved key, which only `prepare-drive -Kit` /
+  `--kit` writes and only `build-commercial-drive` passes (its step 1); without `kit` the key is absent
+  (not `undefined`), so a DIY or dev `policy.json` is byte for byte what it was before the key existed.
+  This version reads no value of it (`services/policy.ts` above). `script-drift` holds the scripts to
+  these shapes, the Kit's included; no app code writes them.
 - `verifyDriveModels(root, manifests) → ModelVerifyResult[]` (status `verified|unverified_placeholder|
   mismatch|missing|unsupported`, reusing `models.ts` `verifyChecksum`/`isRealSha256`);
   `buildChecksumsJson(root, manifests) → ChecksumsJson` (generate-mode capture of present-weight hashes).
 ✅ **`scripts/`** (repo root, self-contained; no Node/npm needed to prep a drive):
 - `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
-  `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
-  `config/{drive,policy}.json`. Idempotent; config only (re)written with `--force`.
+  `-Dev`/`--dev`, `-Kit`/`--kit`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
+  `config/{drive,policy}.json`; idempotent, those two only (re)written with `--force`. At its end it writes
+  `config/drive-release.json` through `scripts/lib/write-drive-release.mjs` (`node --no-warnings`, W-20) when node is on
+  `PATH`, on every run (derived from the drive, unknown fields kept); no node, or a helper that fails, is one line and
+  never the exit code; `--kit` leaves the record to the Kit builder. Never writes `config/kit-support.txt`.
 - `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`, `-Strict`/`--strict`,
   `-Kit`/`--kit`. Flat-YAML line-parses the
   manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
@@ -2104,6 +2174,144 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
 ✅ **Docs** — `docs/user-guide.md` (non-technical §17 path) + `docs/troubleshooting.md` (§18) added;
   `docs/packaging.md` + `docs/drive-layout.md` extended (portable build, the scripts, win/mac/linux
   reconciliation). prepare-drive copies user-guide/troubleshooting + `PRIVACY.md` onto the drive.
+
+### The drive's support log and release record (app-update P3; `docs/app-updates.md` §5.3, §8.2, §8.4, §8.5)
+✅ **`services/updates/update-log.ts`** — `<root>/updates/update.log` (W-14, W-68; F-11, frozen: release
+1, its start files, the apply scripts and every later version append to this one file for ever, and
+support reads it before any unlock). Golden: `tests/fixtures/readers/f11-update-log/` (`vectors.json`,
+`vectors-unlock.json`).
+- **Frame:** `r1-app <os> <event> <key>=<value> … t=<YYYY-MM-DDTHH:MM:SSZ>`, one append of LF, the line,
+  LF; bytes 0x21–0x7E with one space between tokens, at most 256 bytes without the two LFs; never a CR,
+  never `d="…"`. `<os>` is `process.platform` when it matches `[a-z0-9]{1,8}`, else `unknown`; an event
+  `[a-z][a-z0-9-]{0,31}`; a key `[a-z][a-z0-9_]{0,31}`; a value 1–64 bytes of `[0-9A-Za-z._+-]`; `t` is
+  the writer's own key (UTC to the second, the milliseconds dropped, never rounded; omitted when it fails
+  its shape). A field that fails, or a second field of one key, is dropped; an invalid event, or a line
+  still over 256 bytes, is not written (skipped and counted). Release 1 parses no line and no writer token.
+- **Token rules:** V SemVer 2.0.0 of at most 24 bytes (`updates/version.ts`'s parse); P
+  `[0-9A-Za-z][0-9A-Za-z._+-]{0,15}` holding a digit; I `[0-9]{1,6}` (from JSON only an integer); S
+  `[0-9]{1,3}(\.[0-9]{1,3}){2,3}`; E `E[A-Z0-9]{1,30}`, `ERR_[A-Z0-9_]{1,36}`, `SQLITE_[0-9]{1,5}` or
+  libuv's `UNKNOWN`, at most 40 bytes; C a bare system call of at most 16 bytes; N `-?[0-9]{1,10}`; A
+  `[0-9A-Za-z._-]{1,16}`. The sentinels `unknown`, `absent`, `unreadable`, `none` hold no digit, and a key
+  admits only the ones its schema names.
+- **The typed event table** (`UPDATE_LOG_EVENTS`, frozen; Δ-66: content-free by each event's typed
+  fields). `appendUpdateLogLine(paths, event, fields)` writes only a registered event, each key of its
+  schema in order with the first value its rule (or closed list) admits; an unregistered event is no
+  line (`unregistered-event`, counted). `formatUpdateLogLine` is the frame alone and writes nothing.
+
+  | Event | Keys, in order (rule; the sentinels it admits) | Written |
+  |---|---|---|
+  | `startup` | `version` (V; `unknown`), `llama`, `whisper`, `kiwix` (P; `absent`, `unreadable`), `release` (V; `absent`, `unreadable`), `release_format` (I), `drive_format` (I; `absent`, `unreadable`), `sqlite` (S; `unknown`) | once per start, `writeStartupLine` in `initBackend`, after logging exists and before the policy and the workspace's start (perf mark `update_log_startup`) |
+  | `start-failed` | `version` (V; `unknown`), `cause` (`drive_not_writable`, `drive_full`, `other`), `err` (E), `syscall` (C) | `writeStartFailedLine`, in `runBackendStart`'s catch ("Start failure (#1024)" above) |
+  | `unlock` | `result` (`ok`, `wrong_password`, `vault_damaged`, `workspace_schema_unreadable`, `vault_open_failed`, `vault_missing`, `vault_descriptor_missing`, `vault_descriptor_unreadable`, `vault_recovery_blocked`, `workspace_newer`, else `error`), `user_version` (N), `writer` (V; `none`, `unreadable`), `applied` (A), `damage` (`failed-authentication`, `not-a-database`), `what` (`database`, `descriptor`, `kdf`, `frame`, `journal`), `found` (I), `err` (E), `syscall` (C) | `writeUnlockLine`, after every unlock attempt the handler answers (`ipc/registerWorkspaceIpc.ts`, whose `updateLog` option is the startup line's drive), and at the start's plaintext open (developer builds only) |
+
+- **`startup`'s sources:** `version` from `app.getVersion()`; the pins from the app's own bundled
+  `runtime-sources.yaml` (`absent`: no file or no block; `unreadable`: a read error, text that does not
+  parse or validate, a pin failing P); `release` from `readDriveRelease` (`absent`: no file or no valid
+  `app_version`; `unreadable`: a read error, a damaged file, or a valid version over 24 bytes);
+  `release_format` only when the record was read and its `format` passes I; `drive_format` from
+  `config/drive.json`'s `drive_format_version` (`absent`: missing or not an integer; `unreadable`: no
+  file, a read error, no JSON object, over 65,536 bytes, an integer failing I); `sqlite` from
+  `process.versions.sqlite`. Every start-file read is one `lstat` and one open checked on its descriptor.
+- **`unlock`'s fields per result:** `ok` `user_version`, `writer`, `applied`; `vault_damaged`
+  `user_version`, `damage`; `workspace_schema_unreadable` `user_version`; `vault_open_failed`
+  `user_version`, `writer`, `applied`, `err`; `vault_recovery_blocked` `err`; `workspace_newer`
+  `user_version`, `what`, `found`; `error` `user_version`, `writer`, `applied`, `err`, `syscall`; the
+  other refusals `result` alone. `user_version` is the workspace file's own, from its SQLite header after
+  the decrypt and before the migrations (only under SQLite's magic), or a newer database's version;
+  `writer` the `last_writer` stamp found before the overwrite, through `parseLastWriter` (`none`: no stamp,
+  also one stored as a BLOB or a number; `unreadable`: it does not parse, or its version is no V), with
+  its second field as `applied` when that passes A; `writer` is left out when the open never got as far
+  as the stamp. `result=error` with a `writer` key means the workspace did open (inside the vault every
+  failure after the stamp is another result). No line for an unlock of a workspace already open, or for
+  a password that is not a string; a create writes none. The plaintext start's newer-database line has
+  no `found`. A refused unlock's only write is this line. Each event's line fits 256 bytes by its actual
+  fields: `startup` (longest 252 bytes, golden `s46`) and `start-failed` by their whole schema, `unlock`
+  per result (all nine keys at their caps would not fit; the longest real line is 210 bytes, golden `u61`).
+- **Data-fed keys** (a value read from a file another program or build wrote, bounded by its rule):
+  `startup`'s `release` and `release_format` (`drive-release.json`) and `drive_format` (`drive.json`);
+  `unlock`'s `writer` and `applied` (the stamp) and `user_version` and `found` (the header, a
+  newer-format refusal). The word-shaped rules: P (`Steuer_2026.xlsx` passes it) and C (`peter`) are fed
+  only from their own source (the bundled yaml's pins, an error's `syscall`); V (`1.0.0-peter`) and E
+  (`EMMA`) admit a word in their own shapes; A is word-shaped outright. `applied` is the one data-fed key
+  whose rule is neither numeric nor a closed list (release 1's exception to CF-41): release 1 writes
+  `interim`, and a later applied-through token that fails A is left out of release 1's lines for good.
+  Only someone holding the workspace key writes the stamp.
+- **Writing:** only on a prepared drive (`config/drive.json`); never through a link: `updates` a real
+  folder at its name (made with one plain `mkdir`, checked with `folderContainment`), `update.log`
+  absent or a regular file with one name, opened once (`O_RDWR|O_APPEND|O_CREAT`, plus `O_NOFOLLOW` and
+  `O_NONBLOCK` on POSIX) and checked again on its descriptor (the same file, still one name). A skip or
+  a failure is swallowed and counted and logged in `app.log` as `Update log: line skipped` with
+  `{ event, reason, code, syscall, skipped }`, never a path; nothing throws to the caller (the reasons and
+  that text are not part of F-11). An error is logged only by its code and bare system call, never a
+  message, nor `causeFailure`'s `sqlite` or `kind`. **Cap:** after an app append over 65,536 bytes, and
+  only while `updates/applying/` is proven absent, the app keeps the newest 32,768 bytes from the byte
+  after the first LF in them, copied as bytes (never decoded) through `update.log.tmp` (any old one is
+  removed by its name first) and a rename; a failed trim is tried again at the next append. Start files
+  and apply scripts only append; readers accept any size. No quit line and no line for the
+  unavailable-model notice.
+- **Later events** (P6, P7; CF-41): registered in `UPDATE_LOG_EVENTS`, in this module, as data, each key
+  with one token rule or a closed list (an `UPD-*` code as the closed list of table B.9); a data-fed key
+  is named in the module's header; a new token rule is numeric-shaped or a closed list, and a golden
+  change. A later app writes its own writer token.
+
+✅ **`services/updates/drive-release.ts`** — `readDriveRelease(rootPath) → DriveReleaseRead`, the
+`config/drive-release.json` read contract (W-20; F-13, frozen; golden
+`tests/fixtures/readers/f13-drive-release/`). Sync, never throws, logs nothing, no cache:
+- `{ kind: 'absent' }` (no file: ENOENT, ENOTDIR); `{ kind: 'unreadable', code }` (there, but the read
+  failed just now: the errno token only, no constraint for that read, nothing kept; a link swapped in
+  at the open on POSIX ends here, `ELOOP`); `{ kind: 'damaged', fault }` with `not-a-file` (anything but
+  a regular file at the name, by `lstat` and again on the open descriptor: a folder, a pipe, a link or
+  junction, never followed or opened), `empty` (0 bytes), `too-large` (over 1,048,576 bytes, never
+  opened; exactly that size is read), `not-json`, `not-an-object`; `{ kind: 'record', appVersion, format,
+  highestVersionSeen }`, each `absent`, `invalid` or `valid` with its value. A `config/` that is itself a
+  link is followed.
+- One leading UTF-8 byte-order mark is removed (a second, or one after any other byte, is not JSON);
+  decoded leniently (non-UTF-8 bytes in an unknown field do no harm, in `app_version` they make it
+  invalid); own fields only (a field under an own `__proto__` key is none); a duplicate key: the last
+  counts; keys compared byte for byte. `app_version` and `highest_version_seen`: valid only as SemVer
+  2.0.0, ASCII, at most 64 bytes, never trimmed (`null` included, anything else is `invalid`, which counts
+  as absent). `format`: a safe integer ≥ 1 (`1.0` reads as 1).
+- Only `app_version` reaches a decision (`driveAppVersion(read)`: its valid value, else `null`, no
+  constraint); `format` and `highest_version_seen` are returned for the log only, so a record with
+  `format` 2 or 99 has its `app_version` read as usual. In this build the readers are the startup line,
+  Diagnostics' "Version recorded on the drive" (`DriveStatus.driveAppVersion`) and the sell gate.
+- `rootArtifactOf` / `rootApps` / `chooseAppVersion` (unfrozen until P6's F-18, CF-33): which app per
+  system is at a root and its version, by exact, case-sensitive name; a folder `*.app` (not starting
+  with a dot) is a macOS app of no known version; a file named `*.app`, a folder named like an app file
+  and a link are no app.
+✅ **`scripts/lib/write-drive-release.mjs`** — the one writer of the record, run by `prepare-drive` and
+the Kit builder as `node --no-warnings` (node 22.18 or later), only lines starting `drive-release.json`
+shown. Writes UTF-8 without a byte-order mark, LF, two-space indent: its own fields first (`format: 1`,
+`app_version`, `systems`, `files`), then every other field of an existing record in `JSON.parse`'s
+own-key order (`highest_version_seen` and an own `__proto__` included; the helper never writes
+`highest_version_seen`); never over 1,048,576 bytes. `app_version` for a writer that did not place the
+apps: the one version when every root app carries it, otherwise an existing valid value a root app
+carries by exact name (a root `*.app` never carries one), otherwise left out. `systems`: the systems with
+an app at the root, sorted. `files`: path + lower-case SHA-256 of the root apps, the four start files and
+every regular file under `runtime/` (links never followed, `runtime/` itself included; `._*` and
+`.DS_Store` skipped; nothing from `config/`, `models/`, `docs/`, `logs/`, `workspace/`, `updates/`), paths
+sorted by UTF-16 code units. A damaged existing record is replaced and its unknown fields are lost. A
+reader module that cannot load ends it with one line (`drive-release.json: the reader could not be loaded
+(<code>); nothing written`) and exit 1; a record that cannot be read back as written exits 1 with its own
+line. **Frozen for every later writer:** the same byte form and the 1 MiB cap; an older builder's helper
+may rewrite `format`, `app_version`, `systems` and `files` in release 1's shape at any time (with `format`
+back to 1), so a later shape takes new field names, `format` stays informational and a breaking layout
+takes a new file name; a later writer's own fields survive a round trip through an IEEE double parser
+(integers beyond ±(2^53 − 1) and wide values go in strings; no duplicate keys; no meaning in key order,
+number spelling or whitespace), since release 1's helper rewrites them through `JSON.parse` /
+`JSON.stringify`.
+✅ **`services/updates/kit-support.ts`** — `config/kit-support.txt`, a Kit's support end (W-17, G-13 (b);
+F-13's other half, frozen). The file holds one month `YYYY-MM` (four ASCII digits, a hyphen, `01`–`12`).
+Only the Kit builder writes it, once per Kit (`scripts/lib/write-kit-support.mjs`: the month and one LF,
+8 bytes, ASCII, no byte-order mark, created exclusively, never through or over a link or an existing
+file); `prepare-drive`, the app and every later version never write, rewrite or delete it.
+`readKitSupport(rootPath)` (sync, never throws, no cache, logs nothing) accepts a regular file (a link
+of any kind, a folder or a pipe at the name is `damaged`, never followed or opened; a `config/` that is
+a link is followed) of at most 64 bytes: one leading UTF-8 byte-order mark or none, the month, then
+nothing, one LF or one CR LF. Anything else is `damaged` (`not-a-file`, `empty`, `too-large`,
+`not-a-month`), a failed read `unreadable` with its errno token, no file (ENOENT, ENOTDIR) `absent`;
+otherwise `month`. It checks the form only: whether the month is past is the support computation's
+(P6). `formatKitSupport(month)` gives the builder's bytes, the only ones the sell gate accepts.
 
 ### Provisioning / asset loader (Phase 12 live)
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
@@ -2293,19 +2501,34 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `registerCoreIpc` → preload `api.runPreflight`; **HomeScreen** shows a non-blocking note.
 ✅ **`services/commercial-drive.ts`** — the sell gate `assertCommercialDrive(rootPath, manifests, runtimeSources?,
   whisperSources?, ocrSources?, opts?: { platforms, appVersion, families? }) → Promise<CommercialAssertion { ok,
-  problems[], checks{ policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData, runtimeCurrent,
-  runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent, userSkillsEmpty,
-  licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent }, modelResults }>`. Never
-  throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
-  directly in `workspace/` or `logs/` (`USER_DATA_DIRS`; a file or a link, never followed, is named `<dir>/<name>`, a
-  non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
+  problems[], checks{ policyCommercial, networkDenied, kitUpdatesKey, weightsVerified, licensesApproved, noUserData,
+  runtimeCurrent, runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent,
+  userSkillsEmpty, licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent,
+  releaseRecordCurrent, supportEndStamped }, modelResults }>` (19 checks; the three T3.8 ones added for app updates).
+  Never throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
+  directly in `workspace/`, `logs/` or `updates/` (`USER_DATA_DIRS`; a file or a link, never followed, is named
+  `<dir>/<name>`, a non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
   `config/working-copy-lost.json*` (`USER_DATA_CONFIG_FILES`, exact or `<name>.*`, any case); one sorted problem per
-  entry, `user data present on a drive meant to ship empty: <path>`. It fails closed: `workspace/`, `logs/`, `config/`
-  or a folder directly in the first two that cannot be listed (no read or enter right), and a file where one of the
-  three folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
+  entry, `user data present on a drive meant to ship empty: <path>` (for `updates/…` followed by ` — this drive was
+  started: delete the updates/ folder …`). It fails closed: `workspace/`, `logs/`, `updates/`, `config/`
+  or a folder directly in the first three that cannot be listed (no read or enter right), and a file where one of the
+  four folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
   folder)`; only a missing path (ENOENT) passes. A link is what Node's `Dirent` calls one (a symlink, a junction; a
   cloud placeholder folder is a folder). The builders' native pre-flight states the same rule (`user data present:
-  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
+  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). **T3.8 (app-update W-33's M1
+  half):** `kitUpdatesKey`: `policy.json` holds an own `updates` object with an own `allow_online_check: true` (read by a
+  private reader, never fed into the network ceiling) and `readUpdatePolicy(...).install` is not `invalid` (`managed`
+  passes); `releaseRecordCurrent`: `readDriveRelease` (F-13) answers `record` with a valid `app_version` equal to
+  `chooseAppVersion(rootApps(root), undefined)`'s single version; `supportEndStamped`: `readKitSupport` answers `month`
+  and the file's bytes equal `formatKitSupport(month)`; `runtimeHashed` (and `optionalRuntimesConsistent` for an
+  optional family) also fails a file in an engine folder that the copy's map does not record, by the walk
+  `installedFileKeys` records (the marker, the top-level `cpu/`, `cpu.new/`, `cpu.old/`, macOS metadata, another
+  build's nested folder and a name the #729 check reported are left out; a folder that cannot be listed fails closed),
+  checked only over a map that hashes every required file; `appArtifactsPresent` judges the root by `rootArtifactOf`
+  and also fails an extracted `*.app` folder (a hidden one included), a name whose version segment is no version, any
+  other root file named `hilbertraum-*` in any case, and a root app with no write bit (`mode & 0o222`, on Windows the
+  read-only attribute). Problem order: posture, the Kit key, weights, reviews, user data, notices, engines, source
+  bundle, OCR, skills, platform matrix, apps, launchers, the record, the support end. The Kit rule (#766): a model SHIPS when it is bundled
   (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
   is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
   `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.
@@ -2316,12 +2539,28 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   line goes to stderr (#767). The TS build plan (`planCommercialDrive`/`formatPlan`) had no caller and was removed (#770).
 ✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline; `-Target`/`--target`
   (req), `-AcceptLicense`, `-AppArtifact` (pre-built signed apps to copy, one per platform), `-Platforms` (default all
-  three), `-KiwixSourceDir`, `-SkipPackage`, `-VerifyOnly`, `-DryRun` (each also `--kebab-case` in the .sh).
-  Orchestrates prepare-drive (`-Force`) → fetch-models `--bundled` → fetch-runtime (every OS, `--commercial`) →
+  three), `-KiwixSourceDir`, `-SupportEnd` (`YYYY-MM`, required unless `-VerifyOnly`, a dry run included), `-SkipPackage`,
+  `-VerifyOnly`, `-DryRun` (each also `--kebab-case` in the .sh).
+  Orchestrates prepare-drive (`-Force -Kit`) → fetch-models `--bundled` → fetch-runtime (every OS, `--commercial`) →
   [kiwix source bundle, then kiwix_tools] → (package = manual) → copy launchers+docs → verify-models `--generate` →
-  native pre-flight (verify-models `--kit` for the weights) + the canonical gate above, which alone prints SELLABLE.
-  Before step 1 it refuses a missing `-AppArtifact` and a differently named prior app at the root (exit 1). PS uses
-  **hashtable** splatting for named params.
+  [un-numbered, the last writes: `scripts/lib/write-kit-support.mjs` writes `config/kit-support.txt` (W-17: the month
+  and one LF, 8 bytes, created exclusively; the same month kept, another refused), then
+  `scripts/lib/write-drive-release.mjs` writes `config/drive-release.json`; both `node --no-warnings`, only their own
+  lines shown, a non-zero exit stops the build] → native pre-flight (verify-models `--kit` for the weights) + the
+  canonical gate above, which alone prints SELLABLE. Before step 1 it refuses, in this order: a missing `-SupportEnd`
+  value (exit 2); an `-AppArtifact` that is not there and a differently named prior app at the root (exit 1); a
+  missing node (exit 1); then the helper's `--check`, which checks the month itself: one that is no `YYYY-MM` or is
+  before this computer's current UTC month exits 2, and a `config/kit-support.txt` that holds another month or is no
+  builder stamp exits 1; it echoes the month in words. When that check exits other than 0 and 2 having shown no line
+  of its own, the builder adds one fixed line, `write-kit-support.mjs failed (exit N) before step 1: …`, and exits 1
+  (T3.6 B-1: a helper that dies without a line of its own, such as Node's "Cannot find module", is no silent exit 1);
+  a refusal with its own line stands alone (P3 exit L-1). `-VerifyOnly` and `-DryRun`
+  write neither file. The stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`:
+  `absent`, `unreadable` (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
+  `tests/fixtures/readers/f13-drive-release/kit-support.json`). Both `prepare-drive` twins (so step 1 too) refuse, before
+  writing anything and in a dry run too, a root app (`HilbertRaum-*-portable.exe`, `-mac-arm64.app.zip`, `.AppImage`,
+  any case) with no write bit (exit 1, one line per app; W-33, T3.8). The final check hands the gate `$NodeTarget`
+  (one trim rule). PS uses **hashtable** splatting for named params.
 ✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
   `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
   env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).
@@ -2973,7 +3212,17 @@ whole renderer-visible surface.
   new `BinaryVerifyResult` **`marker-damaged`** (never cached; the engines refuse it as `'files-damaged'`,
   the same `EngineProblem` and "Install again" offer as #1012, so no new channel or shape; the
   knowledge-pack tools refuse it with their `files` kind). A map that records files of the copy but not
-  the program asked about is `marker-damaged` as well (`fault: 'program-unrecorded'`). The version
+  the program asked about is `marker-damaged` as well (`fault: 'program-unrecorded'`); since app-update
+  T3.12's fix round so is any non-empty map in the program's own folder without it. **At the pre-spawn
+  check a read error is judged by its code** (T3.12's fix rounds): of the marker itself, `EIO` →
+  `marker-damaged` (`fault: 'drive-read-failed'`) and a name the OS refuses (`ERR_INVALID_ARG_VALUE`,
+  `ENAMETOOLONG`, `ELOOP`, `EINVAL`) → `marker-damaged` (`'name-refused'`), while a hold (`EBUSY`, `EPERM`,
+  `EACCES`, `EAGAIN`, `EMFILE`, `ENFILE`) or an unknown code stays `unreadable`; of a recorded file, `EIO`
+  counts as the file gone, by what it is (`missing` or `missing-other`), and a refused name is
+  `marker-damaged`. `readRuntimeMarkerState` itself still answers `unreadable` with the code, for its
+  other callers. The fault words in the log line are `program-unrecorded`, `name-refused`,
+  `drive-read-failed` and `readRuntimeMarkerState`'s own. A check that throws ends as `unreadable` and
+  leaves the cache; the GPU probe then answers `null`. The version
   relation, the install skip, the status, Diagnostics and the swap's "complete" check read every state but
   a marker as "no marker" (`readRuntimeMarker` → `null`: relation `unknown`, never updated). The sell gate
   fails a damaged or unreadable marker with its own line, and only an absent one lets an optional family
@@ -2983,6 +3232,12 @@ whole renderer-visible surface.
   - `binaries` stays a map from the file's path relative to the copy (`markerBinaryKey`: `/` separators)
     to that file's **lower-case SHA-256 in hex**, and it records every file of the copy, the program
     first. A value never becomes an object, a list or another digest;
+  - (app-update F-24, Δ-61, T3.12's reviews) **every key names a regular file of the copy** (never a
+    folder or another non-file); a main marker records **no file under `cpu/`, `cpu.new/` or
+    `cpu.old/`**, for every family (a nested net has its own marker); the program is recorded under
+    **exactly the name release 1 resolves** (lower case, `llama-server.exe` on Windows), and every
+    key is spelled as the archive spells it (names are compared byte for byte, also on a file system
+    that ignores case);
   - **anything new goes into a new top-level field** (an engine signature, G-28; a second digest): never
     inside `binaries`, and never a new meaning for `version`, `backend`, `os` or `arch`, which stay strings
     (`version` keeps the upstream tag shapes, F-24);
@@ -2999,9 +3254,9 @@ whole renderer-visible surface.
     last `"binaries":{` of the line that reaches the name before a `}` (so a nested map after the top-level
     one that records no SHA-256 for the file leaves the top-level hash found), and the recorded names (the
     #998 check that every recorded file is there) come from the last `"binaries":{…}` of the line, split at
-    its commas. The builders' native pre-flight (`build-commercial-drive.{sh,ps1}`, left to the update
-    plan's P3) still takes the last `"version"` and `"backend"` on the line, so it may report a mismatch the
-    canonical gate does not.
+    its commas. The builders' native pre-flight (`build-commercial-drive.{sh,ps1}`; the update plan's P3
+    left it as it is) still takes the last `"version"` and `"backend"` on the line, so it may report a
+    mismatch the canonical gate does not.
   - **What release 1 does with a marker that breaks one of these rules** (as built, frozen in the update plan's
     golden markers, `tests/fixtures/readers/f24-markers/`, T2.10). A marker the app reads as damaged (a value
     that is no SHA-256, a field that is no string, a file over 1 MiB) stops the engine at a start with the

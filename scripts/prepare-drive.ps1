@@ -10,7 +10,15 @@
   config/{drive,policy}.json files. It does NOT download model weights or sidecar binaries
   (those are git-ignored and not in the repo, R5) — it tells you where to drop them.
 
-  Idempotent: re-running is safe. config/*.json are only (re)written with -Force.
+  Idempotent: re-running is safe. config/drive.json and config/policy.json are only
+  (re)written with -Force: they are the drive owner's to edit.
+
+  At its end it writes config/drive-release.json, the record of the apps, start files and
+  engines on the drive (docs/app-updates.md section 8.5), when node 22.18 or later is on PATH:
+  the record is derived from the drive, so it is rewritten on every run, -Force or not, and
+  keeps the fields it does not know. Without node it says so and goes on (the drive works
+  without the record). With -Kit it leaves the record to build-commercial-drive, which writes
+  it as its last step.
 
   The canonical, unit-tested reference for this layout + the config shapes is
   apps/desktop/src/main/services/drive.ts. Keep the two in sync.
@@ -29,6 +37,13 @@
   allowed). Default is the commercial posture (encryption required, models must verify).
   Model downloads are PERMITTED either way (still gated by the in-app allowNetwork setting +
   a per-download confirmation); update-checks + telemetry stay off (the app never phones home).
+
+.PARAMETER Kit
+  Write a Kit's policy.json: the posture above plus an "updates" block holding
+  "allow_online_check": true, the reserved key every HilbertRaum AI Kit carries
+  (docs/app-updates.md section 8.1; this version does not act on it). Only
+  build-commercial-drive passes it, at its step 1. Without it no "updates" key is written,
+  so a DIY drive's policy.json is the same as before the key existed.
 
 .PARAMETER WithAssets
   After laying out the tree, download + verify a launch-ready default asset set (invokes
@@ -63,6 +78,7 @@ param(
   [switch] $DryRun,
   [switch] $Force,
   [switch] $Dev,
+  [switch] $Kit,
   [switch] $WithAssets,
   [switch] $AllModels,
   [switch] $AcceptLicense
@@ -93,6 +109,10 @@ $DefaultModelIds = @(
 # split dirs and config across two locations (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
+# The target as the node helper is handed it. Native-arg quoting (PS 5.1): a trailing backslash before the closing
+# quote of a space-containing path escapes the quote, so it goes; a bare drive root like E:\ keeps its backslash.
+$NodeTarget = $Target.TrimEnd('\')
+if ($NodeTarget -match '^[A-Za-z]:$') { $NodeTarget += '\' }
 
 # Repo root = parent of this script's directory.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -133,6 +153,24 @@ function Join-DrivePath([string]$rel) {
   return (Join-Path $Target ($rel -replace '/', [IO.Path]::DirectorySeparatorChar))
 }
 
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $prefix; returns its exit code, and leaves how many lines it showed in
+# $script:NodeHelperShown (only the builder's stamp check reads it). stderr is merged so those lines can be picked out; in
+# PowerShell 5.1 a merged stderr line is an error record, which 'Stop' turns into a terminating error, so the call runs
+# under 'Continue', in this function's scope only. build-commercial-drive.ps1 holds the same function (script-drift.test.ts).
+function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {
+  $ErrorActionPreference = 'Continue'
+  $global:LASTEXITCODE = 0
+  $script:NodeHelperShown = 0
+  $lines = @(& $node --no-warnings @helperArgs 2>&1)
+  $code = $LASTEXITCODE
+  foreach ($line in $lines) {
+    $text = "$line"
+    if ($text.StartsWith($prefix)) { Write-Host "  $text"; $script:NodeHelperShown++ }
+  }
+  return $code
+}
+
 # --- Build config payloads (snake_case shapes parsePolicy/resolvePaths accept) ------
 $DriveJson = [ordered]@{
   product                  = 'HilbertRaum'
@@ -167,9 +205,31 @@ $PolicyJson = [ordered]@{
   }
 }
 
+# A Kit's policy only (-Kit, passed by build-commercial-drive): the reserved update key, written true
+# (docs/app-updates.md section 8.1). It is added on one line below, so the literal above stays the
+# DIY posture byte for byte; network.allow_update_checks stays false either way.
+$KitPolicyUpdates = [ordered]@{
+  allow_online_check = $true
+}
+if ($Kit) { $PolicyJson['updates'] = $KitPolicyUpdates }
+
 Write-Host "Prepare drive at: $Target" -ForegroundColor Cyan
 if ($DryRun) { Write-Host '(dry run -- nothing will be created)' -ForegroundColor Yellow }
 Write-Host ''
+
+# --- A read-only app at the root (app-update W-33; docs/app-updates.md section 11.3) ---
+# Release 1's Windows start file tells a running app by opening it for writing, so a read-only app reads as running at
+# every start: its launch counter never counts, and a broken new version never falls back. Refused before anything is
+# written, a dry run included; the sell gate refuses the same. The apps by the start files' root names, in any case
+# (the Windows start file's own match ignores case).
+$ReadOnlyApps = @(Get-ChildItem -LiteralPath $Target -File -Force -ErrorAction SilentlyContinue |
+  Where-Object { ($_.Name -like 'HilbertRaum-*-portable.exe' -or $_.Name -like 'HilbertRaum-*-mac-arm64.app.zip' -or $_.Name -like 'HilbertRaum-*.AppImage') -and $_.IsReadOnly })
+if ($ReadOnlyApps.Count -gt 0) {
+  Write-Host 'Refusing to prepare the drive: an app at the drive root is read-only:' -ForegroundColor Red
+  foreach ($a in $ReadOnlyApps) { Write-Host "  - $($a.Name)" -ForegroundColor Red }
+  Write-Host '  Clear its read-only attribute (attrib -r "<name>"), then run again.' -ForegroundColor Red
+  exit 1
+}
 
 # --- Directories --------------------------------------------------------------------
 Write-Host 'Directories:'
@@ -368,5 +428,31 @@ if ($WithAssets) {
   Write-Host "  3. Run scripts\verify-models.ps1 -Target '$Target' to verify checksums."
 }
 Write-Host ''
+
+# --- The drive's release record (app-update W-20; docs/app-updates.md section 8.5) -----
+# config/drive-release.json: the apps, start files and engines now on the drive, written by the node helper the Kit
+# builder calls too, so every drive built with node carries the same record for the same drive. Optional: a DIY drive
+# is still built on a machine without node, so a missing node or a helper that fails is one line, never this script's
+# exit code. Under -Kit the builder writes the record as its last step instead (hashing runtime/ once).
+Write-Host 'Release record:'
+if ($Kit) {
+  Write-Host '  skip config/drive-release.json (build-commercial-drive writes it as its last step)'
+} elseif ($DryRun) {
+  Write-Host '  + config/drive-release.json'
+} else {
+  $helperNode = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $helperNode) {
+    Write-Host '  skip config/drive-release.json (no node on PATH; the drive works without it)' -ForegroundColor Yellow
+  } else {
+    $ReleaseHelper = Join-Path $PSScriptRoot 'lib/write-drive-release.mjs'
+    $recordExit = Invoke-NodeHelper $helperNode.Source 'drive-release.json' @($ReleaseHelper, '--target', $NodeTarget)
+    if ($recordExit -ne 0) { Write-Host "  note: config/drive-release.json not written (exit $recordExit); the drive works without it" -ForegroundColor Yellow }
+  }
+}
+Write-Host ''
 Write-Host 'Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan
 Write-Host "  `$env:HILBERTRAUM_DRIVE_ROOT = '$Target'"
+# The success path ends with an exit code of its own, as fetch-models, fetch-runtime and verify-models do: without it a
+# caller in the same PowerShell session read $LASTEXITCODE as the last native call left it, a record helper's failure
+# included, which is a note above and never this script's exit code (P3 exit L-2). The .sh twin ends with its echo.
+exit 0

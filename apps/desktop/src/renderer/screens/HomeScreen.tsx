@@ -151,13 +151,16 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 
   const modelRunning = running
   const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
+  // W-70 (owner 2026-11-25: reuse "Choose a model"): an active model this version cannot list is never started (the
+  // unlock's notice says why), so it reads as no model selected: "Getting ready…" / "Starting" would wait for ever.
+  const selectedModelId = status?.activeModelUnavailable === true ? null : (status?.activeModelId ?? null)
 
   // The hero CTA is adaptive (D-UI3): it leads with the action that unblocks the user.
   // `needsModel` is the SAME signal the model row's warning badge renders from (no model
   // running AND none selected) — so the loud primary becomes "Choose a model" instead of
   // a "Start chatting" that dead-ends at the no-model empty state. Guarded on a loaded
   // status so we don't flash "Choose a model" before we know there isn't one.
-  const needsModel = status != null && !modelRunning && !status.activeModelId
+  const needsModel = status != null && !modelRunning && !selectedModelId
   // #530: the engine can't run here, so whatever "runs" is the demo runtime — the loud primary
   // leads to the AI Model screen, where the engine banner says what to install (D-UI3: the action
   // that unblocks the user leads; chatting stays a secondary, never hard-disabled).
@@ -176,7 +179,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       ? demoRunning
         ? t('home.headline.almost')
         : t('home.headline.ready')
-      : status?.activeModelId
+      : selectedModelId
         ? t('home.headline.starting')
         : t('home.headline.almost')
 
@@ -248,11 +251,11 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
           </Badge>
         )
       }
-    : status?.activeModelId
+    : selectedModelId
       ? {
           icon: 'brain',
           label: t('home.model.label'),
-          value: t('home.model.selected', { model: status.activeModelId }),
+          value: t('home.model.selected', { model: selectedModelId }),
           badge: (
             <Badge tone="neutral" icon="○">
               {t('home.model.badgeStarting')}

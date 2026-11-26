@@ -2108,6 +2108,8 @@ export const uk: UiCatalog<'uk'> = {
   'diag.accel.gpuAvailable': '{name} (GPU доступний)',
   'diag.app.title': 'Застосунок і середовище виконання',
   'diag.app.version': 'Версія застосунку',
+  'diag.app.driveVersion': 'Версія, зафіксована на диску',
+  'diag.app.driveVersionNone': 'не зафіксовано',
   'diag.app.unknown': 'невідомо',
   'diag.app.selectedModel': 'Вибрана модель',
   'diag.app.noneSelected': 'не вибрано',
@@ -3040,6 +3042,9 @@ export const uk: UiCatalog<'uk'> = {
   'main.models.noManifests':
     'На цьому диску не знайдено списку моделей — бракує папки model-manifests.',
   'main.models.unknown': 'Цієї моделі більше немає у списку моделей на цьому диску.',
+  'main.models.activeUnavailable':
+    'Модель {model} недоступна в цій версії HilbertRaum, тому її не запущено. Виберіть іншу модель ' +
+    'на екрані «ШІ-модель».',
   'main.models.notChat': '«{name}» — не модель чату, тому її не можна запустити тут.',
   'main.models.startDamaged':
     'Модель «{name}» не пройшла перевірку файлів, тому її не запущено. Завантажте її знову на екрані ' +

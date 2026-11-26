@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
 import { freeBytes } from './disk-space'
+import { driveAppVersion, readDriveRelease } from './updates/drive-release'
 import { IMAGES_DIR_NAME } from './workspace-vault'
 
 // Workspace / drive manager (spec §7.2 drive detector + §7.9 workspace manager).
@@ -213,6 +214,9 @@ export async function buildDriveStatus(paths: ResolvedPaths): Promise<DriveStatu
     writable: isWritable(paths.workspacePath),
     freeBytes: await freeBytes(paths.rootPath),
     imagesBytes: await imagesFootprintBytes(paths.workspacePath),
+    // W-16: the version the drive's builder recorded, read at every call (no cache), so a record a builder rewrote
+    // shows at the next look. Only a prepared drive has one: a standalone install's root is the app-data folder.
+    driveAppVersion: paths.isPreparedDrive ? driveAppVersion(readDriveRelease(paths.rootPath)) : null,
     platform: process.platform,
     arch: process.arch
   }

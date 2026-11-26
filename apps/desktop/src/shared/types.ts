@@ -122,6 +122,13 @@ export interface AppStatus {
   /** Effective network permission = policy ceiling ∧ user setting. */
   networkAllowed: boolean
   activeModelId: string | null
+  /**
+   * W-70 (app-update plan, T3.11): `activeModelId` names a model this version cannot list (a newer version chose it
+   * before a "Go back"), so it is never started (the unlock's notice C09 says why) and Home shows its no-model state
+   * rather than "Getting ready…". Read once per unlocked session and model id. Optional so older status fixtures stay
+   * valid; absent reads as false.
+   */
+  activeModelUnavailable?: boolean
   hardwareProfile: HardwareProfile
   workspaceMode: WorkspaceMode
   workspaceReady: boolean
@@ -300,7 +307,11 @@ export interface PrivacyPolicy {
  */
 export interface PolicyStatus {
   policy: PrivacyPolicy
-  /** A `config/policy.json` was found + parsed. */
+  /**
+   * A `config/policy.json` was found and read: `true` for a malformed one too (its parse falls back to the base
+   * policy), `false` when it is missing or the read failed. Not "the policy parsed": the update policy's "policy file
+   * unreadable" comes from `readUpdatePolicy`'s `file`, never from this field.
+   */
   policyFilePresent: boolean
   /** A `config/drive.json` was found + parsed. */
   driveFilePresent: boolean
@@ -463,6 +474,10 @@ export interface DriveStatus {
   /** On-disk footprint of `workspace/images/` — the saved image-analysis history (#122).
    *  `0` when empty/absent; `null` when the directory could not be read. */
   imagesBytes: number | null
+  /** The app version the drive's builder recorded: `config/drive-release.json`'s valid `app_version` (F-13's
+   *  reader, read again at every call; W-16). `null` on a standalone install, and on a drive without a readable
+   *  record or whose record carries no valid version. Diagnostics shows it as "Version recorded on the drive". */
+  driveAppVersion: string | null
   platform: string
   arch: string
 }
@@ -479,6 +494,15 @@ export interface PreflightResult {
   slowDriveWarning: string | null
   /** Issues worth showing (read-only / very low space). Empty on a healthy drive. */
   problems: string[]
+}
+
+/**
+ * Which build of the chat engine a drive's `runtime/llama.cpp/<os>/` holds (W-70): the install marker's `version` and
+ * `backend`, copied as written (F-24's strings, compared as exact text). `AppSettings.gpuAutoDisabledEngine`.
+ */
+export interface EngineBuildStamp {
+  version: string
+  backend: string
 }
 
 export interface AppSettings {
@@ -558,6 +582,15 @@ export interface AppSettings {
    * Diagnostics' "Try GPU again" (e.g. after a driver update). Never a shipped default.
    */
   gpuAutoDisabled: boolean
+  /**
+   * W-70 (app-update plan, T3.11): the engine build `gpuAutoDisabled` was set under, from the install marker of
+   * `runtime/llama.cpp/<os>/`, or null when that build was unknown. Rewritten with every set, before the flag (the
+   * store writes key by key); cleared by "Try GPU again" and the #530 clear. Read only while the flag is set: the
+   * session-start heal tries the card again when the drive's own build is another one (`healEngineLoadState`). A
+   * flag with no stamp it can read stays. FROZEN for every later writer (release 1 reads it so for life): a plain
+   * object of exactly these two non-empty strings of at most 128 characters, or null; anything more goes in a new key.
+   */
+  gpuAutoDisabledEngine: EngineBuildStamp | null
   /** Timestamped reason (stderr tail) for the last GPU failure, for Diagnostics. */
   gpuLastError: string | null
   /** Cached `--list-devices` probe result (feeds Diagnostics + classifyProfile). */
@@ -681,6 +714,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // toggle moves a machine to CPU.
   gpuMode: 'auto',
   gpuAutoDisabled: false,
+  gpuAutoDisabledEngine: null,
   gpuLastError: null,
   gpuProbe: null,
   autoStartActiveModel: true,

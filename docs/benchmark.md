@@ -1285,7 +1285,10 @@ Line format: `<ISO-8601 wall clock> <monotonic ms since process start> <event> <
 The wall-clock column correlates with timestamps written outside the process (for
 example a launcher stamp file); the monotonic column gives clean intra-process deltas.
 
-Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible` (the
+Events: `app_ready`, `update_log_startup` (`ms`: how long the start took to read its sources and
+append the startup line to a prepared drive's `updates/update.log`, app-update W-14,
+[`app-updates.md`](app-updates.md) §8.2; written on every start, also when no line was written),
+`backend_init_done`, `window_ready_to_show`, `gate_visible` (the
 one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
 split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / probe / encrypt / shred
 split + DB bytes; #982: `overwrittenBytes`, the budgeted overwrite's count on Linux's lost-session

@@ -7,7 +7,8 @@ import {
   ensureWorkspaceDirs,
   findPreparedDriveRoot,
   locateDriveRoot,
-  resolvePaths
+  resolvePaths,
+  type ResolvedPaths
 } from '../../src/main/services/workspace'
 import { tempRoot } from '../helpers/db-fixtures'
 
@@ -203,5 +204,55 @@ describe('workspace initialization', () => {
       thrown = err
     }
     expect(thrown).toMatchObject({ code: 'EEXIST', syscall: 'mkdir' })
+  })
+})
+
+// W-16 (app-update plan; copy deck C10/C11): Diagnostics names the app version a drive's builder recorded in
+// `config/drive-release.json`, through F-13's reader (updates/drive-release.ts, whose own golden covers every read
+// kind). These rows prove what `buildDriveStatus` makes of it: the record's valid `app_version` as written, on a
+// prepared drive only, read again at every call; anything else is null ("not recorded").
+describe('buildDriveStatus: the app version recorded on the drive (W-16)', () => {
+  /** A prepared drive (`config/drive.json`), with `record` as its `config/drive-release.json` when given. */
+  function preparedDrive(label: string, record?: string): ResolvedPaths {
+    const root = tempRoot(label)
+    mkdirSync(join(root, 'config'), { recursive: true })
+    writeFileSync(join(root, 'config', 'drive.json'), '{}')
+    if (record !== undefined) writeFileSync(join(root, 'config', 'drive-release.json'), record)
+    return resolvePaths({ envRoot: root, fallbackRoot: join(tmpdir(), 'appdata') })
+  }
+
+  it('a prepared drive with a record carries its app_version exactly as written', async () => {
+    const paths = preparedDrive('release-valid', '{"format":1,"app_version":"1.4.0-rc.1"}')
+    expect((await buildDriveStatus(paths)).driveAppVersion).toBe('1.4.0-rc.1')
+  })
+
+  it('a prepared drive without a record (every drive built before the record existed) carries null', async () => {
+    expect((await buildDriveStatus(preparedDrive('release-absent'))).driveAppVersion).toBeNull()
+  })
+
+  it.each([
+    ['an app_version that is a number', '{"format":1,"app_version":1}'],
+    ['a 0-byte record', ''],
+    ['a record that is no JSON object', '[]']
+  ])('%s carries null', async (_case, record) => {
+    expect((await buildDriveStatus(preparedDrive('release-unusable', record))).driveAppVersion).toBeNull()
+  })
+
+  it('reads the record again at every call: a rewritten record shows at the next read', async () => {
+    const paths = preparedDrive('release-rewritten', '{"app_version":"1.0.0"}')
+    expect((await buildDriveStatus(paths)).driveAppVersion).toBe('1.0.0')
+    writeFileSync(join(paths.configPath, 'drive-release.json'), '{"app_version":"1.1.0"}')
+    expect((await buildDriveStatus(paths)).driveAppVersion).toBe('1.1.0')
+  })
+
+  // A standalone install's root is the app-data folder: a record there is no drive's record (the builders' helper,
+  // scripts/lib/write-drive-release.mjs, refuses a root without `config/drive.json`).
+  it('a standalone install carries null, even with a valid record in its folder', async () => {
+    const root = tempRoot('release-standalone')
+    mkdirSync(join(root, 'config'), { recursive: true })
+    writeFileSync(join(root, 'config', 'drive-release.json'), '{"format":1,"app_version":"1.4.0"}')
+    const paths = resolvePaths({ fallbackRoot: root })
+    expect(paths.isPreparedDrive).toBe(false)
+    expect((await buildDriveStatus(paths)).driveAppVersion).toBeNull()
   })
 })

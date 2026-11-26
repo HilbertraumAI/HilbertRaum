@@ -38,9 +38,36 @@ from its first public `1.0.0` release onward.
   folders and never through a link, and it checks what it reads before you unlock more carefully. A damaged
   text-recognition (OCR) language file on the drive no longer makes the app crash at start; text recognition shows
   as unavailable instead.
+- **Settings → Diagnostics (advanced) shows which app version the drive was set up with.** A new row, "Version
+  recorded on the drive", sits under "App version" and is in the copied report too; it reads "not recorded" on a
+  drive that has no such record. Kits, and drives prepared with the drive scripts on a computer with Node.js 22.18
+  or later, now carry that record (`config/drive-release.json`).
+- **A drive set up for HilbertRaum now keeps a short support log, `updates/update.log`.** The app adds one line at
+  each start, at a start that failed and after each attempt to unlock the workspace, wrong passwords included: the
+  versions involved, the outcome as a fixed word and the time. It never holds a file name, a path, your text or a
+  password, and it is not encrypted: anyone who holds the drive can read when it was started and unlocked. The
+  privacy notice describes it.
+- **An AI model this version of HilbertRaum can't use is no longer shown as starting for ever.** If the workspace's
+  active model is one this version doesn't know (for example one a newer version chose), the app doesn't start it,
+  says so once after you unlock ("… isn’t available in this version of HilbertRaum, so it wasn’t started"), and
+  Home shows "Choose a model" instead of "Getting ready…". Your choice is not changed; pick another model on the AI
+  Model screen.
+- **After compatibility mode, the graphics card gets another try when the AI engine changes.** The app now
+  remembers which build of the AI engine was running when it switched to the processor. When the drive's engine is
+  another build (after an engine update, or when the drive moves between a Mac and a Windows or Linux computer), it
+  tries the graphics card once more on its own, and switches back by itself if the trouble returns.
+- **For Kit builders:** `build-commercial-drive` needs the Kit's support end, `-SupportEnd YYYY-MM`
+  (`--support-end`), on every run but `-VerifyOnly`, writes it once to `config/kit-support.txt`, and writes the
+  drive's release record as its last write before the final check; that check also refuses a Kit without these,
+  one that was started, an unrecorded file in an engine folder, an unpacked macOS `.app` and a read-only app at
+  the root.
 
 ### Fixed
 
+- **A worn or failing USB stick no longer leaves the AI engine at "try again in a minute" for ever.** When the drive
+  itself fails to read one of the AI engine's files, or its install record, the AI Model screen now says the engine's
+  files are damaged and offers **Install again**, instead of asking you to wait at every start. A file another
+  program holds for a moment still gets "try again".
 - **When HilbertRaum can't start, it now says why and what to do.** If the app could not write to its drive (for
   example a USB stick or SD card with its lock switch on), the drive was full, or something else stopped the start,
   the window showed only "The app could not start" with a technical message, and told you to look in a log file that

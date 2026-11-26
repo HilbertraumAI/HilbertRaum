@@ -134,12 +134,13 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
   // #516: an engine install replacing this folder holds spawns until its swap is over.
   await waitForEngineSpawns('llama_cpp')
-  // Refuse a tampered binary: no GPU. Never throws.
+  // Refuse a tampered binary. Never throws: a check that throws (only an injected one can) is no answer
+  // (T3.12 fix round, R2 m-4: `[]` was kept for the session and saved as "no graphics card").
   let verification: BinaryVerifyResult
   try {
     verification = await verify(binPath)
   } catch {
-    return []
+    return null
   }
   // #1012: a file of the copy is gone (a quarantined `ggml-vulkan.dll` would have answered "no
   // devices" and been persisted as "no graphics card") or changed (code review round 6: `[]` was saved

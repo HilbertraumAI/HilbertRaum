@@ -2082,6 +2082,8 @@ export const en = {
   'diag.accel.gpuAvailable': '{name} (GPU available)',
   'diag.app.title': 'App & runtime',
   'diag.app.version': 'App version',
+  'diag.app.driveVersion': 'Version recorded on the drive',
+  'diag.app.driveVersionNone': 'not recorded',
   'diag.app.unknown': 'unknown',
   'diag.app.selectedModel': 'Selected model',
   'diag.app.noneSelected': 'none selected',
@@ -3117,6 +3119,9 @@ export const en = {
   'main.models.noManifests':
     'No model list was found on this drive — the model-manifests folder is missing.',
   'main.models.unknown': 'This model is no longer in this drive’s model list.',
+  'main.models.activeUnavailable':
+    '{model} isn’t available in this version of HilbertRaum, so it wasn’t started. Choose another ' +
+    'model on the AI Model screen.',
   'main.models.notChat': '“{name}” is not a chat model, so it can’t be started here.',
   'main.models.startDamaged':
     '“{name}” failed its file check, so it wasn’t started. Download it again on the AI Model screen.',

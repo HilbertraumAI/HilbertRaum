@@ -20,9 +20,22 @@
 # knowledge-pack tools (kiwix-tools, #339 P8-3) are never fetched here — run
 # `fetch-runtime.sh --family kiwix_tools` separately once you want ZIM knowledge packs.
 #
+# --kit writes a Kit's policy.json: the posture plus an "updates" block holding
+# "allow_online_check": true, the reserved key every HilbertRaum AI Kit carries
+# (docs/app-updates.md §8.1; this version does not act on it). Only build-commercial-drive
+# passes it, at its step 1. Without it no "updates" key is written, so a DIY drive's
+# policy.json is the same as before the key existed.
+#
+# config/drive.json and config/policy.json are only (re)written with --force: they are the drive
+# owner's to edit. At its end it writes config/drive-release.json, the record of the apps, start
+# files and engines on the drive (docs/app-updates.md §8.5), when node 22.18 or later is on PATH:
+# the record is derived from the drive, so it is rewritten on every run, --force or not, and keeps
+# the fields it does not know. Without node it says so and goes on (the drive works without the
+# record). With --kit it leaves the record to build-commercial-drive, which writes it as its last step.
+#
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM [--dry-run] [--force] \
-#       [--dev] [--with-assets] [--all-models] [--accept-license]
+#       [--dev] [--kit] [--with-assets] [--all-models] [--accept-license]
 set -euo pipefail
 
 # The models --with-assets provisions by default (fast setup): the default chat model plus
@@ -44,6 +57,7 @@ TARGET=""
 DRY_RUN=0
 FORCE=0
 DEV=0
+KIT=0
 WITH_ASSETS=0
 ALL_MODELS=0
 ACCEPT_LICENSE=0
@@ -55,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
     --dev) DEV=1; shift ;;
+    --kit) KIT=1; shift ;;
     --with-assets) WITH_ASSETS=1; shift ;;
     --all-models) ALL_MODELS=1; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
@@ -111,11 +126,46 @@ else
   ENC_REQUIRED=true; PLAINTEXT=false; ALLOW_UNVERIFIED=false; REQUIRE_SHA=true; ALLOW_LOCAL_API=false
 fi
 
+# A Kit's policy only (--kit, passed by build-commercial-drive): the reserved update key, written
+# true (docs/app-updates.md §8.1), spliced in at the models block's close. Empty by default, so
+# without --kit POLICY_JSON is byte for byte the DIY posture; network.allow_update_checks stays
+# false either way. Kept outside the $DEV branch above.
+POLICY_UPDATES=''
+if [[ $KIT -eq 1 ]]; then
+  POLICY_UPDATES=',
+  "updates": {
+    "allow_online_check": true
+  }'
+fi
+
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 echo "Prepare drive at: $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be created)"
 echo
+
+# A read-only app at the root (app-update W-33; docs/app-updates.md §11.3). Release 1's Windows start file tells a running
+# app by opening it for writing, so a read-only app reads as running at every start: its launch counter never counts, and
+# a broken new version never falls back. Refused before anything is written, a dry run included; the sell gate refuses
+# the same. The apps by the start files' root names, in any case (the Windows start file's own match ignores case).
+# "Read-only" is the mode, no write bit for anyone (what the read-only attribute reads as on Windows, Git Bash
+# included), never this user's own right, which root always has. POSIX find: -perm -<bits> is "all of these set".
+READ_ONLY_APPS=()
+ro_glob_restore="$(shopt -p nullglob nocaseglob || true)"
+shopt -s nullglob nocaseglob
+for ro_app in "$TARGET"/HilbertRaum-*-portable.exe "$TARGET"/HilbertRaum-*-mac-arm64.app.zip "$TARGET"/HilbertRaum-*.AppImage; do
+  [[ -f "$ro_app" && ! -L "$ro_app" ]] || continue
+  if [[ -z "$(find "$ro_app" -prune \( -perm -200 -o -perm -020 -o -perm -002 \) -print)" ]]; then
+    READ_ONLY_APPS+=("${ro_app##*/}")
+  fi
+done
+eval "$ro_glob_restore"
+if [[ ${#READ_ONLY_APPS[@]} -gt 0 ]]; then
+  echo "Refusing to prepare the drive: an app at the drive root is read-only:" >&2
+  for ro_name in "${READ_ONLY_APPS[@]}"; do echo "  - $ro_name" >&2; done
+  echo "  Clear its read-only attribute (chmod u+w \"<name>\"), then run again." >&2
+  exit 1
+fi
 
 echo "Directories:"
 for d in "${DIRS[@]}"; do
@@ -193,6 +243,19 @@ for lic in "${LICENSE_ARTIFACTS[@]}"; do
 done
 echo
 
+# Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
+# of its own, each starting with $1; returns its exit code. build-commercial-drive.sh holds the same function
+# (script-drift.test.ts).
+node_helper() {
+  local prefix="$1" out line code=0
+  shift
+  out="$(node --no-warnings "$@" 2>&1)" || code=$?
+  while IFS= read -r line; do
+    case "$line" in "$prefix"*) echo "  $line" ;; esac
+  done <<< "$out"
+  return "$code"
+}
+
 write_json() {
   local rel="$1" content="$2" full="$TARGET/$1"
   if [[ $DRY_RUN -eq 1 ]]; then echo "  + $rel"; return; fi
@@ -232,7 +295,7 @@ POLICY_JSON=$(cat <<EOF
     "allow_unverified_models": $ALLOW_UNVERIFIED,
     "require_manifest": true,
     "require_sha256_match": $REQUIRE_SHA
-  }
+  }$POLICY_UPDATES
 }
 EOF
 )
@@ -299,6 +362,28 @@ else
   echo "     or re-run with --with-assets to download + verify them (scripts/fetch-models.sh)."
   echo "  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/ (or --with-assets)."
   echo "  3. Run scripts/verify-models.sh --target \"$TARGET\" to verify checksums."
+fi
+echo
+
+# The drive's release record (app-update W-20; docs/app-updates.md §8.5), config/drive-release.json: the apps, start files
+# and engines now on the drive, written by the node helper the Kit builder calls too, so every drive built with node
+# carries the same record for the same drive. Optional: a DIY drive is still built on a machine without node, so a
+# missing node or a helper that fails is one line, never this script's exit code. Under --kit the builder writes the
+# record as its last step instead (hashing runtime/ once).
+echo "Release record:"
+if [[ $KIT -eq 1 ]]; then
+  echo "  skip config/drive-release.json (build-commercial-drive writes it as its last step)"
+elif [[ $DRY_RUN -eq 1 ]]; then
+  echo "  + config/drive-release.json"
+elif ! command -v node >/dev/null 2>&1; then
+  echo "  skip config/drive-release.json (no node on PATH; the drive works without it)"
+else
+  RELEASE_HELPER="$SCRIPT_DIR/lib/write-drive-release.mjs"
+  record_exit=0
+  node_helper drive-release.json "$RELEASE_HELPER" --target "$TARGET" || record_exit=$?
+  if [[ $record_exit -ne 0 ]]; then
+    echo "  note: config/drive-release.json not written (exit $record_exit); the drive works without it"
+  fi
 fi
 echo
 echo "Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:"

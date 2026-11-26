@@ -2178,6 +2178,8 @@ export const fr: UiCatalog<'fr'> = {
   'diag.accel.gpuAvailable': '{name} (GPU disponible)',
   'diag.app.title': 'Application et moteur d’exécution',
   'diag.app.version': 'Version de l’application',
+  'diag.app.driveVersion': 'Version enregistrée sur le disque',
+  'diag.app.driveVersionNone': 'non enregistrée',
   'diag.app.unknown': 'non disponible',
   'diag.app.selectedModel': 'Modèle sélectionné',
   'diag.app.noneSelected': 'aucun',
@@ -3200,6 +3202,9 @@ export const fr: UiCatalog<'fr'> = {
     'Aucune liste de modèles n’a été trouvée sur ce disque\u00A0: le dossier ' +
     '«\u00A0model-manifests\u00A0» est absent.',
   'main.models.unknown': 'Ce modèle ne figure plus dans la liste des modèles de ce disque.',
+  'main.models.activeUnavailable':
+    'Le modèle {model} n’est pas disponible dans cette version de HilbertRaum, il n’a donc pas été ' +
+    'démarré. Choisissez un autre modèle sur l’écran Modèle d’IA.',
   'main.models.notChat':
     '«\u00A0{name}\u00A0» n’est pas un modèle du Chat, il ne peut donc pas être démarré ici.',
   'main.models.startDamaged':

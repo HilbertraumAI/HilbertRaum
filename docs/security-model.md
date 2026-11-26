@@ -470,10 +470,11 @@ shipping *no* `policy.json` must FAIL the gate, not pass on the strict fallback.
 A (future signed) `policy.json` is **authoritative**: it can only **restrict**, never expand, what
 the user setting permits — `prepare-drive` writes `allow_model_downloads: true` in both its postures
 (2026-07-01), so a prepared/sold drive lets the buyer fetch additional models on demand (still gated
-by the `allowNetwork` setting + a per-download confirmation). Update-checks and telemetry stay off in
-every posture, so the drive never phones home — that is what the sell gate now enforces as "network
-denied" (see `commercial-drive.ts` `networkDenied` = no update-checks, no telemetry). The effective
-network permission is:
+by the `allowNetwork` setting + a per-download confirmation). `allow_update_checks` is `false` and
+telemetry off in every posture, so the drive never phones home — that is what the sell gate now
+enforces as "network denied" (see `commercial-drive.ts` `networkDenied` = no update-checks, no
+telemetry). A Kit's policy also carries the reserved `"updates": {"allow_online_check": true}`, which
+this version never reads (below, "The update policy"). The effective network permission is:
 
 ```
 networkAllowedByPolicy = policy.network.allowModelDownloads || policy.network.allowUpdateChecks
@@ -491,7 +492,8 @@ Consequences:
   defaults **ON** (`DEFAULT_SETTINGS`) so a fresh dev install can fetch models out of the box; a
   prepared/commercial drive also ships `allow_model_downloads: true` (2026-07-01) so a buyer can add
   models — always via an explicit per-download confirmation, and the app still runs fully offline
-  (nothing fetches without that user action). Update-checks + telemetry remain denied in every posture.
+  (nothing fetches without that user action). Update-checks + telemetry remain denied in every posture
+  (a Kit's reserved update key changes nothing in this version).
   While the workspace is locked the setting is unreadable and treated as off.
 - **Policy forbids → offline**, regardless of the user toggle ("Network access disabled by policy").
 - **Policy permits + user opts in → network allowed** — used exclusively by the Phase-18 in-app
@@ -505,6 +507,36 @@ Consequences:
 The renderer distinguishes "off by choice" from "disabled by policy" via `PolicyStatus`
 (`getPolicy()` IPC) and shows it on the **Privacy & Offline** screen and the sidebar badge; the
 AI Model screen uses the same distinction to explain why downloads are unavailable.
+(`PolicyStatus.policyFilePresent` is `true` for a malformed `policy.json` too: it says the file was
+found and read, not that it parsed.)
+
+**The update policy (app-update F-8, frozen; [`app-updates.md`](app-updates.md) §8.1;
+[`drive-layout.md`](drive-layout.md) has the key table).** Three names under `updates`:
+- **`updates.allow_online_check`, the Kit's reserved key.** A Kit's `policy.json` is the commercial
+  posture above plus `"updates": {"allow_online_check": true}`, written only by `prepare-drive -Kit`
+  (`buildPolicyJson({ kit: true })`), which only `build-commercial-drive` passes at its step 1; DIY and
+  developer drives carry no `updates` key, their bytes unchanged. This version reads no value of the
+  name, junk included, and nothing ORs it into the network ceiling: `loadPolicy`, `resolveNetwork`,
+  `networkAllowedByPolicy` and the status line never see it, `network.allow_update_checks` stays
+  `false`, and the sell gate's refusal of `true` there is unchanged (since T3.8 the gate also refuses
+  a Kit without the reserved key).
+- **`updates.allow_user_install` and `updates.max_version`**, whether a signed update may be
+  installed. They have their own reader, `readUpdatePolicy(configDir)`, never a `PrivacyPolicy`
+  field, read from disk at every call (outside `loadPolicy`'s F-30 cache, so an edit that keeps the
+  file's size and time still counts), answering tokens only (`install`: `allowed`, `managed` or
+  `invalid`; the `max_version` cap; `file`: `read`, `none` or `unreadable`). A junk value, `null`
+  included, blocks as `invalid`; `false` blocks as `managed`, whatever else the block says. In this
+  build only the sell gate reads them (a Kit whose policy reads `invalid` is refused); the in-app
+  update they govern is not built yet.
+- **The damaged-file exception (G-14).** Where `loadPolicy` fails closed, `readUpdatePolicy` does
+  the opposite on purpose: a missing `policy.json` on a prepared drive, or a damaged one (empty, not
+  JSON, not an object, a folder, a read error, over 1 MiB), keeps installing **allowed** and answers
+  `file: unreadable` (a root with neither `policy.json` nor `drive.json` answers `none`), while a junk
+  *value* in a file that reads blocks. A blocked update is a management control, not a security
+  boundary: an update is signed, and a damaged policy must never block the signed repair. The
+  **consequence**: an administrator's block holds only while the file can be read. A short-lived
+  read error (an antivirus scan holding the file) or an editor saving it in place at the moment of
+  the read lifts the block for that one read, which then answers `unreadable`.
 
 ### 2. Startup self-check (`services/offlineGuard.ts`)
 At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and installs a defensive
@@ -810,6 +842,39 @@ under the **same vault key as the database and the document cache** (AES-256-GCM
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
 matching the unencrypted dev DB.
 
+**The one plaintext log on the drive: `updates/update.log` (app-update W-14; F-11, frozen;
+[`app-updates.md`](app-updates.md) §8.2).** Support needs to see, before any password, which app and
+engine versions a drive started with and how its unlock attempts ended, so this file is the
+exception to the rule that no log line reaches the drive before the unlock: it is written in
+plaintext on a prepared drive, before the password, and anyone holding the drive can read it. It is
+therefore content-free **by each event's typed fields**, not by its callers' care. `services/updates/update-log.ts` writes
+only the events registered in its frozen `UPDATE_LOG_EVENTS` table (in this build `startup`,
+`start-failed` and `unlock`), and each field only when its key is in the event's schema and its
+value passes the one rule the key names: a version, an engine pin, an integer, the SQLite version,
+an error code, a bare system call, a signed integer, the `last_writer` stamp's applied-through token,
+or a closed list of words. A line is ASCII, at most 256 bytes, written as one append; an error appears
+only as its code and bare system call, never a message, a path or SQLite's text.
+- **What it reveals:** the time of every start, failed start and unlock attempt, wrong passwords
+  included, to the second; the outcome as a fixed word; the app version, the engine pins of the app's
+  own bundled `runtime-sources.yaml`, the drive's recorded app version and formats, the SQLite
+  version; the workspace file's own `user_version` and the version in its `last_writer` stamp.
+- **Data-fed keys:** some values come from a file another program or build wrote: the drive record's
+  `release` and `release_format`, `drive.json`'s `drive_format`, the stamp's `writer` and `applied`,
+  the header's `user_version` and a newer database's `found`. Each is bounded by its rule, but a
+  word-shaped rule can carry a word someone wrote there: a version in SemVer's shape
+  (`1.0.0-peter`), the 16-byte `applied` token. Only someone holding the workspace key writes the
+  stamp. Keys filled from the app's own sources have word-shaped rules too (a pin, a system call), so
+  every new event is reviewed against this list when it is registered.
+- **How it is written:** only on a prepared drive (`config/drive.json` there); never through a link
+  (`updates` a real folder at its name, `update.log` absent or a regular file with one name, checked
+  again on the open descriptor; `O_NOFOLLOW` and `O_NONBLOCK` on POSIX); every failure is swallowed,
+  counted and logged in `app.log` by a fixed reason and the error's code, so a read-only or full
+  drive never stops a start. Over 64 KiB an app append keeps the newest 32 KiB, copied as bytes
+  through `update.log.tmp` and a rename, and only while `updates/applying/` is absent.
+- The #975 redaction does not apply to this file: it holds nothing to redact. Its limits (a link
+  planted between the checks on Windows, two app instances on one drive, a line lost during a trim)
+  are in [`known-limitations.md`](known-limitations.md).
+
 **Workspace failure lines name no path (#956).** Diagnostics → Copy and Save log hand the log out
 in readable form, so the workspace's failure lines carry no paths: the create's content-free line
 (#807) is the rule for every failure line of the unlock, the password change, the lock and the quit
@@ -899,7 +964,8 @@ therefore runs as a three-state machine (`services/logging.ts`):
 
 - **`buffering`** (pre-unlock, the initial state after `initLogging`): every line is held in a
   bounded in-memory buffer (≤ 2 MB by UTF-8 byte length, oldest whole lines dropped on a line
-  boundary). **Nothing touches disk.** Lines logged before the user authenticates are lost if the
+  boundary). **Nothing of this log touches disk** (the content-free `update.log` above is a separate
+  file). Lines logged before the user authenticates are lost if the
   app is killed while still locked — a deliberate trade for "no sensitive bytes on disk before
   unlock." The same applies to a session spent entirely at the unlock gate (never unlocked): it
   stays in `buffering` and is discarded on quit. So does a run whose back-end start threw (#1024; also a
@@ -3780,9 +3846,20 @@ Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was
 local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
 code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
 spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification. Since
-#1012 it is closed for **every file the engine copy's own install marker records**: the program and the
+#1012 the check covers **every file the engine copy's own install marker records**: the program and the
 libraries beside it. What it still does not cover is under "What the check does not cover" below. (The
 long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
+
+**What the check is, and what it is not (owner 2026-11-25 on #234: tolerate and document; app-update
+W-84, F-24).** It detects a copy that **no longer matches its own record**: one cut short, bit rot, a
+file replaced while the marker is left alone. It is **no defence against whoever can write the engine
+folder**: the record (the install marker) lies beside the files and is not signed, so the same writer
+can rewrite its hashes, or remove or trim it (the three shapes under "What the check does not cover").
+Release 1 keeps it so for life: `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` stays `false`, and a copy
+with no marker, a marker without `binaries`, an empty map or a map that records only the program starts
+with only its recorded part checked, on a Kit too. The sell gate refuses an incomplete record when a
+Kit is built (item 4 and "Commercial sell-gate" below); after that, the check holds a Kit's engines to
+their own record, nothing more.
 
 **#1012: every recorded file, not only the program (2026-11-22).** Until #1012 the verifier re-hashed
 the one file it spawns. Since llama.cpp b12110 that file, `llama-server.exe`, is a 9.7 KB stub: the
@@ -3819,8 +3896,22 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     hide a changed file as `missing` can; for the knowledge-pack tools no present file differs.
   - **`unreadable`**: a recorded file could not be read just now (an antivirus or indexer holding it, a
     denied read), or the marker changed during the check. No verdict about the copy (review R-2).
-    - A marker that is there but cannot be read is `unreadable` too (round 6), not a legacy drive. A
-      `cpu/` net whose own marker cannot be read never falls back to the family marker.
+    - A marker that is there but cannot be read just now is `unreadable` too (round 6), not a legacy
+      drive. A `cpu/` net whose own marker cannot be read never falls back to the family marker.
+    - **Which read errors stay `unreadable` (app-update T3.12's fix rounds, 2026-11-25).** Only a hold
+      (`EBUSY`, `EPERM`, `EACCES`: an antivirus or indexer lock, a denied read, which on Windows a lasting
+      deny-read cannot be told from), a process limit (`EAGAIN`, `EMFILE`, `ENFILE`) and a code the check
+      does not know, or none at all (Windows may report a bad sector as `UNKNOWN`), stay `unreadable`. A
+      read the drive itself fails (`EIO`: a worn stick, a bad sector) counts as the file gone, by what it
+      is (`missing` for the program or a library, `missing-other` for another file), so the engines offer
+      "Install again" instead of "try again" at every start; a recorded name the OS refuses
+      (`ERR_INVALID_ARG_VALUE`, `ENAMETOOLONG`, `ELOOP`, `EINVAL`) is `marker-damaged`. The marker
+      itself: `EIO` is `marker-damaged` (fault `drive-read-failed`), a refused name `marker-damaged`
+      (`name-refused`), a hold or an unknown code `unreadable`; the same at the re-read after the hash.
+      The shared marker reader (`readRuntimeMarkerState`) keeps its `unreadable` answer for its other
+      callers. For the engines the hashing stops at the first file found gone when it is read.
+    - A check that throws for a reason nobody foresaw ends as `unreadable` and leaves the cache, and the
+      GPU probe then gives no answer (`null`), never "no graphics card".
   - **`marker-damaged`** (#1028, 2026-11-23): the copy's install marker is there but is no marker the app can
     read. Until #1028 such a marker was taken for no marker at all: the walk went on to the folder above (from
     a `cpu/` net, to the family marker), and with no recorded hash found the copy was `skip-legacy`, cached for
@@ -3835,10 +3926,11 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
       Fields the app does not know are ignored, whatever they hold: a later writer may add one (G-28's engine
       signature), and this reader must keep accepting it (data-contracts.md, the marker's frozen rules).
     - **A map that does not record the program** asked about, but records other files of its copy (a garbled
-      key, a hand edit), is damaged too. Every writer records the program first. A map that records nothing of
-      the copy (a `cpu/` net without a marker of its own, against a family marker with no `cpu/` key) stays
-      the legacy case. Code review CR-2: every key is checked for containment first, so a map holding a key that
-      leaves the folder is a tamper (`mismatch`, its log line, the knowledge-pack tools' `integrity` kind)
+      key, a hand edit), is damaged too (`program-unrecorded`). Every writer records the program first. Since
+      T3.12's fix round any non-empty map in the program's own folder without it is damaged, also one whose
+      every key is under a nested `cpu/`, `cpu.new/` or `cpu.old/` folder. Only a `cpu/` net without a marker
+      of its own, against a family marker with no `cpu/` key, stays the legacy case. Code review CR-2: every
+      key is checked for containment first, so a map holding a key that leaves the folder is a tamper (`mismatch`, its log line, the knowledge-pack tools' `integrity` kind)
       whether or not it records the program.
     - **The walk stops at the first marker file it finds**, readable or not. A `cpu/` net's own damaged marker
       never falls back to the family marker; a net with no marker of its own over a damaged family marker is
@@ -3910,9 +4002,15 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
       that same message (round 4): a `filesUnreadable` job code, the friendly task error, the persisted
       row text (display-mapped) and the dictation error. There is no per-window retry and no generic
       failure copy.
-- **Cost:** the b12110 Windows copy is 52 files, 94.5 MB: 0.28 s on a USB 3 stick (measured), about 3 s
-  on a USB 2 stick (estimated). whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the longest
-  event-loop gap 1.5 ms (`sha256File` streams).
+- **Cost:** the b12110 Windows copy is 52 files, 94.5 MB. Measured (app-update T3.12a, 2026-11-25: the
+  real check, a fresh process per run, a same-size stand-in copy of 52 files and 92.5 MB, file pages
+  purged first, Norton 360 active) for the first spawn of a session: about 2.5 s on a USB 2 stick when
+  the antivirus already knows the files and 3.0–3.2 s on its first look at them (a Kit in a new PC);
+  0.55–0.6 s and 1.1–1.2 s on a USB 3 stick (~190 MB/s); the hashing alone costs about 0.31 s even
+  fully cached, so no medium gets under ~0.3 s. (The earlier "0.28 s on USB 3" was derived from a raw
+  read speed, not timed.) The cost grows with the copy, with no bound or progress shown: a 1 GB copy
+  would wait about 26 s on USB 2. whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the
+  longest event-loop gap 1.5 ms (`sha256File` streams).
   - **When it is paid:** once per session for an intact copy, usually by the GPU probe at unlock. While a
     file cannot be read, every attempt checks the copy again, up to that file. While one is missing,
     every attempt checks it again too, with the `stat` pass alone for the engines (below). An attempt is
@@ -3945,10 +4043,17 @@ added-file gap.
 
 Also not covered:
 - a marker written before #998 (the program alone);
+- **three ways to switch the check off that need no tool but deletion** (T3.12 review 2 M-1; owner
+  2026-11-25 on #234: tolerated, documented): the marker removed (no marker: `skip-legacy`), its
+  `binaries` removed or emptied (a hash-less marker: `skip-legacy`), or the map cut down to the
+  program (at b12110 a 9.7 KB stub, so the libraries are unchecked again). None of the three is
+  noticed at a start, on a Kit too; the sell gate refuses each when a Kit is built. A writer of the
+  folder can as well rewrite the hashes to match changed files, which no check notices;
 - a tamper that lands after the first spawn of a session (SEC-4 below);
 - a library that stays unreadable, for example behind a security product's access refusal. It is
   `unreadable` at every start: no verdict and no "Install again" offer, and the chat runs on the demo
-  runtime (`known-limitations.md`).
+  runtime (`known-limitations.md`). A drive that fails to read it (`EIO`) is a different case since
+  T3.12: that counts as missing, with the "Install again" offer.
 
 An attacker who can write the engine folder can usually also replace the app itself. A follow-up proposes
 refusing an unrecorded library in a copy whose marker records more than the program, and starting the
@@ -3997,8 +4102,10 @@ engines in their own folder.
    which both builder scripts now call) refuses a hashless marker and `fetch-runtime --commercial`
    re-fetches it, so a newly built sold drive never carries one. At spawn time a commercial drive
    **can** refuse a hashless marker (`mismatch`) — that branch is wired and tested but shipped **off**
-   (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`) until the owner rules on kits sold before this
-   change; a DIY drive keeps the `skip-legacy` tolerance either way (`known-limitations.md`).
+   (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`), and the owner ruled on 2026-11-25 (#234) that it
+   **stays off for good**: refusing would add little (the same writer can rewrite the hashes) and would
+   need a new verdict and repair path in the version a Kit runs for life. A DIY drive keeps the
+   `skip-legacy` tolerance either way (`known-limitations.md`).
 
 **Behaviour at each spawn seam (these verdicts only ever fire in a packaged build; "missing" below means
 `missing` or `missing-other`, and for the engines also `marker-damaged`, #1028; the knowledge-pack tools
@@ -4053,8 +4160,12 @@ refuse `marker-damaged` as they refuse `missing`):**
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
 predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
 so a sold drive always ships re-verifiable executables. Since #998 it also checks every further file a
-marker records (present, inside its folder, the recorded bytes); a marker that records only the
-executable passes as before. That covers the libraries when the Kit is built; since #1012 the pre-spawn
+marker records (present, inside its folder, the recorded bytes). Since app-update T3.8 (2026-11-26) it
+also refuses a file in an engine folder that the copy's map does not record, by the same walk an
+install records (the marker, the top-level `cpu/`, `cpu.new/` and `cpu.old/`, macOS `._*`, `.DS_Store`
+and `__MACOSX/` left out; a folder it cannot list fails closed), so a marker that records only the
+executable passes only over a folder that holds nothing else, and a hand-copied library is refused
+when the Kit is built. That covers the libraries when the Kit is built; since #1012 the pre-spawn
 check covers them again before the first spawn of each session. Since #1028 the gate reads the marker as
 the pre-spawn check does: a damaged one fails with its own line ("cut short or damaged"), one that cannot be
 read just now with another, and only a marker that is not there at all lets an optional family count as
@@ -4076,8 +4187,20 @@ reader read them, no longer the last `"version":"…"` on the line, so a later t
 `version` does not make release 1's script fetch the engine again on every run. (CR-5/CR-6): the two builder
 scripts' native marker pre-flight (`build-commercial-drive.{sh,ps1}`, version and backend by `sed` /
 `ConvertFrom-Json`) still reads loosely and can pass a damaged marker; the canonical gate they run afterwards
-(`assertCommercialDrive`, step 7) refuses it and is the authority. The builders are left as they are (the
-in-field update plan's P3 owns them).
+(`assertCommercialDrive`, step 7) refuses it and is the authority. The update plan's P3 left the native
+pre-flight as it is and added no native line for its new checks.
+
+**What else the sell gate refuses since app-update T3.8 (W-33's M1 half; [`packaging.md`](packaging.md)
+"What the gate reads for app updates").** A never-updated Kit runs what the gate let through for its
+whole support period, so the gate also refuses: a `policy.json` without the Kit's reserved
+`"updates": {"allow_online_check": true}` (read by a private reader of the gate, never fed into the
+network ceiling), or whose update policy reads `invalid` (a junk `allow_user_install` or `max_version`,
+which would block every update on the Kit; a deliberate `false` passes); a `config/drive-release.json`
+that is not a record naming the one version the root's apps carry; a `config/kit-support.txt` that is
+not the builder's 8 bytes; any entry in `updates/` (the Kit was started); an extracted `.app` folder at
+the root, a root app name whose version is no version, another root file named `hilbertraum-*` in any
+case, and a read-only root app (release 1's Windows start file would read it as running at every
+start). Both `prepare-drive` twins refuse a read-only root app before they write anything.
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there
@@ -4095,6 +4218,14 @@ race for the very same path (`factory.ts` kicks the probe concurrently with the 
 exactly what makes them read **one consistent decision** off a single hash rather than disagreeing on a
 file changing under them. The exposure window is one app session on a drive an adversary can already write
 to (who, as above, can usually tamper the app's own Electron code too); a relaunch re-hashes from cold.
+Two more cases the cache outlives (app-update T3.12's reviews, recorded): **a repair made outside the
+app** (a `fetch-runtime` run while the app is open writes the files first and the marker last, so a
+check that reads it half-way, with the marker the same before and after, keeps `mismatch` for the
+session, and "Check again" answers from the cache; restart the app, or use "Install again", a needless
+download), and **a stick pulled and put back, or another one under the same drive letter**, while the
+app stays open: the cached `ok`, `skip-legacy` and the knowledge-pack tools' `missing-other` still
+answer for the path, and since #1012 a cached `ok` vouches for every recorded file, not one. Only the
+app's own install and swap paths clear the cache (`invalidateBinaryVerification`).
 Accepted as-is; a future hardening could re-hash on every chat-sidecar spawn if the consistency concern is
 otherwise solved.
 

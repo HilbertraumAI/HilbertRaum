@@ -2096,6 +2096,8 @@ export const ru: UiCatalog<'ru'> = {
   'diag.accel.gpuAvailable': 'Доступна видеокарта — {name}',
   'diag.app.title': 'Приложение и движок',
   'diag.app.version': 'Версия приложения',
+  'diag.app.driveVersion': 'Версия, записанная на диске',
+  'diag.app.driveVersionNone': 'не записана',
   'diag.app.unknown': 'неизвестно',
   'diag.app.selectedModel': 'Выбранная модель',
   'diag.app.noneSelected': 'не выбрана',
@@ -3029,6 +3031,9 @@ export const ru: UiCatalog<'ru'> = {
   'main.models.noManifests':
     'На этом диске не найден список моделей — нет папки «model-manifests».',
   'main.models.unknown': 'Этой модели больше нет в списке моделей на этом диске.',
+  'main.models.activeUnavailable':
+    'Модель {model} недоступна в этой версии HilbertRaum, поэтому она не запущена. Выберите другую ' +
+    'модель на экране «ИИ-модель».',
   'main.models.notChat': '«{name}» — не модель для чата, поэтому ее нельзя запустить здесь.',
   'main.models.startDamaged':
     'Модель «{name}» не прошла проверку файлов, поэтому она не запущена. Скачайте ее заново на ' +

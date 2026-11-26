@@ -576,7 +576,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. `-Kit`/`--kit` (only `build-commercial-drive` passes it) adds the Kit's reserved `"updates": {"allow_online_check": true}` to `policy.json` and leaves the release record to the builder. At its end it writes `config/drive-release.json` when node 22.18 or later is on `PATH` (app-update W-20; without node, one line and exit 0). A read-only root app is refused before anything is written, a dry run included (exit 1, W-33). **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model (exit 2 when no manifest has that id, or its manifest declares no `download:` block, #767); `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Half a download pair (a top-level `download:` without one on `mmproj` or a `files:` member, or the other way round, which the app refuses) → `BLOCK` with the validator's message, nothing of that model fetched, exit 1 (#767). Idempotent (present + verified → skip). A manifest the checkout's app cannot use (a `role` it does not know, or a `min_app_version` above `apps/desktop/package.json`'s version, by the app's own rule) is skipped with `SKIP   <id>: needs a newer HilbertRaum (<why>)` and counted in the summary (`| for a newer HilbertRaum <n>`); `--only` naming a model only such a manifest carries exits 2 (app-update W-62 (b), [`app-updates.md`](app-updates.md) §6.11). |
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades). An engine **newer** than the drive's pin — one the app's in-app update installed while the drive's yaml stayed behind — is **kept**, whatever its backend, with a line naming both versions (#873; the app's `compareRuntimeVersions` order, so `3.10.0` is newer than `3.8.1`; a version that cannot be ordered re-fetches as before). `-AllowDowngrade`/`--allow-downgrade` replaces it anyway, and `-Commercial`/`--commercial` always does (a sold drive carries its app's pin; the commercial match stays exact); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1; no runtime, or a runtime/format pair the app does not run → *UNSUPPORTED*, #767). `-Generate`/`--generate` writes `config/checksums.json` (`entries: []` when there is no manifest, #767). `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). A manifest for a newer HilbertRaum (as for `fetch-models`) is skipped with its `SKIP` line: none of its files is judged (so `--strict` ignores its weight), `--generate` leaves it out of `checksums.json`, the count is printed, and `--kit` fails on any skip, since a Kit ships only manifests its own app can use (the canonical gate refuses the same drive). Both twins find a manifest whose extension is in any case (`.YAML`). |
@@ -665,7 +665,9 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
 > 100% offline by default; the in-app downloader is triple-gated (policy ceiling ∧ user setting ∧
 > per-download confirmation) and downloads are policy-permitted in both `prepare-drive` postures —
-> update checks + telemetry stay denied, matching the commercial final check below (gate
+> update checks + telemetry stay denied (`allow_update_checks: false`; the Kit builder's `-Kit` adds
+> only the reserved `updates.allow_online_check: true`, which this version never reads), matching
+> the commercial final check below (gate
 > semantics: [`model-policy.md`](model-policy.md) "The in-app downloader"). This does not weaken
 > the offline guarantee.
 
@@ -771,38 +773,90 @@ fetch-runtime                     # verified llama.cpp sidecar builds: per OS th
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json (a skipped manifest is left out)
+record what the drive was built with   # un-numbered, the build's last writes (W-17, W-20): config/kit-support.txt
+                                  # (--support-end, written once per Kit), then config/drive-release.json (the
+                                  # apps, start files and engines now on the drive), by two node helpers
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
-             commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied)
+             commercial posture (encrypted, no phone-home — downloads OK, allow_update_checks false, no telemetry)
+             + the Kit's reserved updates key ("updates": {"allow_online_check": true}, never read by
+               this version), no junk install key, and no max_version below the Kit's version (T3.8)
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234),
-               and every further file a marker records is there with its bytes (#998)
-             + exactly one app artifact + the launcher per declared platform (--platforms; #233)
-             + no user data: nothing but empty folders in workspace/ and logs/,
-               no config/workspace.json or config/working-copy-lost.json (exact, or
+               every further file a marker records is there with its bytes (#998), and
+               every file in an engine folder is in its marker (T3.8)
+             + exactly one app artifact + the launcher per declared platform (--platforms; #233):
+               the macOS app as its zip (never an extracted .app), its version in its name, not read-only (T3.8)
+             + no user data: nothing but empty folders in workspace/ and logs/, nothing at all
+               in updates/ (a started Kit, T3.8), no config/workspace.json or config/working-copy-lost.json (exact, or
                with a .<suffix>, any case), and every
                one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
+             + config/drive-release.json naming the version the root's apps carry, and no
+               highest_version_seen (T3.8)
+             + config/kit-support.txt in the builder's bytes (T3.8)
 ```
 
 ```powershell
 # Windows (supply the pre-built, signed artifact(s); or -SkipPackage to assemble + sign yourself — NOT SELLABLE until the apps are on the drive)
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan; the gate still runs and prints its verdict
-.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -KiwixSourceDir D:\kiwix-source-archive -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -Platforms win-x64 -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -DryRun   # print the plan; the gate still runs and prints its verdict
+.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly                    # only the gate, against the drive as it is; writes nothing
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -SupportEnd 2031-12 -KiwixSourceDir D:\kiwix-source-archive -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe -Platforms win-x64
 ```
 ```bash
 # macOS / Linux (--app-artifact repeats, one per platform in --platforms)
-scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --platforms mac-arm64,linux-x64 \
+scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --support-end 2031-12 --platforms mac-arm64,linux-x64 \
     --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0-mac-arm64.app.zip --app-artifact ./apps/desktop/release/HilbertRaum-0.1.0.AppImage \
     --kiwix-source-dir ~/kiwix-source-archive
 ```
 
+**The support end and the release record (app-update W-17, W-20; [`app-updates.md`](app-updates.md)
+§8.4, §8.5).** `-SupportEnd`/`--support-end <YYYY-MM>` is the month this Kit's support period ends.
+It is required on every run but `-VerifyOnly`, a `-DryRun` included (a rehearsal fails where the run
+would), and must be an exact `YYYY-MM` (ASCII digits, a month 01-12) not before this computer's
+current month (UTC); there is no upper bound, so the month is echoed in words before step 1
+(`kit-support.txt: support ends December 2031 (2031-12)`): read it. A missing or invalid value exits 2
+before step 1. Between step 6 and the final check an un-numbered block writes the build's last two
+files: first `config/kit-support.txt` (the month and one line feed, 8 bytes, written once per Kit),
+then `config/drive-release.json` (the apps, start files and engines now on the drive), each by a node
+helper under `scripts/lib/` (`write-kit-support.mjs`, `write-drive-release.mjs`, run as
+`node --no-warnings …`), so the builder needs **Node.js 22.18 or later** on `PATH`: the helpers load
+the app's own format modules through Node's type stripping, and refuse an older Node with one line.
+That is above the 22.12 the repo's `engines.node` asks for: a Node from 22.12 to 22.17 installs the
+repo but cannot build a Kit. The builder checks node, the month and an existing `config/kit-support.txt`
+before step 1 (a refused month exits 2, the rest 1); a helper that ends there without a line of its
+own (a file missing from the checkout) is named in one line, `write-kit-support.mjs failed (exit N)
+before step 1: run it by hand with --check to see why`, and the build stops with exit 1. **The
+support end is written once:** a re-run with the same month keeps the file untouched (a run that
+ended NOT SELLABLE, or `-SkipPackage` followed by a run with `-AppArtifact`) while that month has not
+passed. Once it has, the same month is refused as "before this month" (exit 2), not kept: the month
+is checked before the file, and that Kit's support has ended. Another month, or a file that is not
+the builder's 8 bytes, is refused before any download. To re-stamp unsold stock, in each of these
+cases, delete `config/kit-support.txt` on purpose and run again with a month not before this one.
+`-VerifyOnly` writes neither file; `-DryRun` plans both and writes neither.
+
+**Apps copied by hand.** `-SkipPackage` (or a run without `-AppArtifact`) still writes the support end
+and a release record, but one without an app version (no app was at the root). After copying the
+signed apps onto the drive yourself, write the record again before the final check, because
+`-VerifyOnly` writes nothing:
+
+```powershell
+node --no-warnings scripts/lib/write-drive-release.mjs --target E:\
+.\scripts\build-commercial-drive.ps1 -Target E:\ -VerifyOnly
+```
+
+or run the whole builder again with `-AppArtifact` (and the same `-SupportEnd`), which copies the apps
+and writes the record as its last step. A record that does not name the apps on the drive fails the
+sell gate's record check, and its line names this way out (T3.8).
+
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
 `.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
-find two) — and when an `--app-artifact` path does not exist. Both refusals come before step 1, so no
-download runs first (#769: the missing artifact used to surface at step 4). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
+find two) — and when an `--app-artifact` path does not exist. Both of these refusals come before step 1,
+so no download runs first (#769: the missing artifact used to surface at step 4). `prepare-drive`
+(step 1) itself refuses, before it writes anything, a root app that is read-only (exit 1): release 1's
+Windows start file would read it as running at every start, so its launch counter never counts
+(app-update W-33); as the first step, it too stops the build before any download. `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
 `mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
@@ -848,17 +902,65 @@ gate's `checkSourceBundle` (`assertCommercialDrive`) fails a drive that carries 
 binary — including a hand-placed, marker-less one — without a complete, hash-matching bundle plus
 a non-empty `SOURCES.md` beside it.
 
+**What the gate reads for app updates (T3.8; app-update W-33's M1 half, [`app-updates.md`](app-updates.md)
+§9.5).** A never-updated Kit runs what the gate let through for its whole support period, so the gate
+also reads what release 1 reads on every Kit, each refusal one line with its way out:
+- `policy.json` must carry the Kit's reserved key `"updates": {"allow_online_check": true}` (only
+  `build-commercial-drive` writes it, through `prepare-drive -Kit`), and no `updates.allow_user_install`
+  or `updates.max_version` release 1 reads as junk (it would refuse every update on the Kit); an
+  administrator's deliberate `false` passes. A valid `updates.max_version` below the Kit's own version
+  (the one its root apps carry, in SemVer order) is refused for the same reason; one equal to it or
+  above passes (owner 2026-11-26). `network.allow_update_checks` stays refused as before.
+- `config/drive-release.json` must read as a record whose `app_version` is the one version the root's
+  apps carry, judged by the same root-app rule the record's helper uses (`rootArtifactOf`): missing,
+  unreadable, damaged, without a version, or naming another one is refused, and the line says to write
+  the record again (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>`),
+  then check again (`-VerifyOnly` writes nothing); a folder or a link at the record's name is deleted
+  first. Root apps of no single version (two versions, or a folder `.app` that carries none) get their
+  own line, and a record without a version over no versioned app says to fix the apps first. A record
+  that holds `highest_version_seen` (left by a later version that ran on a reused stick) is refused:
+  the helper keeps that field, so delete `config/drive-release.json`, then write it again.
+- `config/kit-support.txt` must be the builder's 8 bytes (the month and one line feed); a hand edit's CR
+  LF or byte-order mark is refused (delete the file on purpose and stamp it again with the builder).
+  Its month is not range-checked here: that is the ship-time check's.
+- Nothing in `updates/`, not even an empty folder such as `applying/` (a start writes
+  `updates/update.log`: the Kit was started; delete the folder; an empty `updates/` itself passes, like
+  an empty `logs/`).
+- Every file in an engine folder must be in its marker's map, by the walk an install records (never
+  the marker, the `cpu/` net and its swap folders, or macOS `._*`, `.DS_Store`, `__MACOSX/`): a
+  hand-copied library, a leftover archive or a `Thumbs.db` is refused. `fetch-runtime --commercial`
+  skips a copy whose map hashes the required files, so delete the file, or the engine folder and build
+  again. A locally compiled macOS/Linux voice engine has no marker and is not checked (a known limit).
+- The root apps are judged by `rootArtifactOf`: an extracted macOS `.app` folder is refused (a Kit
+  carries `HilbertRaum-<version>-mac-arm64.app.zip`; owner 2026-11-26, reversing #233's acceptance),
+  a name whose version segment is no version is refused, any other root file named `HilbertRaum-*` in
+  any case is refused (the Windows start file matches without case), and so is a read-only app.
+- A name the gate prints from the disk (user data, a user skill, an app, an engine file) shows each
+  control, format or separator character as `\u{…}`, so a crafted name cannot drive the console.
+
+The problems come in a fixed order: the policy (the Kit key after the posture), weights and reviews,
+user data, notices, the engines, the source bundle, OCR and skills, the apps and start files, then the
+record and the support end. None of these checks has a line in the builders' native pre-flight: the
+canonical gate in the same final step is their only check (the `.ps1` builder hands it the target
+with the same trim rule as the pre-flight). Two things it does not check: the record's `files[]`
+list is not compared with the files now on the drive, and an ACL that denies writing a root app is
+not seen, only the write bits and the read-only attribute
+([`known-limitations.md`](known-limitations.md)).
+
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
-but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
-that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders,
+but `network.allow_update_checks` is `false` and there is no telemetry; the Kit's reserved
+`updates.allow_online_check: true` beside it is a name this version never reads, so a Kit checks for
+no update) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
+that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders, `updates/` nothing at all,
 and `config/` holds no `workspace.json` or `working-copy-lost.json`, exact or with a `.<suffix>`, in any case; the gate names each leftover,
 OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
 file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
 **and** that **every sidecar binary matches the SHA-256 its install marker records** (#234), as does every further
-file a marker records (#998: an engine copy that lost a DLL fails; a marker that records only the binary passes) — the
+file a marker records (#998: an engine copy that lost a DLL fails; since T3.8 a marker that records only the binary
+passes only over a folder that holds nothing else) — the
 canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
 built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
 `SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a
@@ -1213,7 +1315,24 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   shipped `THIRD-PARTY-NOTICES.md` and `LICENSE.txt` against the committed files, the OCR worker
   closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
   the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
-  step itself on every PR (a workflow change first runs at a tag). Also fetches the win Vulkan runtime via
+  step itself on every PR (a workflow change first runs at a tag). Then it **checks the packaged
+  app's user-data folder** (app-update W-15, blocking): it starts the portable exe with a scratch
+  drive root and no profile switch, waits for `%APPDATA%\@hilbertraum\desktop\lockfile` (the
+  single-instance lock's file, present only while an instance holds that profile), and stops the
+  app. Every version and every Kit on one computer shares that folder
+  ([`app-updates.md`](app-updates.md) §8.7), so a build whose profile moved must not be released;
+  a failure names every new lockfile and folder the start left under `%APPDATA%`. The step uses the
+  runner's own profile, which is thrown away with the runner: never run it on a computer someone
+  works on. `packaging.test.ts` pins the names the path derives from and reads this step too
+  (that it has no `if:` and no `continue-on-error`, and that `release` needs build-win). What
+  each sees: the step sees every move that also moves the lock, on Windows, at a tag or a
+  dispatch. A move made after the lock was taken (a `setPath` of `appData` or `sessionData` later
+  in the start) leaves the lockfile where it was, so only the pin sees it: main may call `setPath`
+  for `userData`, `appData` or `sessionData` once, the dev-only `userData` one. The pins read
+  source text and syntax, not what runs: an alias of `app` (`const a = app; a.name = …`),
+  `Object.assign(app, …)`, `app['setPath'](…)`, and a second `package.json` brought in by
+  `directories.app` or `extends` pass them, and the `localStorage` list resolves a key's constant
+  by its name across the renderer's files. The step is the check on the outcome. Also fetches the win Vulkan runtime via
   `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
   in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
   extracted install tree (`Compress-Archive`; root entry `win/` incl. the
@@ -1283,11 +1402,15 @@ The green gate (`typecheck`/`test`/`build`) runs on mocks with zero weight files
 real-drive behaviour never shows up in CI. Before any drive ships (commercial or a DIY hand-off),
 run one real-model session covering the items below.
 
-These sessions create a workspace, documents and logs. Run them on a scratch drive, not the Kit
-that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
-`logs/` but keep the two folders, and delete `config/workspace.json`, `config/working-copy-lost.json`
+These sessions create a workspace, documents and logs, and every start writes `updates/update.log`.
+Run them on a scratch drive, not the Kit that ships. If they ran on the Kit, wipe it afterwards
+(delete everything inside `workspace/` and `logs/` but keep the two folders, delete the `updates/`
+folder, and delete `config/workspace.json`, `config/working-copy-lost.json`
 and any `.<suffix>` copy of either), then run `build-commercial-drive` with `-VerifyOnly`
-(`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
+(`--verify-only`) again: the sell gate names every file the wipe missed (#893). `-VerifyOnly` writes
+nothing, so if the session changed an app, a start file or an engine on the Kit, write the release
+record again first (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive>`, see
+"Apps copied by hand" above); never touch `config/kit-support.txt`. On a Mac, Finder
 writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
 files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts
 both. Delete them too before that final check, or do not browse `workspace/` and `logs/` in Finder.
@@ -1353,6 +1476,46 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    Norton, so it proves nothing). It must get past the first megabytes; cancel it then. The app's
    log then holds the line "Download trust: the system certificate store is trusted too". Before
    #564 such a download failed with "fetch failed".
+14. **The name the user-data folder derives from, in each built `app.asar` (app-update W-15).**
+   Every version and every Kit on one computer shares one profile folder
+   (`%APPDATA%\@hilbertraum\desktop` on Windows), named by the packaged `package.json`:
+   `productName` if present, else `name` ([`app-updates.md`](app-updates.md) §8.7). For each built
+   archive (`release/win-unpacked/resources/app.asar`, the `.app`'s `Contents/Resources/app.asar`,
+   `release/linux-unpacked/resources/app.asar`), from a **new, empty scratch folder per archive**
+   (the command writes a file named `package.json` into the current folder, over one that is
+   there), with the repo's own installed tool named by its path:
+   `node <repo>\node_modules\@electron\asar\bin\asar.js extract-file <path to app.asar> package.json`.
+   Not `npx asar`: outside the repo, or in a folder that holds a `package.json`, npm no longer finds
+   the repo's copy and asks the registry for a package of that name. **Pass** = the extracted file's
+   `name` is `@hilbertraum/desktop` and it has no `productName`. On Windows, `release.yml`'s
+   build-win also reads the path itself from a start of the built exe ("The release workflow"
+   above): check that step passed.
+15. **The portable stub's hold on the drive-root exe, after every electron-builder, NSIS or
+   Electron major bump (app-update W-21).** An update's apply waits until the exe on the drive is
+   free, by the start files' write-open probe ([`app-updates.md`](app-updates.md) §5.5, §5.6), and
+   the time it allows rests on what the stub was measured to do. Re-measure on the built portable
+   exe, 3 runs on an NTFS volume, with nothing else of HilbertRaum running:
+   `powershell -NoProfile -File scripts\release\run-hold.ps1 -Exe apps\desktop\release\HilbertRaum-<version>-portable.exe -WorkDir <scratch folder>`
+   (the script's header lists the other parameters; it starts the app with a scratch drive root and
+   a scratch profile, and deletes nothing). The exe it measures is its copy in the scratch drive
+   root: when a file of that name is already there (an earlier run's, with the same name after such
+   a bump) and its sha256 differs from `-Exe`'s, the script stops with exit 5 and replaces nothing;
+   use a new `-WorkDir`. Each run of the script writes a log folder of its own,
+   `<WorkDir>\logs\hold-<UTC start time>\`, whose `run.log` records both sha256 values. **Pass**
+   (the script prints `PASS` and exits 0) = in every run the probe reads "held" while the app runs,
+   the unpack folder is absent when the probe first reads free, and the probe reads free at most
+   1.5 s after the window was closed (WM_CLOSE); the `PASS` line names that rule and marks a limit
+   other than 1500 ms. Record the run log's `probe_free_end` line and, for comparison with the
+   first measurement, its `app_exit`, `rename_ok` and `stub_exit` lines. **Which starting point
+   each number has:** every line of the run log counts from WM_CLOSE. Spike 1's published numbers
+   ([`app-updates.md`](app-updates.md) §10.6) count from the moment the app's process was gone:
+   the stub released the exe 0.22–0.27 s after it and exited 0.42–0.62 s after it. So compare
+   `rename_ok` − `app_exit` with the first pair and `stub_exit` − `app_exit` with the second.
+   Only spike 1's third number, the stub's exit 0.70–0.77 s after WM_CLOSE, compares with a log
+   line (`stub_exit`) as it stands. Two limits of the reading: in each poll the rename is tried
+   after the probe's `cmd` call, so `rename_ok` is later by about that call's time than in spike
+   1's poll, which had no probe; and the unpack folder is looked at a few milliseconds after the
+   probe's open, when `cmd` has returned.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 

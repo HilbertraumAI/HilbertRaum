@@ -191,6 +191,11 @@ export interface PolicyJson {
     require_manifest: boolean
     require_sha256_match: boolean
   }
+  /**
+   * Only on a Kit (`kit: true`): the reserved `updates.allow_online_check`, written `true` (F-8, U1 (b);
+   * docs/app-updates.md §8.1). Release 1 does not act on it; DIY and dev drives carry no `updates` key at all.
+   */
+  updates?: { allow_online_check: boolean }
 }
 
 export interface PolicyJsonOptions {
@@ -202,6 +207,13 @@ export interface PolicyJsonOptions {
    * update-checks + telemetry stay OFF — the app never phones home.
    */
   dev?: boolean
+  /**
+   * `true` → a Kit's policy: the posture above plus `"updates": { "allow_online_check": true }`, which only the Kit
+   * builders write (`build-commercial-drive` passes `prepare-drive -Kit` / `--kit` at its step 1). Default `false`: no
+   * `updates` key, so a DIY drive's policy.json is byte for byte what it was before the key existed.
+   * `network.allow_update_checks` stays `false` either way (G-14 built the simpler way).
+   */
+  kit?: boolean
 }
 
 /**
@@ -215,7 +227,7 @@ export interface PolicyJsonOptions {
  */
 export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
   const dev = opts.dev ?? false
-  return {
+  const policy: PolicyJson = {
     // Telemetry has no knob — the app has no telemetry at all, so policy.json does not
     // carry an `allow_telemetry` field (it would only ever be false). `buildPolicyStatus`
     // hardcodes `telemetryAllowed: false`.
@@ -237,6 +249,9 @@ export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
       require_sha256_match: !dev
     }
   }
+  // Only the Kit posture carries an `updates` key; without `kit` the key is absent, not `undefined`.
+  if (opts.kit === true) policy.updates = { allow_online_check: true }
+  return policy
 }
 
 // ---- config/checksums.json (per-weight expected hashes, from verify-models) -------
