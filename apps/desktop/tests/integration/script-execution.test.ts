@@ -764,6 +764,29 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toMatch(/^\[1\] /m) // refused before step 1 ran (the root's own name holds a "[1]")
         expect(existsSync(join(root, 'HilbertRaum-0.1.59-portable.exe'))).toBe(false)
       })
+
+      // T3.6 B-1: the stamp check before step 1 shows only the lines that start with "kit-support.txt", so a node that
+      // ended non-zero without one (a helper file missing from the checkout: Node's own "Cannot find module" line names a
+      // path) left the run at its two header lines and exit 1. A stub node stands in for it; a dry run, so nothing runs
+      // after the check even if it went on.
+      it('a stamp check that fails before step 1 without a line of its own is named in one fixed line, exit 1 (T3.6 B-1)', () => {
+        const stubDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
+        if (leg.ext === 'ps1') {
+          writeFileSync(join(stubDir, 'node.cmd'), '@echo off\r\n>&2 echo Error: Cannot find module C:\\someone\\checkout\\scripts\\lib\\ts-sibling-imports.mjs\r\nexit /b 1\r\n')
+        } else {
+          writeFileSync(join(stubDir, 'node'), '#!/bin/sh\necho "Error: Cannot find module /home/someone/checkout/scripts/lib/ts-sibling-imports.mjs" >&2\nexit 1\n', { mode: 0o755 })
+        }
+        const root = scriptRoot('script-check-dies-')
+        const r = leg.run(builder, [f('Target'), root, f('DryRun'), f('SupportEnd'), SUPPORT_END], {
+          env: { PATH: `${stubDir}${delimiter}${pathWithoutNode()}` }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('  write-kit-support.mjs failed (exit 1) before step 1: run it by hand with --check to see why')
+        expect(out).not.toContain('someone')
+        expect(out).not.toMatch(/^\[1\] /m)
+        expect(readdirSync(root), 'nothing written').toEqual([])
+      })
     })
 
     describe('fetch-runtime commercial mode (#234)', () => {

@@ -821,13 +821,20 @@ before step 1. Between step 6 and the final check an un-numbered block writes th
 files: first `config/kit-support.txt` (the month and one line feed, 8 bytes, written once per Kit),
 then `config/drive-release.json` (the apps, start files and engines now on the drive), each by a node
 helper under `scripts/lib/` (`write-kit-support.mjs`, `write-drive-release.mjs`, run as
-`node --no-warnings …`), so the builder needs node 22.18 or later on `PATH`; it checks node, the
-month and an existing `config/kit-support.txt` before step 1 (exit 1). **The support end is written
-once:** a re-run with the same month keeps the file untouched (a run that ended NOT SELLABLE, or
-`-SkipPackage` followed by a run with `-AppArtifact`); another month, or a file that is not the
-builder's 8 bytes, is refused before any download. To re-stamp unsold stock, delete
-`config/kit-support.txt` on purpose and run again. `-VerifyOnly` writes neither file; `-DryRun` plans
-both and writes neither.
+`node --no-warnings …`), so the builder needs **Node.js 22.18 or later** on `PATH`: the helpers load
+the app's own format modules through Node's type stripping, and refuse an older Node with one line.
+That is above the 22.12 the repo's `engines.node` asks for: a Node from 22.12 to 22.17 installs the
+repo but cannot build a Kit. The builder checks node, the month and an existing `config/kit-support.txt`
+before step 1 (a refused month exits 2, the rest 1); a helper that ends there without a line of its
+own (a file missing from the checkout) is named in one line, `write-kit-support.mjs failed (exit N)
+before step 1: run it by hand with --check to see why`, and the build stops with exit 1. **The
+support end is written once:** a re-run with the same month keeps the file untouched (a run that
+ended NOT SELLABLE, or `-SkipPackage` followed by a run with `-AppArtifact`) while that month has not
+passed. Once it has, the same month is refused as "before this month" (exit 2), not kept: the month
+is checked before the file, and that Kit's support has ended. Another month, or a file that is not
+the builder's 8 bytes, is refused before any download. To re-stamp unsold stock, in each of these
+cases, delete `config/kit-support.txt` on purpose and run again with a month not before this one.
+`-VerifyOnly` writes neither file; `-DryRun` plans both and writes neither.
 
 **Apps copied by hand.** `-SkipPackage` (or a run without `-AppArtifact`) still writes the support end
 and a release record, but one without an app version (no app was at the root). After copying the

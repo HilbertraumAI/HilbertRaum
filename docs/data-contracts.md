@@ -2547,12 +2547,15 @@ otherwise `month`. It checks the form only: whether the month is past is the sup
   and one LF, 8 bytes, created exclusively; the same month kept, another refused), then
   `scripts/lib/write-drive-release.mjs` writes `config/drive-release.json`; both `node --no-warnings`, only their own
   lines shown, a non-zero exit stops the build] → native pre-flight (verify-models `--kit` for the weights) + the
-  canonical gate above, which alone prints SELLABLE. Before step 1 it refuses a missing or invalid `-SupportEnd` (a
-  month as `YYYY-MM`, not before this computer's current UTC month; exit 2), then a missing `-AppArtifact` and a
-  differently named prior app at the root, a missing node and a `config/kit-support.txt` that holds another month or
-  is no builder stamp (exit 1), and echoes the month in words. `-VerifyOnly` and `-DryRun` write neither file. The
-  stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`: `absent`, `unreadable`
-  (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
+  canonical gate above, which alone prints SELLABLE. Before step 1 it refuses, in this order: a missing `-SupportEnd`
+  value (exit 2); an `-AppArtifact` that is not there and a differently named prior app at the root (exit 1); a
+  missing node (exit 1); then the helper's `--check`, which checks the month itself: one that is no `YYYY-MM` or is
+  before this computer's current UTC month exits 2, and a `config/kit-support.txt` that holds another month or is no
+  builder stamp exits 1; it echoes the month in words. On any exit of that check other than 0 and 2 the builder adds
+  one fixed line, `write-kit-support.mjs failed (exit N) before step 1: …`, and exits 1 (T3.6 B-1: a helper that dies
+  without a line of its own, such as Node's "Cannot find module", is no silent exit 1). `-VerifyOnly` and `-DryRun`
+  write neither file. The stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`:
+  `absent`, `unreadable` (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
   `tests/fixtures/readers/f13-drive-release/kit-support.json`). Both `prepare-drive` twins (so step 1 too) refuse, before
   writing anything and in a dry run too, a root app (`HilbertRaum-*-portable.exe`, `-mac-arm64.app.zip`, `.AppImage`,
   any case) with no write bit (exit 1, one line per app; W-33, T3.8). The final check hands the gate `$NodeTarget`

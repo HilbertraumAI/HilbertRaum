@@ -3763,15 +3763,16 @@ T3.4):
   the `name` of the app's `package.json`, which carries no `productName`. The pins are
   `packaging.test.ts`'s "the user-data folder's name never moves": (i) `apps/desktop/package.json` is
   named `@hilbertraum/desktop`; (ii) it carries no `productName` and no `build` object, and
-  electron-builder's `extraMetadata` sets nothing but `version`; (iii) `src/main` moves `userData` only
-  for a developer run, never renames the app (`setName`, `app.name =`), and takes the single-instance
-  lock at module top level after that move; (iv) no start file, script, workflow or app source passes
-  `--user-data-dir` or `--profile-directory` (three developer tools that pass a scratch one on purpose
-  are named: `scripts/verify-mac-build.sh`, `scripts/check-netlog.mjs`, `scripts/release/run-hold.ps1`),
-  and no start file sets `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `XDG_CONFIG_HOME` or `HOME` for the
-  app; (v) `appId` `space.hilbertraum.app`, the scheme `hilbertraum`, and `productName` and
-  `executableName` `HilbertRaum` stay. A move of the folder above it (`app.setPath('appData', …)`) is not
-  pinned yet (T3.4's S-a): T3.4's review fix round is to add it to (iii);
+  electron-builder's `extraMetadata` sets nothing but `version`; (iii) `src/main` moves none of
+  `userData`, `appData` or `sessionData`, except `userData` for a developer run, never renames the app
+  (`setName`, `app.name =`), and takes the single-instance lock at module top level after that move;
+  (iv) no start file, script, workflow or app source, nor the build config or an npm script, passes
+  `--user-data-dir` or `--profile-directory` (in the build config, the npm scripts of both
+  `package.json` files and the app source the switch's bare name counts too; three developer tools that
+  pass a scratch one on purpose are named: `scripts/verify-mac-build.sh`, `scripts/check-netlog.mjs`,
+  `scripts/release/run-hold.ps1`), and no start file sets `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`,
+  `XDG_CONFIG_HOME` or `HOME` for the app; (v) `appId` `space.hilbertraum.app`, the scheme
+  `hilbertraum`, and `productName` and `executableName` `HilbertRaum` stay;
 - **a check on the packaged build asserts the path itself** (T1.11 S8-1; T3.4's Q1): the step "Check
   the packaged app's user-data folder (app-update W-15)" in `release.yml`'s `build-win` leg starts the
   portable exe just built the way a user does (a scratch drive root, no profile switch) and waits for
@@ -3784,8 +3785,13 @@ T3.4):
   store it cannot open, so nothing whose loss changes behavior may live there. The list holds four UI
   preferences that fall back to a default when lost (`hilbertraum.uiLanguage`,
   `hilbertraum.chat.listCollapsed`, `hilbertraum.docs.railCollapsed`,
-  `hilbertraum.docs.locationsMoreOpen`); nothing is kept in IndexedDB; the screenshot harness
+  `hilbertraum.docs.locationsMoreOpen`); nothing is kept in IndexedDB, and no other browser store of
+  the profile (CacheStorage, the origin file system, cookies, Web SQL) is used; the screenshot harness
   `renderer/preview/`, which never ships, is left out;
+- not a pin of the profile, but added in T3.4's review fix round too: a `repo-hygiene.test.ts` row
+  refuses a raw bidirectional-control or line-separator character (U+202A to U+202E, U+2066 to U+2069,
+  U+200E, U+200F, U+061C, U+2028, U+2029) in any tracked file of `apps`, `scripts`, `launchers`,
+  `docs` and `.github` it reads (an escape stays allowed; T3.8's S-1);
 - `portable.unpackDirName: true` joins these pins once #1043's fix reaches the integration branch (an
   open item for the phase running then);
 - two checks that [`packaging.md`](packaging.md)'s pre-ship checklist holds as items 14 and 15 (T3.4's

@@ -218,7 +218,13 @@ if ($VerifyOnly) {
   }
   $checkExit = Invoke-NodeHelper $helperNode.Source 'kit-support.txt' @($KitSupportHelper, '--target', $NodeTarget, '--support-end', $SupportEnd, '--check')
   if ($checkExit -eq 2) { exit 2 }
-  if ($checkExit -ne 0) { exit 1 }
+  # Only the helper's own lines are shown, so a node that ended without one (a helper file missing from the checkout,
+  # whose "Cannot find module" line names a path) would leave no word at all: name the helper and its exit, as the
+  # record block below does (T3.6 B-1).
+  if ($checkExit -ne 0) {
+    Write-Host "  write-kit-support.mjs failed (exit $checkExit) before step 1: run it by hand with --check to see why" -ForegroundColor Red
+    exit 1
+  }
 }
 
 if (-not $VerifyOnly) {

@@ -230,13 +230,15 @@ data key — it must be readable before you unlock, and holds no password or pla
 drive's support log `updates/update.log`. On a drive set up for HilbertRaum (a Kit, or a drive
 prepared with the drive scripts) the app adds one short line to that log at each start (the app
 version, the AI engine versions this app version installs, the app version and format the drive
-records, and the database engine's version), one when a start fails (why, as a fixed word, and the
-error code when there is one), and one after each attempt to unlock the workspace, wrong passwords
-included (the outcome as a fixed word, the workspace's format number and the app version that last
-opened it). Each line carries its time, to the second. A line never holds a file name, a path, your
-text, a password or a free-form error message, but anyone who holds the drive can read the log
-without your password, including when the app was started and when someone tried to unlock it. It
-stays on the drive, and the app never sends it anywhere.
+records, and the database engine's version), one when a start fails (why, as a fixed word, and, when
+known, the error code and the name of the system call that failed), and one after each attempt to
+unlock the workspace, wrong passwords included (the outcome as a fixed word, the workspace's format
+number and the app version that last opened it, and, when an error stopped the attempt, the error
+code and the name of the system call that failed). Each line carries its time, to the second. A
+line never holds a file name, a path, your text, a password or a free-form error message, but
+anyone who holds the drive can read the log without your password, including when the app was
+started and when someone tried to unlock it. It stays on the drive, and the app never sends it
+anywhere.
 While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document or image exists briefly during
 re-indexing, when you open an image-analysis entry, or while a document is being translated); these

@@ -40,8 +40,8 @@ from its first public `1.0.0` release onward.
   as unavailable instead.
 - **Settings → Diagnostics (advanced) shows which app version the drive was set up with.** A new row, "Version
   recorded on the drive", sits under "App version" and is in the copied report too; it reads "not recorded" on a
-  drive that has no such record. Kits, and drives prepared with the drive scripts on a computer with Node.js,
-  now carry that record (`config/drive-release.json`).
+  drive that has no such record. Kits, and drives prepared with the drive scripts on a computer with Node.js 22.18
+  or later, now carry that record (`config/drive-release.json`).
 - **A drive set up for HilbertRaum now keeps a short support log, `updates/update.log`.** The app adds one line at
   each start, at a start that failed and after each attempt to unlock the workspace, wrong passwords included: the
   versions involved, the outcome as a fixed word and the time. It never holds a file name, a path, your text or a

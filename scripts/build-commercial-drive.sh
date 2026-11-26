@@ -185,7 +185,13 @@ else
   check_exit=0
   node_helper kit-support.txt "$KIT_SUPPORT_HELPER" --target "$TARGET" --support-end "$SUPPORT_END" --check || check_exit=$?
   if [[ $check_exit -eq 2 ]]; then exit 2; fi
-  if [[ $check_exit -ne 0 ]]; then exit 1; fi
+  # Only the helper's own lines are shown, so a node that ended without one (a helper file missing from the checkout,
+  # whose "Cannot find module" line names a path) would leave no word at all: name the helper and its exit, as the
+  # record block below does (T3.6 B-1).
+  if [[ $check_exit -ne 0 ]]; then
+    echo "  write-kit-support.mjs failed (exit $check_exit) before step 1: run it by hand with --check to see why" >&2
+    exit 1
+  fi
 fi
 
 if [[ $VERIFY_ONLY -eq 0 ]]; then
