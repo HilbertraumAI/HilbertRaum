@@ -22,7 +22,7 @@ import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import { openDatabase } from '../../src/main/services/db'
+import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { createConversation } from '../../src/main/services/chat'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { DEFAULT_SETTINGS, type PrivacyPolicy } from '../../src/shared/types'
@@ -2220,6 +2220,137 @@ describe('the encrypted file missing from the drive (#911)', () => {
 })
 
 // ---- no network across the unlock/lock path -------------------------------------
+
+// App-update T3.10 (W-14, F-11; CF-23): what an unlock hands out for the update.log unlock line: the workspace file's
+// own `user_version`, read from the decrypted file's SQLite header before the migrations (after them it is always this
+// build's), and the `last_writer` stamp the open found before its overwrite, parsed by F-10's reader so the raw value,
+// which another build chose, never leaves the vault. Only after the password verified and the file decrypted. The line
+// itself is the IPC's (workspace-ipc.test.ts); its fields are the golden's (tests/unit/update-log-unlock.test.ts).
+describe('the facts an unlock hands out for the update log (app-update T3.10)', () => {
+  /** A locked vault under 'pw' whose database holds `last_writer` = `value` (null: no schema_meta, as every workspace
+   *  0.1.66 or older; bytes: a BLOB, no text) and, given, the header's `user_version`; through the vault's own unlock and
+   *  lock (the tests set no stamp version, so no open of theirs overwrites the planted value). */
+  function vaultWithStamp(value: string | Uint8Array | null, userVersion?: number): FreshVaultPaths {
+    const vp = lockedVault('vault', 'pw')
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    db.exec('DROP TABLE IF EXISTS schema_meta')
+    if (value !== null) {
+      db.exec('CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+      db.prepare("INSERT INTO schema_meta(key, value) VALUES ('last_writer', ?)").run(value)
+    }
+    if (userVersion !== undefined) db.exec(`PRAGMA user_version = ${userVersion}`)
+    lockEncryptedVault(vp, db, key)
+    return vp
+  }
+  const startedOn = (vp: VaultPaths): WorkspaceController => {
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    return ctl
+  }
+  const userVersionOf = (db: { prepare: (sql: string) => { get: () => unknown } }): number =>
+    (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+
+  it('the file’s own user_version from before the migrations and the stamp found before the overwrite, handed out once', () => {
+    const ctl = startedOn(vaultWithStamp('0.1.66;interim', 0))
+    ctl.unlock('pw')
+    try {
+      expect(userVersionOf(ctl.requireDb())).toBe(SCHEMA_VERSION) // what the migrations left: this build's, no news
+      expect(ctl.takeOpenFacts()).toEqual({ userVersion: 0, lastWriter: { appVersion: '0.1.66', appliedThrough: 'interim' } })
+      expect(ctl.takeOpenFacts()).toBeNull()
+    } finally {
+      ctl.lock()
+    }
+  })
+
+  it.each<[string, string | Uint8Array | null, unknown]>([
+    ['no schema_meta, as every workspace 0.1.66 or older', null, null],
+    ['a value that is not text (a BLOB): no stamp, as F-10 reads it (a recorded residual)', new Uint8Array([0x30, 0x3b, 0x78]), null],
+    ['no `;`', 'garbage', 'unreadable'],
+    ['over 256 characters', `0.1.66;${'a'.repeat(250)}`, 'unreadable'],
+    ['a later writer’s `;` in the second field', '0.2.0;p10;7', { appVersion: '0.2.0', appliedThrough: 'p10;7' }]
+  ])('the stamp found, parsed: %s', (_name, value, lastWriter) => {
+    const ctl = startedOn(vaultWithStamp(value))
+    ctl.unlock('pw')
+    try {
+      expect(ctl.takeOpenFacts()).toEqual({ userVersion: SCHEMA_VERSION, lastWriter })
+    } finally {
+      ctl.lock()
+    }
+  })
+
+  // F-9: nothing runs for the line before the password verified, and nothing is read before the decrypt.
+  it('a wrong password, a refusal before the password and a tag failure before the decrypt finished hand out nothing', () => {
+    const wrong = startedOn(lockedVault('vault', 'pw'))
+    expect(thrownBy(() => wrong.unlock('not-the-password')).name).toBe('WrongPasswordError')
+    expect(wrong.takeOpenFacts()).toBeNull()
+    const newer = lockedVault('vault', 'pw')
+    writeFileSync(newer.descriptorPath, JSON.stringify({ ...JSON.parse(readFileSync(newer.descriptorPath, 'utf8')), version: 3 }))
+    const refused = startedOn(newer)
+    expect(thrownBy(() => refused.unlock('pw')).name).toBe('VaultNewerError')
+    expect(refused.takeOpenFacts()).toBeNull()
+    const tagged = startedOn(tagFailingVault(lockedVault('vault', 'pw')))
+    expect(thrownBy(() => tagged.unlock('pw')).name).toBe('VaultDamagedError')
+    expect(tagged.takeOpenFacts()).toBeNull()
+  })
+
+  // #208: noise under the vault's own key decrypts fine; its first bytes are no SQLite magic, so its offset 60 is no
+  // user_version. The refusal is the one it was, and the header read left no handle that kept the shred from the file.
+  it('a file that decrypts to noise hands out no user_version; the refusal and the shred are as before (#208)', () => {
+    const vp = damagedVault(lockedVault('vault', 'pw'), 'pw', 64 * 1024)
+    const ctl = startedOn(vp)
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultDamagedError')
+    expect(ctl.takeOpenFacts()).toEqual({ userVersion: null })
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
+  it('a create hands out nothing: its unlock opens the file it has just written', () => {
+    const ctl = new WorkspaceController(freshVaultPaths('vault'), ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    ctl.create('longenough', 'encrypted')
+    try {
+      expect(ctl.takeOpenFacts()).toBeNull()
+    } finally {
+      ctl.lock()
+    }
+  })
+
+  it('an attempt never hands out the facts of an earlier one that nobody took', () => {
+    const ctl = startedOn(lockedVault('vault', 'pw'))
+    ctl.unlock('pw')
+    ctl.lock()
+    expect(thrownBy(() => ctl.unlock('not-the-password')).name).toBe('WrongPasswordError')
+    expect(ctl.takeOpenFacts()).toBeNull()
+  })
+
+  it('a note that throws never fails the unlock (the stamp’s rule)', () => {
+    const vp = lockedVault('vault', 'pw')
+    const notes: unknown[] = []
+    const { db, key } = unlockEncryptedVault(vp, 'pw', undefined, undefined, undefined, undefined, undefined, (facts) => {
+      notes.push(facts)
+      throw new Error('a note that throws')
+    })
+    expect(notes).toHaveLength(2) // the header's fact, then the stamp's
+    expect(getSettings(db).workspaceMode).toBe('encrypted') // the open went on past both
+    lockEncryptedVault(vp, db, key)
+  })
+
+  // (c): only a dev build opens a plaintext workspace, at the start; its line says the same about the file.
+  it('the plaintext workspace’s open hands out the same facts; a newer one its user_version (dev builds only)', () => {
+    const vp = freshVaultPaths('vault')
+    const first = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    first.init() // no file yet: this open creates it
+    expect(first.takeOpenFacts()).toEqual({ userVersion: null, lastWriter: null })
+    first.shutdown()
+    const again = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    again.init()
+    expect(again.takeOpenFacts()).toEqual({ userVersion: SCHEMA_VERSION, lastWriter: null })
+    again.shutdown()
+    const newer = new WorkspaceController(newerPlaintext(freshVaultPaths('vault')), DEFAULT_POLICY, true)
+    newer.init()
+    expect(newer.isNewerWorkspace()).toBe(true)
+    expect(newer.takeOpenFacts()).toEqual({ userVersion: SCHEMA_VERSION + 1 })
+  })
+})
 
 describe('offline guarantee (vault create + unlock + lock)', () => {
   it('makes zero network calls', () => {

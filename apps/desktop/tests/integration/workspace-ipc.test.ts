@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -70,6 +71,8 @@ import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
 import { SCHEMA_VERSION, openDatabase, setStampAppVersion } from '../../src/main/services/db'
+import { resolvePaths, type ResolvedPaths } from '../../src/main/services/workspace'
+import { tempRoot } from '../helpers/db-fixtures'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
@@ -145,6 +148,30 @@ function encRemoved(): VaultPaths {
   rmSync(vp.encPath)
   return vp
 }
+
+/** App-update T3.10: a scratch prepared drive (`config/drive.json` = `{}`) for the unlock line, resolved as the start
+ *  resolves it (`main/index.ts` passes the same paths to the workspace IPC); `root` makes an existing folder the drive. */
+function lineDrive(root = tempRoot('wsipc-drive')): ResolvedPaths {
+  mkdirSync(join(root, 'config'), { recursive: true })
+  writeFileSync(join(root, 'config', 'drive.json'), '{}')
+  return resolvePaths({ envRoot: root, fallbackRoot: root })
+}
+
+/** The lines in the drive's `updates/update.log`, each checked for its trailing UTC time and returned without it. */
+function unlockLines(drive: { rootPath: string }): string[] {
+  const file = join(drive.rootPath, 'updates', 'update.log')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'latin1')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => {
+      expect(line).toMatch(/ t=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
+      return line.replace(/ t=\S+$/, '')
+    })
+}
+
+/** An unlock line of this machine, without its time. */
+const unlockLine = (fields: string): string => `r1-app ${process.platform} unlock ${fields}`
 
 beforeEach(() => ipcState.handlers.clear())
 
@@ -1189,6 +1216,46 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     }
   )
+
+  // App-update T3.10 (W-14, F-11): the same provocations through a handler given the drive's update.log (the hook
+  // main/index.ts passes): one `unlock` line per attempt with the fields of its outcome (the golden's per-result fields,
+  // tests/unit/update-log-unlock.test.ts), written by hand here; none for a password that is not a string (a malformed
+  // call: it checks nothing and costs no key derivation). The vaults are this build's, so the header says SCHEMA_VERSION,
+  // and the tests set no stamp version, so no stamp was ever written (`writer=none` where the open got that far).
+  const UNLOCK_LINES: Record<string, string | null> = {
+    'a wrong password': 'result=wrong_password',
+    'a password that is not a string': null,
+    'a wrong password on a damaged vault': 'result=wrong_password',
+    'a wrong password on a vault whose .enc was removed': 'result=wrong_password',
+    'a vault that decrypts to noise': 'result=vault_damaged damage=not-a-database',
+    'an .enc whose tag fails after the password verified': 'result=vault_damaged damage=failed-authentication',
+    'an .enc removed with nothing left to keep': 'result=vault_missing',
+    'an .enc whose config/workspace.json was removed': 'result=vault_descriptor_missing',
+    'an .enc beside a config/workspace.json that is not JSON': 'result=vault_descriptor_missing',
+    'a config/workspace.json that is not JSON, with no .enc beside it': 'result=vault_descriptor_unreadable',
+    // SQLITE_CONSTRAINT_TRIGGER: the fixture's trigger aborts the open's backfill, before the stamp (so no writer).
+    'a database whose upgrade step cannot finish': `result=vault_open_failed user_version=${SCHEMA_VERSION} err=SQLITE_1811`,
+    'a recovery file another program holds': 'result=vault_recovery_blocked',
+    'a database a newer build stamped': `result=workspace_newer user_version=${SCHEMA_VERSION + 1} what=database found=${SCHEMA_VERSION + 1}`,
+    'a vault descriptor a newer build wrote': 'result=workspace_newer what=descriptor found=3',
+    'an .enc frame a newer build wrote': 'result=workspace_newer what=frame found=2',
+    'a database whose schema this SQLite cannot parse, under this build’s stamp': `result=workspace_schema_unreadable user_version=${SCHEMA_VERSION}`,
+    'no vault to unlock': 'result=error'
+  }
+
+  it.each(rows('unlock', UNLOCK))('%s %s (%s): one update.log line with that outcome’s fields (app-update T3.10)', async (_call, _reason, how, provocation) => {
+    expect(Object.keys(UNLOCK_LINES), 'each provocation has its line written down').toContain(how)
+    const expected = UNLOCK_LINES[how]
+    const drive = lineDrive()
+    const { workspace, args } = provocation.arrange()
+    registerWorkspaceIpc(workspaceIpcCtx(workspace), { appVersion: APP_VERSION, updateLog: drive })
+    try {
+      await invoke(handlers, IPC.unlockWorkspace, ...args)
+      expect(unlockLines(drive)).toEqual(expected === null ? [] : [unlockLine(expected)])
+    } finally {
+      if (workspace instanceof WorkspaceController) workspace.shutdown()
+    }
+  })
 })
 
 // #875: a lock at quit that finished at the last snapshot can be recorded only once there is a database again. The
@@ -1394,6 +1461,176 @@ describe('an unlock whose last-writer stamp could not be written (app-update T2.
       ctrl.shutdown()
       setStampAppVersion('')
     }
+  })
+})
+
+// App-update T3.10 (W-14, F-11, CF-23): the unlock line on a real drive, through the handler. One line per attempt,
+// written once the answer is decided and from the answer, so no arm can forget it or write it twice; none for an unlock
+// that checked nothing. It lands in the drive's `updates/` only, so a refusal still changes nothing in the workspace's
+// own files. Without the hook (every other context in the suites) nothing is written and nothing is skipped. Each
+// outcome's line: the D-17 table above.
+describe('the update.log unlock line (app-update T3.10)', () => {
+  /** The writer's skip lines in app.log after `marker`, parsed. */
+  function skipsAfter(marker: string): Array<Record<string, unknown>> {
+    const all = readLogTail(100_000)
+    return all
+      .slice(all.findIndex((l) => l.includes(marker)) + 1)
+      .filter((l) => l.includes('Update log: line skipped'))
+      .map((l) => JSON.parse(l.slice(l.indexOf('{'))) as Record<string, unknown>)
+  }
+
+  it('a wrong password, the right one, then an unlock of the open workspace: two lines, in order, the third checked nothing', async () => {
+    const drive = lineDrive()
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, 'not-the-password')).result).toMatchObject({ reason: 'wrong_password' })
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toEqual({ ok: true, state: ctrl.getState() })
+      expect(unlockLines(drive)).toEqual([
+        unlockLine('result=wrong_password'),
+        unlockLine(`result=ok user_version=${SCHEMA_VERSION} writer=none`)
+      ])
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // The case of #1002's row above: the workspace opened, then a step after the open threw, and the gate shows the
+  // failure. One line, `error`, with what the open found; never `ok` and then `error`.
+  it('an unlock whose post-open step throws writes one error line with what the open found', async () => {
+    const drive = lineDrive()
+    const failingStep = {
+      releaseQueueHold: () => {
+        throw new Error('a post-unlock step failed')
+      }
+    }
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { docTasks: failingStep } }), { updateLog: drive })
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
+      expect(unlockLines(drive)).toEqual([unlockLine(`result=error user_version=${SCHEMA_VERSION} writer=none`)])
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // CF-23: the stamp the last open wrote, found before this open overwrites it, through F-10's reader.
+  it('the stamp a release-1 open left names its version and applied-through token in the next unlock’s line', async () => {
+    const drive = lineDrive()
+    setStampAppVersion('0.1.66')
+    try {
+      const ctrl = startedOn(lockedVault('wsipc', PW)) // the create's open stamps `0.1.66;interim`
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+      try {
+        expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+        expect(unlockLines(drive)).toEqual([unlockLine(`result=ok user_version=${SCHEMA_VERSION} writer=0.1.66 applied=interim`)])
+      } finally {
+        ctrl.lock()
+      }
+    } finally {
+      setStampAppVersion('')
+    }
+  })
+
+  // Finding 1 of the T3.10 sheet: the contexts register without a drive for the line. They must stay quiet: no line
+  // anywhere, and no "line skipped" notice in app.log for every unlock of the suites.
+  it('without the hook nothing is written and nothing is skipped', async () => {
+    const vp = lockedVault('wsipc', PW)
+    lineDrive(vp.root) // a prepared drive the handler is never told about
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { appVersion: APP_VERSION })
+    const marker = `T3.10 no-hook marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, 'not-the-password')).result).toMatchObject({ reason: 'wrong_password' })
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(existsSync(join(vp.root, 'updates'))).toBe(false)
+      expect(skipsAfter(marker)).toEqual([])
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // F-9 and the sheet's C4: "nothing was changed" keeps meaning the workspace's files. The line is the only write.
+  it('a refused unlock writes its line to updates/ only: workspace/ and config/ stay byte for byte', async () => {
+    const vp = editDescriptor(lockedVault('wsipc', PW), (d) => {
+      d.version = 3
+    })
+    const drive = lineDrive(vp.root)
+    const filesUnder = (dir: string): Record<string, string> => {
+      const out: Record<string, string> = {}
+      for (const rel of readdirSync(dir, { recursive: true }) as string[]) {
+        const path = join(dir, rel)
+        if (statSync(path).isFile()) out[rel] = readFileSync(path).toString('base64')
+      }
+      return out
+    }
+    const ctrl = startedOn(vp)
+    const before = { workspace: filesUnder(dirname(vp.dbPath)), config: filesUnder(dirname(vp.descriptorPath)) }
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ reason: 'workspace_newer' })
+      expect(unlockLines(drive)).toEqual([unlockLine('result=workspace_newer what=descriptor found=3')])
+      expect({ workspace: filesUnder(dirname(vp.dbPath)), config: filesUnder(dirname(vp.descriptorPath)) }).toEqual(before)
+      expect(readFileSync(join(vp.root, 'updates', 'update.log'), 'latin1')).not.toContain(basename(vp.root))
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  // The sheet's E4: the line is best effort. A drive that refuses it (here `updates` is a file) changes no answer.
+  it('a drive that refuses the line: the same answers, one skip in app.log per attempt, no throw', async () => {
+    const drive = lineDrive()
+    writeFileSync(join(drive.rootPath, 'updates'), 'not a folder')
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+    const marker = `T3.10 refusing-drive marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, 'not-the-password')).result).toMatchObject({ reason: 'wrong_password' })
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(skipsAfter(marker).map((s) => [s.event, s.reason])).toEqual([
+        ['unlock', 'not-a-folder'],
+        ['unlock', 'not-a-folder']
+      ])
+      expect(readFileSync(join(drive.rootPath, 'updates'), 'utf8')).toBe('not a folder')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // The sheet's A6: a create's open is not an unlock (its `previous` would be the stamp the create wrote a moment before).
+  it('a create writes no unlock line', async () => {
+    const drive = lineDrive()
+    const ctrl = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+    try {
+      expect((await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')).result).toMatchObject({ ok: true })
+      expect(unlockLines(drive)).toEqual([])
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // The sheet's (c): only a dev build opens a plaintext workspace, at the start, before the workspace IPC is registered;
+  // the registration that is handed the drive writes that open's line, with the same fields.
+  it('the start’s plaintext open writes its line once the IPC is registered with the drive; a newer one too (dev builds only)', async () => {
+    const vp = freshVaultPaths('wsipc')
+    startedOn(vp, DEFAULT_POLICY, true).shutdown() // the first start creates the file
+    const drive = lineDrive()
+    const ctrl = startedOn(vp, DEFAULT_POLICY, true)
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl), { updateLog: drive })
+      expect(unlockLines(drive)).toEqual([unlockLine(`result=ok user_version=${SCHEMA_VERSION} writer=none`)])
+    } finally {
+      ctrl.shutdown()
+    }
+    ipcState.handlers.clear()
+    const newerDrive = lineDrive()
+    const newer = startedOn(newerPlaintext(freshVaultPaths('wsipc')), DEFAULT_POLICY, true)
+    registerWorkspaceIpc(workspaceIpcCtx(newer), { updateLog: newerDrive })
+    expect(unlockLines(newerDrive)).toEqual([unlockLine(`result=workspace_newer user_version=${SCHEMA_VERSION + 1} what=database`)])
   })
 })
 

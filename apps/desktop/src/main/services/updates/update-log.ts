@@ -6,7 +6,7 @@ import type { BackendStartFailure } from '../../../shared/types'
 import { bareSyscall } from '../failure-for-log'
 import { log } from '../logging'
 import type { ResolvedPaths } from '../workspace'
-import { folderContainment, openWriteTemp, sameShreddableFile } from '../workspace-vault'
+import { folderContainment, openWriteTemp, sameShreddableFile, type OpenFacts } from '../workspace-vault'
 import { readDriveRelease, type DriveReleaseRead } from './drive-release'
 import { parseSemver } from './version'
 
@@ -15,21 +15,33 @@ import { parseSemver } from './version'
 // append to this one file for ever, and support reads it before any unlock, so the app's lines are content-free by each
 // event's typed fields (Δ-66): a line is `r1-app <os> <event> <key>=<value> ... t=<UTC time>`, and the appender writes
 // only the events registered in `UPDATE_LOG_EVENTS`, each field only when its key is in the event's schema and its value
-// passes the one rule that key names (a version, a pin, an integer, the SQLite version, an error code, a system call, or
-// a closed list of words). The frame's own value rule (1 to 64 bytes of [0-9A-Za-z._+-]) stops paths, spaces, quotes and
-// non-ASCII text, but not a one-word file, host or account name, so no key takes a free value: most rules refuse such a
-// word, and a key whose rule is word-shaped (a pin P admits `Steuer_2026.xlsx`, a system call C admits `peter`) is
-// filled only from its own source (the app's bundled yaml; a thrown error's `syscall`), never from data. Registering an
-// event is where that is reviewed. An error is logged only by its code and its bare system call (P3 entry decision 3),
-// never by a message. The golden: tests/fixtures/readers/f11-update-log/.
+// passes the one rule that key names (a version, a pin, an integer, the SQLite version, an error code, a system call, a
+// signed integer, the stamp's applied-through token, or a closed list of words). The frame's own value rule (1 to 64
+// bytes of [0-9A-Za-z._+-]) stops paths, spaces, quotes and non-ASCII text, but not a one-word file, host or account
+// name, so no key takes a free value: most rules refuse such a word, and a key whose rule is word-shaped is filled only
+// from its own source or is named below as data-fed. Word-shaped: a pin P (`Steuer_2026.xlsx`), a system call C
+// (`peter`), and in their own shapes a version V (`1.0.0-peter`) and an error code E (`EMMA`); the applied-through
+// token A (any 16-byte word) is word-shaped outright. Registering an event is where that is reviewed. An error is logged
+// only by its code and its bare system call (P3 entry decision 3), never by a message. The golden:
+// tests/fixtures/readers/f11-update-log/ (vectors.json; the unlock line's vectors-unlock.json).
+//
+// Data-fed keys (their value is read from a file another program or build wrote, bounded by its rule; T3.2 review 1,
+// recheck N-1): `startup`'s `release` (V) and `release_format` (I), from config/drive-release.json, and `drive_format`
+// (I), from config/drive.json; `unlock`'s `writer` (V) and `applied` (A), from the workspace file's last_writer stamp,
+// and `user_version` (N) and `found` (I), from its header or a newer-format refusal. Every other key is filled from the
+// app's own source: its version, its bundled runtime-sources.yaml (the pins, P), `process.versions.sqlite`, a thrown
+// error's code (E) and system call (C), and closed lists.
 //
 // What this module writes (P3 entry decision 9 (c)):
 // - `startup`, once per start of a prepared drive (main/index.ts `initBackend`): the app version, the engine pins of the
 //   app's own bundled runtime-sources.yaml, the drive-release record's state (T3.3a's reader, F-13: this line is where
 //   its "is logged" happens), config/drive.json's drive_format_version and the SQLite version (W-68);
 // - `start-failed`, in the start runner's catch (main/backend-start.ts): the failure's cause, code and system call;
-// - a later event (the unlock line of T3.10, P6's and P7's events) only once it is registered in `UPDATE_LOG_EVENTS`,
-//   in this module, as data: its keys in their order and the rule of each; `appendUpdateLogLine` then writes it.
+// - `unlock` (T3.10, CF-23), after every unlock attempt (ipc/registerWorkspaceIpc.ts), and for the start's plaintext
+//   open (dev builds only): the outcome, the workspace file's own user_version and the last_writer stamp the open found,
+//   and a refusal's content-free facts, each result with its own fields;
+// - a later event (P6's and P7's events) only once it is registered in `UPDATE_LOG_EVENTS`, in this module, as data:
+//   its keys in their order and the rule of each; `appendUpdateLogLine` then writes it.
 //
 // Where and how (decision 9 (a), (b)): only on a prepared drive (`config/drive.json` there); never through a link
 // (`updates` must be a real folder at its name, `update.log` absent or a regular file with one name, opened once and
@@ -85,6 +97,32 @@ const SYSCALL_MAX_BYTES = 16
 /** The failed-start line's causes: the gate's three (`StartFailureCause`). */
 const CAUSE_WORDS = ['drive_not_writable', 'drive_full', 'other'] as const
 const CAUSES: ReadonlySet<string> = new Set(CAUSE_WORDS)
+/** A signed integer (N): SQLite's `user_version` is a signed 32-bit number. The numeric shape only (T3.2 recheck N-2). */
+const SIGNED_INTEGER = /^-?[0-9]{1,10}$/
+/** The stamp's applied-through token (A): word-shaped and data-fed, the second field of the workspace file's last_writer
+ *  stamp (release 1 writes `interim`; P10's T10.3 defines the later values). A longer or other-shaped token is omitted. */
+const APPLIED_THROUGH = /^[0-9A-Za-z._-]{1,16}$/
+/** The unlock line's results (T3.10): `ok`, or the reason of the answer the gate was given (`WorkspaceActionResult`'s
+ *  unlock reasons, frozen as log tokens here); any other value is `error`. */
+const UNLOCK_RESULTS = [
+  'ok',
+  'wrong_password',
+  'vault_damaged',
+  'workspace_schema_unreadable',
+  'vault_open_failed',
+  'vault_missing',
+  'vault_descriptor_missing',
+  'vault_descriptor_unreadable',
+  'vault_recovery_blocked',
+  'workspace_newer',
+  'error'
+] as const
+type UnlockResult = (typeof UNLOCK_RESULTS)[number]
+/** `vault_damaged`'s kinds (`VaultDamagedError.damage`). */
+const DAMAGE_WORDS = ['failed-authentication', 'not-a-database'] as const
+/** `workspace_newer`'s artifacts: the vault format's (`VaultNewerWhat`), checked before the password, and the database. */
+const VAULT_FORMAT_WORDS = ['descriptor', 'kdf', 'frame', 'journal'] as const
+const NEWER_WORDS = ['database', ...VAULT_FORMAT_WORDS] as const
 
 /** The engine families whose pins the startup line carries, with their keys (`ocr` is no engine). */
 const PIN_FIELDS: ReadonlyArray<readonly [RuntimeFamily, string]> = [
@@ -248,8 +286,9 @@ function isLogVersion(value: unknown): value is string {
 
 // ---- the registered events (F-11, Δ-66: content-free by each event's typed fields)
 
-/** The token rules of F-11 a registered key may name: version, pin, integer, SQLite version, error code, system call. */
-export type UpdateLogTokenRule = 'V' | 'P' | 'I' | 'S' | 'E' | 'C'
+/** The token rules of F-11 a registered key may name: version, pin, integer, SQLite version, error code, system call;
+ *  (T3.10) a signed integer and the stamp's applied-through token. */
+export type UpdateLogTokenRule = 'V' | 'P' | 'I' | 'S' | 'E' | 'C' | 'N' | 'A'
 /** The sentinels of F-11: fixed words that hold no digit, so never a value any rule admits. */
 export type UpdateLogSentinel = 'unknown' | 'absent' | 'unreadable' | 'none'
 
@@ -266,7 +305,9 @@ const TOKEN_RULES: Readonly<Record<UpdateLogTokenRule, (value: string) => boolea
   I: (value) => INTEGER.test(value),
   S: (value) => SQLITE_VERSION.test(value),
   E: isErrorCode,
-  C: (value) => value.length <= SYSCALL_MAX_BYTES && bareSyscall(value) !== null
+  C: (value) => value.length <= SYSCALL_MAX_BYTES && bareSyscall(value) !== null,
+  N: (value) => SIGNED_INTEGER.test(value),
+  A: (value) => APPLIED_THROUGH.test(value)
 }
 
 /** A pin's sentinels: no file or no block (`absent`), a file that could not be read or a pin that fails P. */
@@ -288,6 +329,20 @@ const EVENTS = {
   'start-failed': [
     { key: 'version', rule: 'V', sentinels: ['unknown'] },
     { key: 'cause', oneOf: CAUSE_WORDS },
+    { key: 'err', rule: 'E' },
+    { key: 'syscall', rule: 'C' }
+  ],
+  /** W-14, T3.10 (CF-23): an unlock attempt's outcome and what it found (`unlockFields` picks each result's fields).
+   *  Data-fed: `user_version` and `found` (the file's header, a newer-format refusal), `writer` and `applied` (its
+   *  last_writer stamp). */
+  unlock: [
+    { key: 'result', oneOf: UNLOCK_RESULTS },
+    { key: 'user_version', rule: 'N' },
+    { key: 'writer', rule: 'V', sentinels: ['none', 'unreadable'] },
+    { key: 'applied', rule: 'A' },
+    { key: 'damage', oneOf: DAMAGE_WORDS },
+    { key: 'what', oneOf: NEWER_WORDS },
+    { key: 'found', rule: 'I' },
     { key: 'err', rule: 'E' },
     { key: 'syscall', rule: 'C' }
   ]
@@ -418,6 +473,121 @@ export function startFailedFields(facts: StartFailedFacts): UpdateLogField[] {
   else if (errorCode(facts.thrown) === LIBUV_UNKNOWN) fields.push(['err', LIBUV_UNKNOWN])
   const call = systemCall(facts.thrown)
   if (call !== null) fields.push(['syscall', call])
+  return fields
+}
+
+/** What the unlock line is made of (T3.10): an attempt's outcome, what its open found, what it threw. */
+export interface UnlockFacts {
+  /** `ok`, or the reason of the answer the gate was given; anything else is logged as `error`. */
+  readonly result: unknown
+  /** What the open handed out (`WorkspaceController.takeOpenFacts`); null when nothing was decrypted or opened. */
+  readonly open: OpenFacts | null
+  /** What a refused or failed attempt threw, read only for its content-free fields, each read under `try`; undefined for
+   *  a success. */
+  readonly thrown: unknown
+}
+
+/** Each result's fields (the golden's `per_result`; the schema gives their order): fields that cannot occur together
+ *  never share a line, so every result's longest line fits the frame, which all nine keys at their caps would not.
+ *  `vault_open_failed` carries no system call (the open's failures are SQLite's); `vault_missing` no `keptCopyDiscarded`
+ *  (a later version may add a key). */
+const UNLOCK_FIELDS: Readonly<Record<UnlockResult, ReadonlySet<string>>> = {
+  ok: new Set(['user_version', 'writer', 'applied']),
+  wrong_password: new Set(),
+  vault_damaged: new Set(['user_version', 'damage']),
+  workspace_schema_unreadable: new Set(['user_version']),
+  vault_open_failed: new Set(['user_version', 'writer', 'applied', 'err']),
+  vault_missing: new Set(),
+  vault_descriptor_missing: new Set(),
+  vault_descriptor_unreadable: new Set(),
+  vault_recovery_blocked: new Set(['err']),
+  workspace_newer: new Set(['user_version', 'what', 'found']),
+  error: new Set(['user_version', 'writer', 'applied', 'err', 'syscall'])
+}
+
+/** One property of a thrown value, or undefined. Never throws (a getter or a Proxy may). */
+function propertyOf(value: unknown, key: string): unknown {
+  try {
+    return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The text of an integer number (N's input; the rule then checks its shape), or null. */
+function integerText(value: unknown): string | null {
+  return typeof value === 'number' && Number.isInteger(value) ? String(value) : null
+}
+
+/** A newer-format refusal's `found` as text (I's input), or null: a number or a string the file chose, which only the
+ *  integer rule lets through. */
+function foundText(value: unknown): string | null {
+  return typeof value === 'number' || typeof value === 'string' ? String(value) : null
+}
+
+/** E for the line: SQLite's result code as `SQLITE_<n>` when the value carries an integer `errcode` 0-65535
+ *  (start-failure.ts's rule: node:sqlite's `code` is always ERR_SQLITE_ERROR), else its `code`. Never throws. */
+function sqliteOrErrorCode(err: unknown): string | null {
+  const errcode = propertyOf(err, 'errcode')
+  if (typeof errcode === 'number' && Number.isInteger(errcode) && errcode >= 0 && errcode <= 0xffff) return `SQLITE_${errcode}`
+  return errorCode(err)
+}
+
+/** `writer` and `applied` from the stamp the open found: none when it never got that far; `none` for no stamp;
+ *  `unreadable` when F-10's reader says so or its version fails V; else the version and the applied-through token. */
+function stampFields(lastWriter: OpenFacts['lastWriter']): UpdateLogField[] {
+  if (lastWriter === undefined) return []
+  if (lastWriter === null) return [['writer', 'none']]
+  if (lastWriter === 'unreadable' || !isLogVersion(lastWriter.appVersion)) return [['writer', 'unreadable']]
+  return [
+    ['writer', lastWriter.appVersion],
+    ['applied', lastWriter.appliedThrough]
+  ]
+}
+
+/**
+ * The unlock line's fields (F-11, T3.10; the golden's per-result table): `result` (`ok`, or the answer's reason; any
+ * other value `error`), then only the fields of that result. `user_version` is the workspace file's own (the header's,
+ * before the migrations), or a newer database's `found`, which wins; `writer`/`applied` the stamp the open found before
+ * its overwrite (CF-23: parsed, so the raw value never reaches here); `damage`, `what`/`found`, `err` and `syscall` are
+ * read from what was thrown, by name and type only, each read under `try`. Every value then goes through its key's rule.
+ */
+export function unlockFields(facts: UnlockFacts): UpdateLogField[] {
+  const result: UnlockResult =
+    typeof facts.result === 'string' && (UNLOCK_RESULTS as readonly string[]).includes(facts.result)
+      ? (facts.result as UnlockResult)
+      : 'error'
+  const keys = UNLOCK_FIELDS[result]
+  const { open, thrown } = facts
+  const fields: UpdateLogField[] = [['result', result]]
+  const add = (key: string, value: string | null): void => {
+    if (value !== null && keys.has(key)) fields.push([key, value])
+  }
+  if (result === 'workspace_newer') {
+    const what = propertyOf(thrown, 'what')
+    const found = propertyOf(thrown, 'found')
+    if (typeof what === 'string' && (VAULT_FORMAT_WORDS as readonly string[]).includes(what)) {
+      add('what', what) // the vault's format, refused before the password: no file was decrypted
+    } else {
+      add('user_version', integerText(found) ?? integerText(open?.userVersion))
+      add('what', 'database')
+    }
+    add('found', foundText(found))
+    return fields
+  }
+  add('user_version', integerText(open?.userVersion))
+  for (const [key, value] of stampFields(open?.lastWriter)) add(key, value)
+  const damage = propertyOf(thrown, 'damage')
+  add('damage', typeof damage === 'string' ? damage : null)
+  if (result === 'vault_open_failed') {
+    const failure = propertyOf(thrown, 'failure') // never its `kind` or `sqlite`, which carry free text
+    add('err', sqliteOrErrorCode({ errcode: propertyOf(failure, 'sqliteCode'), code: propertyOf(failure, 'code') }))
+  } else if (result === 'vault_recovery_blocked') {
+    add('err', errorCode({ code: propertyOf(thrown, 'code') }))
+  } else {
+    add('err', sqliteOrErrorCode(thrown))
+  }
+  add('syscall', systemCall(thrown))
   return fields
 }
 
@@ -673,5 +843,19 @@ export function writeStartFailedLine(
     appendUpdateLogLine(paths, 'start-failed', startFailedFields(opts))
   } catch (err) {
     reportSkip('start-failed', 'write-failed', err)
+  }
+}
+
+/**
+ * The unlock line (F-11, T3.10): once per unlock attempt the handler answered (ipc/registerWorkspaceIpc.ts; never for
+ * one that checked nothing), and for the start's plaintext open. Nothing without the drive (`paths` left out: the test
+ * contexts) or off a prepared drive. Never throws, never waits: one append, no fsync.
+ */
+export function writeUnlockLine(paths: UpdateLogPaths | undefined, facts: UnlockFacts): void {
+  try {
+    if (paths === undefined) return
+    appendUpdateLogLine(paths, 'unlock', unlockFields(facts))
+  } catch (err) {
+    reportSkip('unlock', 'write-failed', err)
   }
 }

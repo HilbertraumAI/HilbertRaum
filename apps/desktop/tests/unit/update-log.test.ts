@@ -202,8 +202,9 @@ describe('F-11 typed events (Δ-66): only registered events are lines, and a fie
     ['version', '0.1.66'], ['llama', 'b12110'], ['whisper', 'v1.8.6'], ['kiwix', '3.8.1'], ['release', '0.1.66'],
     ['release_format', '1'], ['drive_format', '1'], ['sqlite', '3.50.4']
   ]
-  /** The review's probes: a file name, a host name and two account names of one ASCII word each. */
-  const PROBES = ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local']
+  /** The review's probes: a file name, a host name and two account names of one ASCII word each; (recheck N-1) and an
+   *  account name in a version's shape (V) and one in an error code's (E). */
+  const PROBES = ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local', '1.0.0-peter', 'EMMA']
 
   // Golden g10's and g05's events, and the one name every object has that the frame takes (the table is looked up by
   // its own keys only).
@@ -225,14 +226,26 @@ describe('F-11 typed events (Δ-66): only registered events are lines, and a fie
   })
 
   // The review's probes against every key of every registered event, so a later registration is probed too. A pin
-  // (P) and a system call (C) are word-shaped: a key naming either takes its value only from its own source (the app's
-  // bundled yaml, a thrown error's syscall), never from data. The keys that admit a probe are named here, by hand.
-  it('the review’s file, host and account names reach no key whose rule refuses them (P and C named)', () => {
+  // (P) and a system call (C) are word-shaped, a version (V) and an error code (E) in their own shapes, the stamp's
+  // applied-through token (A, T3.10) outright: a key naming one takes its value from its own source (the app's version,
+  // its bundled yaml, a thrown error's code and syscall) or is data-fed and named so in update-log.ts's header. The keys
+  // that admit a probe are named here, by hand.
+  it('the review’s file, host and account names reach no key whose rule refuses them (every word-shaped key named)', () => {
     const admitsAProbe: Record<string, string[]> = {
-      'startup.llama': ['Steuer_2026.xlsx'],
-      'startup.whisper': ['Steuer_2026.xlsx'],
-      'startup.kiwix': ['Steuer_2026.xlsx'],
-      'start-failed.syscall': ['peter']
+      // own source: the app's version, its bundled yaml's pins, a thrown error's code and system call
+      'startup.version': ['1.0.0-peter'],
+      'startup.llama': ['Steuer_2026.xlsx', '1.0.0-peter'],
+      'startup.whisper': ['Steuer_2026.xlsx', '1.0.0-peter'],
+      'startup.kiwix': ['Steuer_2026.xlsx', '1.0.0-peter'],
+      'start-failed.version': ['1.0.0-peter'],
+      'start-failed.err': ['EMMA'],
+      'start-failed.syscall': ['peter'],
+      'unlock.err': ['EMMA'],
+      'unlock.syscall': ['peter'],
+      // data-fed (update-log.ts's header names them): config/drive-release.json; the workspace's last_writer stamp
+      'startup.release': ['1.0.0-peter'],
+      'unlock.writer': ['1.0.0-peter'],
+      'unlock.applied': ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local', '1.0.0-peter', 'EMMA']
     }
     const admitted: Record<string, string[]> = {}
     for (const [event, schema] of Object.entries(UPDATE_LOG_EVENTS) as Array<[UpdateLogEvent, ReadonlyArray<{ key: string }>]>) {
@@ -303,26 +316,47 @@ describe('F-11 typed events (Δ-66): only registered events are lines, and a fie
 
   // The table is data a later task extends (T3.10's unlock, P6's and P7's events): every name the frame can write, the
   // longest line it allows within the 256-byte cap, and no change at run time. The longest value of each rule is its
-  // cap in F-11 (V 24, P 16, I 6, S 15, E 40, C 16 bytes), so the longest startup and failed-start lines are the
-  // golden's worst cases, s46 and f14 (T3.2 review 1, m-1).
+  // cap in F-11 (V 24, P 16, I 6, S 15, E 40, C 16 bytes; T3.10's N 11, A 16), so the longest startup and failed-start
+  // lines are the golden's worst cases, s46 and f14 (T3.2 review 1, m-1). The unlock line's fields are chosen per result
+  // (all nine keys at their caps would exceed the cap), so its bound is checked per result over vectors-unlock.json's
+  // `per_result`, with that result's own token; the longest is its golden u61.
   it('the table: names the frame can write, a longest line within 256 bytes (the golden’s s46 and f14), frozen', () => {
-    const LONGEST = { V: 24, P: 16, I: 6, S: 15, E: 40, C: 16 } as const
+    const LONGEST = { V: 24, P: 16, I: 6, S: 15, E: 40, C: 16, N: 11, A: 16 } as const
+    const UNLOCK = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f11-update-log', 'vectors-unlock.json'), 'utf8')) as {
+      fields: { per_result: Record<string, string[]> }
+      emit: { vectors: Array<{ name: string; line: string }> }
+    }
     const SENTINELS = ['unknown', 'absent', 'unreadable', 'none']
     const longestLine: Record<string, number> = {}
     for (const [event, schema] of Object.entries(UPDATE_LOG_EVENTS)) {
       expect(event).toMatch(/^[a-z][a-z0-9-]{0,31}$/)
       const keys = schema.map((spec) => spec.key)
       expect(new Set(keys).size, event).toBe(keys.length)
-      let bytes = 'r1-app abcdefgh '.length + event.length + ` ${T}`.length
+      const frame = 'r1-app abcdefgh '.length + event.length + ` ${T}`.length
+      const longestOf = (spec: (typeof schema)[number]): number => {
+        const words: readonly string[] = 'oneOf' in spec ? spec.oneOf : (spec.sentinels ?? [])
+        return Math.max(...words.map((w) => w.length), 'oneOf' in spec ? 0 : LONGEST[spec.rule])
+      }
+      let bytes = frame
       for (const spec of schema) {
         expect(spec.key).toMatch(/^[a-z][a-z0-9_]{0,31}$/)
         expect(spec.key).not.toBe('t')
         const words: readonly string[] = 'oneOf' in spec ? spec.oneOf : (spec.sentinels ?? [])
         for (const word of words) expect(word).toMatch(/^[0-9A-Za-z._+-]{1,64}$/)
         if (!('oneOf' in spec)) for (const word of words) expect(SENTINELS).toContain(word)
-        bytes += 1 + spec.key.length + 1 + Math.max(...words.map((w) => w.length), 'oneOf' in spec ? 0 : LONGEST[spec.rule])
+        bytes += 1 + spec.key.length + 1 + longestOf(spec)
       }
-      expect(bytes, event).toBeLessThanOrEqual(256)
+      if (event === 'unlock') {
+        // per result: `result=<that token>`, then only that result's fields at their caps
+        bytes = 0
+        for (const [result, keys] of Object.entries(UNLOCK.fields.per_result)) {
+          let line = frame + ' result='.length + result.length
+          for (const spec of schema) if (keys.includes(spec.key)) line += 1 + spec.key.length + 1 + longestOf(spec)
+          expect(line, `unlock ${result}`).toBeLessThanOrEqual(256)
+          bytes = Math.max(bytes, line)
+        }
+        expect(bytes).toBe(UNLOCK.emit.vectors.find((v) => v.name === 'u61')!.line.length)
+      } else expect(bytes, event).toBeLessThanOrEqual(256)
       longestLine[event] = bytes
     }
     expect(longestLine.startup).toBe(goldenLine('s46').length)

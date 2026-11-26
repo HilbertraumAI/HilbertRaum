@@ -979,7 +979,8 @@ function initBackend(): void {
   // #1002: a successful unlock tells the quit closure, which leaves the state a session-end lock left behind when the
   // app ran on (`shutdown.ts`).
   // App-update T2.6: the version fills the newer-workspace copy and rides on the states the gate is shown.
-  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked, appVersion: app.getVersion() })
+  // App-update T3.10 (W-14, F-11): the drive of the startup line above gets an unlock line after every unlock attempt.
+  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked, appVersion: app.getVersion(), updateLog: paths })
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)

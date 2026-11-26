@@ -34,6 +34,8 @@ import {
   checkpointLeftoverWal,
   isWorkspaceNewerError,
   openDatabase,
+  openDatabaseWithStamp,
+  parseLastWriter,
   probeDatabaseFile,
   sqliteJudgedDamaged,
   sqliteSchemaUnreadable,
@@ -43,6 +45,7 @@ import {
   STAMP_NO_APP_VERSION,
   WorkspaceNewerError,
   type DatabaseFileProbe,
+  type LastWriter,
   type WalCheckpointRetry
 } from './db'
 import { seedSettings, updateSettings } from './settings'
@@ -1402,6 +1405,50 @@ function startsLikeDatabase(path: string): boolean {
     return header.subarray(0, SQLITE_FILE_MAGIC.length).equals(SQLITE_FILE_MAGIC)
   } finally {
     closeSync(fd)
+  }
+}
+
+/**
+ * App-update T3.10 (W-14, F-11; CF-23): what an open found in the workspace file, for the update.log unlock line, which
+ * `ipc/registerWorkspaceIpc.ts` writes (this module never imports the log's writer). An unlock hands them out only
+ * after the password verified and the file decrypted; the plaintext workspace's open (dev builds only) the same facts.
+ * Never the raw stamp.
+ */
+export interface OpenFacts {
+  /** The file's own `user_version` before the migrations (after them it is always this build's): SQLite header offset
+   *  60, read only when the header starts with SQLite's magic. Null: not read, or no such header (noise, a torn file). */
+  readonly userVersion: number | null
+  /** The `last_writer` stamp the open found before its overwrite, through F-10's reader (`parseLastWriter`), so the raw
+   *  value another build chose never leaves here. Null: none (no table, no row, a value that is not text). Absent: the
+   *  open never got as far as the stamp (a refusal or a failure before it). */
+  readonly lastWriter?: LastWriter | null
+}
+
+/** T3.10: the `user_version` in the database header at `path` ({@link OpenFacts}), from one read-only open closed before
+ *  anything else opens the file (a held handle would block the shred's unlink on Windows, #208); null for a file whose
+ *  first 16 bytes are not SQLite's magic, one shorter than the header, or any failure. Never throws. */
+function headerUserVersion(path: string): number | null {
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const header = Buffer.alloc(SQLITE_DATABASE_HEADER_BYTES)
+      if (readSync(fd, header, 0, header.length, 0) < header.length) return null
+      return header.subarray(0, SQLITE_FILE_MAGIC.length).equals(SQLITE_FILE_MAGIC) ? header.readInt32BE(60) : null
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+}
+
+/** T3.10: hand a note its facts; a note that throws never fails the open (the stamp's rule, `db.ts`). */
+function tellOpenFacts(note: ((facts: OpenFacts) => void) | undefined, facts: OpenFacts): void {
+  if (note === undefined) return
+  try {
+    note(facts)
+  } catch {
+    /* the log is best-effort; the unlock goes on */
   }
 }
 
@@ -3508,7 +3555,11 @@ export function unlockEncryptedVault(
   onJournalRefusals?: (refused: number) => void,
   /** T2.2 (W-9): hears the content-free code when the open's `last_writer` stamp was not written. The unlock goes on:
    *  a stamp never reaches `openFailure`. */
-  onStampFailed?: (code: string) => void
+  onStampFailed?: (code: string) => void,
+  /** App-update T3.10 (CF-23): hears what the open found for the update.log unlock line ({@link OpenFacts}): once after
+   *  the decrypt (the header's `user_version`), and again once the open got past the stamp (with the stamp, parsed). A
+   *  note because a refusal throws. Without it the header is not read. */
+  onOpenFacts?: (facts: OpenFacts) => void
 ): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
   // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
@@ -3724,10 +3775,18 @@ export function unlockEncryptedVault(
     // wrong password, and from an upgrade step that could not finish (#844), and never leave the
     // decrypted output at rest: for a damaged-but-real database those bytes are authentic
     // plaintext user data sitting on disk while the workspace reports locked.
+    // App-update T3.10 (CF-23): the file's own `user_version`, read here, after the password verified and the decrypt,
+    // and before the open's migrations change it; then the stamp the open found before its overwrite, parsed before
+    // the settings writes, so a failure there still names it. Neither read nor note can throw into the unlock.
+    const userVersion = onOpenFacts === undefined ? null : headerUserVersion(vaultPaths.dbPath)
+    tellOpenFacts(onOpenFacts, { userVersion })
     let db: Db
     try {
-      db = openDatabase(vaultPaths.dbPath, { onStampFailed })
+      const opened = openDatabaseWithStamp(vaultPaths.dbPath, { onStampFailed })
+      db = opened.db
       openedDb = db
+      const { previous } = opened.stamp
+      tellOpenFacts(onOpenFacts, { userVersion, lastWriter: previous === null ? null : parseLastWriter(previous) })
       seedSettings(db)
       // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it
       // too), inside this guard so a failed write cannot leave the keys or the open database behind.
@@ -4151,6 +4210,12 @@ export class WorkspaceController {
     if (this._stampFailures.length < 20) this._stampFailures.push(code)
     if (code !== STAMP_NO_APP_VERSION) this._stampPending = true
   }
+  /** App-update T3.10: what the last unlock's open (or the start's plaintext open) found, for the update.log unlock line
+   *  ({@link takeOpenFacts}); the later of an open's two notes replaces the first. */
+  private _openFacts: OpenFacts | null = null
+  private readonly noteOpenFacts = (facts: OpenFacts): void => {
+    this._openFacts = facts
+  }
   /**
    * T2.2 fix round (review 2, major 1): a stamp the open could not write leaves the last writer's value standing while
    * this session writes, and a later build would read it as "no older version wrote since". So, once, before the lock
@@ -4251,6 +4316,16 @@ export class WorkspaceController {
     return notes
   }
 
+  /** App-update T3.10 (W-14, F-11; CF-23): what the last unlock attempt's open found ({@link OpenFacts}), or, after the
+   *  start, the plaintext workspace's open (dev builds only); null when nothing was decrypted or opened since the last
+   *  call (a wrong password, a refusal before the decrypt, a create). Returns it once, for the update.log unlock line
+   *  the IPC writes after every attempt. */
+  takeOpenFacts(): OpenFacts | null {
+    const facts = this._openFacts
+    this._openFacts = null
+    return facts
+  }
+
   /**
    * AUD-02 — arm the lock latch. The interactive lock path calls this as its FIRST act, before
    * the awaited sidecar/stream/task teardown, so every admission guard reports "locked" for the
@@ -4342,7 +4417,14 @@ export class WorkspaceController {
 
   private openPlaintext(): void {
     this._stampPending = false // T2.2: this open decides whether the exit retries the stamp
-    const db = openDatabase(this.vaultPaths.dbPath, { onStampFailed: this.noteStampFailed })
+    // App-update T3.10 (the sheet's (c)): the same facts as an unlock's open; a newer database's open throws after the
+    // first note, which keeps its user_version.
+    const userVersion = headerUserVersion(this.vaultPaths.dbPath)
+    this.noteOpenFacts({ userVersion })
+    const opened = openDatabaseWithStamp(this.vaultPaths.dbPath, { onStampFailed: this.noteStampFailed })
+    const db = opened.db
+    const { previous } = opened.stamp
+    this.noteOpenFacts({ userVersion, lastWriter: previous === null ? null : parseLastWriter(previous) })
     seedSettings(db)
     updateSettings(db, { workspaceMode: 'plaintext_dev' })
     this._db = db
@@ -4695,6 +4777,7 @@ export class WorkspaceController {
     // between a mid-teardown unlock and a re-opened admission window; only the lock handler
     // (via `cancelLock()`) and a genuine closed → open transition may clear the latch.
     if (this.isUnlocked()) return this.getState()
+    this._openFacts = null // T3.10: an attempt never reports an earlier open's facts
     // #242: a blocked salvage is retried here — the hold may have cleared since init(). Still
     // blocked → refuse: unlockEncryptedVault would decrypt the stale `.enc` over the fresh file.
     // #845: likewise a newer-format verdict: startup skipped the salvage, sweep and rekey recovery
@@ -4719,7 +4802,8 @@ export class WorkspaceController {
         this.noteStageInDoubt,
         this.noteSidecarStages,
         this.noteJournalRefusals,
-        this.noteStampFailed
+        this.noteStampFailed,
+        this.noteOpenFacts
       )
     } catch (err) {
       // #911: a failed unlock can end the state the notice is about (a damaged kept copy shredded; a roll-forward that

@@ -764,6 +764,41 @@ describe('repo hygiene — the app passes its version to the workspace IPC (app-
   })
 })
 
+// App-update T3.10 (W-14, F-11): the unlock line's drive comes through the same hooks object (`updateLog`), optional like
+// `appVersion` (the test contexts leave it out and write no line), so a start that lost it would pass the whole suite
+// and write no unlock line on any Kit: the only durable trace of a refused unlock. It must be the paths the startup line
+// is written to: the one `writeStartupLine(<paths>, …)` call's first argument, by name.
+describe('repo hygiene — the app passes the update log’s drive to the workspace IPC (app-update T3.10)', () => {
+  it('main/index.ts passes the workspace IPC the paths the startup line goes to, as `updateLog`', () => {
+    const file = join(DESKTOP_ROOT, 'src', 'main', 'index.ts')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const calls = new Map<string, ts.CallExpression[]>()
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
+        calls.set(n.expression.text, [...(calls.get(n.expression.text) ?? []), n])
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    const startup = calls.get('writeStartupLine') ?? []
+    expect(startup, 'exactly one writeStartupLine(...) call in main/index.ts').toHaveLength(1)
+    const drive = startup[0]!.arguments[0]
+    expect(drive !== undefined && ts.isIdentifier(drive), 'writeStartupLine is given the start’s paths by name').toBe(true)
+    const hooks = (calls.get('registerWorkspaceIpc') ?? [])[0]?.arguments[1]
+    const updateLog =
+      hooks !== undefined && ts.isObjectLiteralExpression(hooks)
+        ? hooks.properties.find(
+            (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'updateLog'
+          )
+        : undefined
+    const value = updateLog?.initializer
+    expect(
+      value !== undefined && ts.isIdentifier(value) && value.text === (drive as ts.Identifier).text,
+      'the hooks object passed to registerWorkspaceIpc carries `updateLog: <the paths writeStartupLine is given>`'
+    ).toBe(true)
+  })
+})
+
 // App-update W-65 (T2.14 S-2): a skill folder made for a newer version is not one that "could not be read". The Skills
 // tab counts the two apart (`reconcileStatus()`: `errorCount` and `needsNewerAppCount`), and so must the start's log
 // lines, which support reads after a "Go back": a count of unreadable folders that includes the newer ones blames the
