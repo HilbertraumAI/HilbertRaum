@@ -186,6 +186,67 @@ describe('parseKeySet: the one parser of keys.json\u{2019}s key_set (record §2.
   ])('refuses %s: the whole set is invalid', (_label, value, fault) => {
     expect(parseKeySet(value)).toEqual({ valid: false, fault })
   })
+
+  // Weak keys (record §2.7, "A weak key"; the owner, 2026-11-26, after T4.4c): the 32 key bytes read little-endian with
+  // the top bit (the sign bit, 0x80 of the last byte) cleared are the key's y. A y that is not below p = 2^255 - 19, or
+  // one of the five y values of Ed25519's eight small-order points (0, 1, p - 1 and the record's two order-8 numbers),
+  // with either sign bit, makes the whole set invalid. Each encoding is written out here by hand from that rule, not
+  // with the parser's arithmetic: 2^255 - 1 is 31 bytes ff and a last byte 7f, so p is ed (ff - 18), 30 bytes ff, 7f;
+  // p - 1 ec, p + 1 ee, p - 2 eb. The order-8 numbers are the record's bytes as it writes them. An independent decoder
+  // (RFC 8032 §5.1.3, then [8]P, T4.1 fix round 3) found that the ten encodings of the five values reach all eight
+  // small-order points; y = 1 and y = p - 1 with the sign bit set decode to no point, and are weak by the rule all the same.
+  const keyOf = (keyHex: string): string => Buffer.concat([Buffer.from(ED25519_PREFIX, 'hex'), Buffer.from(keyHex, 'hex')]).toString('base64')
+  const FF30 = 'ff'.repeat(30)
+  const ORDER_8_A = '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc'
+  const ORDER_8_B = 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03'
+
+  it.each<[string, string]>([
+    ['y = 0 (the two order-4 points), sign bit clear', '00'.repeat(32)],
+    ['y = 0, sign bit set', `${'00'.repeat(31)}80`],
+    ['y = 1 (the neutral point), sign bit clear', `01${'00'.repeat(31)}`],
+    ['y = 1, sign bit set', `01${'00'.repeat(30)}80`],
+    ['y = p - 1 (the order-2 point), sign bit clear', `ec${FF30}7f`],
+    ['y = p - 1, sign bit set', `ec${FF30}ff`],
+    ['the first order-8 y, sign bit clear', `${ORDER_8_A}05`],
+    ['the first order-8 y, sign bit set', `${ORDER_8_A}85`],
+    ['the second order-8 y, sign bit clear', `${ORDER_8_B}7a`],
+    ['the second order-8 y, sign bit set', `${ORDER_8_B}fa`],
+    ['y = p (no canonical encoding), sign bit clear', `ed${FF30}7f`],
+    ['y = p, sign bit set', `ed${FF30}ff`],
+    ['y = p + 1, sign bit clear', `ee${FF30}7f`],
+    ['y = p + 1, sign bit set', `ee${FF30}ff`],
+    ['y = 2^255 - 1, sign bit clear', `ff${FF30}7f`],
+    ['y = 2^255 - 1, sign bit set', `ff${FF30}ff`]
+  ])('refuses a weak key, %s: the whole set is invalid', (_label, keyHex) => {
+    expect(Buffer.from(keyHex, 'hex').length).toBe(32)
+    expect(parseKeySet(MARKER + keyOf(keyHex))).toEqual({ valid: false, fault: 'weak-key' })
+  })
+
+  it('one weak key (an order-8 one) between two good keys: the whole set is invalid', () => {
+    expect(parseKeySet(`${MARKER}${A.spki},${keyOf(`${ORDER_8_A}05`)},${B.spki}`)).toEqual({ valid: false, fault: 'weak-key' })
+  })
+
+  const idOfDer = (spki: string): string => createHash('sha256').update(Buffer.from(spki, 'base64')).digest('hex')
+
+  it.each<[string, string]>([
+    ['y = p - 2 (the largest y below p that is not weak), sign bit clear', `eb${FF30}7f`],
+    ['y = p - 2, sign bit set', `eb${FF30}ff`]
+  ])('reads a key that is not weak: %s', (_label, keyHex) => {
+    const spki = keyOf(keyHex)
+    const read = parseKeySet(MARKER + spki)
+    expect(read.valid && read.keys.map((k) => k.id)).toEqual([idOfDer(spki)])
+  })
+
+  it('reads every key an Ed25519 key generator makes: 200 keys, each alone in a set, both sign bits among them', () => {
+    const made = Array.from({ length: 200 }, newKey)
+    const signs = new Set(made.map((k) => Buffer.from(k.spki, 'base64')[43] >> 7))
+    expect(signs).toEqual(new Set([0, 1]))
+    const refused = made.filter((k) => {
+      const read = parseKeySet(MARKER + k.spki)
+      return !(read.valid && read.keys.length === 1 && read.keys[0].id === k.id)
+    })
+    expect(refused.map((k) => k.spki)).toEqual([])
+  })
 })
 
 describe('keys.json and keys.ts: the key set this build embeds (record §2.7)', () => {

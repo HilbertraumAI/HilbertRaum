@@ -11,8 +11,8 @@
 // escape, line continuation or other character can carry it on, and a set in a comment has no such quotes). What it
 // does not check: that the files are the whole bundle (the caller lists them), that the build is the one that ships (the
 // caller reads the packed app.asar), that the quoted literal is code rather than text inside a comment or another
-// string (it searches bytes, it does not parse JavaScript), what other code in the bundle does with keys, or that a key
-// is a sound curve point (§2.7, the key proof). The JSON.parse("...") form a bundler can write for a JSON import has
+// string (it searches bytes, it does not parse JavaScript), or what other code in the bundle does with keys. A weak key
+// (§2.7 "A weak key") is refused by `parseKeySet` on either side, so it fails here as an unreadable set. The JSON.parse("...") form a bundler can write for a JSON import has
 // escaped quotes around the value, so it fails here (loudly); this build writes the plain literal.
 //
 // The marker is taken from keys.json's own value, the part up to its first colon, once the one parser (`parseKeySet`,

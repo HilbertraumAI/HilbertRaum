@@ -6,8 +6,9 @@
 // re-encoded or re-serialised), and lets only the embedded key bytes decide: a `keyid` never selects a key. Each check
 // below is a row of §2.3's table, in the table's order; the first one that fails decides.
 //
-// What it does not check: that a key is a sound curve point (the key proof and the review of the keys' pull request
-// do, §2.7); the payload's own fields (§2.4); the update file's container (§4.3).
+// What it does not check: that a key it reads is a point of the curve at all (it refuses weak keys, §2.7 "A weak key",
+// and the key proof, §2.8, shows that the real keys verify); the payload's own fields (§2.4); the update file's
+// container (§4.3).
 //
 // The release tools load this file through Node's own type stripping (with scripts/lib/ts-sibling-imports.mjs), so it
 // imports only `node:crypto` and types, and holds only TypeScript that stripping can erase (no `enum`, no namespace, no
@@ -113,16 +114,48 @@ export interface UpdateKey {
 /**
  * Why a key set does not read (§2.7, "A set that does not read"): no string; another marker, or none; more than 16
  * keys; an entry that is not canonical standard base64; an entry that is not the 12-byte Ed25519 SPKI prefix and 32
- * bytes; an entry `createPublicKey` throws on (no input is known to make it); a repeated entry.
+ * bytes; a weak key (§2.7, "A weak key"); an entry `createPublicKey` throws on (no input is known to make it); a
+ * repeated entry.
  */
-export type KeySetFault = 'not-a-string' | 'marker' | 'too-many' | 'not-base64' | 'not-ed25519-spki' | 'unloadable' | 'repeated'
+export type KeySetFault = 'not-a-string' | 'marker' | 'too-many' | 'not-base64' | 'not-ed25519-spki' | 'weak-key' | 'unloadable' | 'repeated'
+
+/** p = 2^255 - 19, the prime of Ed25519's field (RFC 8032 §5.1). */
+const FIELD_PRIME = (1n << 255n) - 19n
+
+/** The number `bytes` stand for, little-endian (RFC 8032 §5.1.2's encoding). */
+function littleEndian(bytes: Uint8Array): bigint {
+  let n = 0n
+  for (let i = bytes.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(bytes[i])
+  return n
+}
+
+/** The five `y` values of Ed25519's eight small-order points (§2.7, "A weak key"), the record's bytes as it writes them. */
+const SMALL_ORDER_Y: readonly bigint[] = [
+  0n, // the two points of order 4
+  1n, // the neutral point
+  FIELD_PRIME - 1n, // the point of order 2
+  littleEndian(Buffer.from('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', 'hex')), // two points of order 8
+  littleEndian(Buffer.from('c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a', 'hex')) // the other two of order 8
+]
+
+/**
+ * Whether an Ed25519 key's 32 bytes are a weak key (§2.7, "A weak key"): read little-endian with the top bit (the sign
+ * bit) cleared, they are the key's `y`, and the key is weak when `y` is not below p (a non-canonical encoding) or is
+ * one of the five values above, with either sign bit. That covers every small-order and every non-canonical encoding;
+ * a key made by an Ed25519 key generator is never weak. It does not decide whether a `y` is a point of the curve at all.
+ */
+function isWeakKey(keyBytes: Uint8Array): boolean {
+  const y = littleEndian(keyBytes) & ((1n << 255n) - 1n)
+  return y >= FIELD_PRIME || SMALL_ORDER_Y.includes(y)
+}
 
 export type KeySetRead = { readonly valid: true; readonly keys: readonly UpdateKey[] } | { readonly valid: false; readonly fault: KeySetFault }
 
 /**
  * The one parser of keys.json's `key_set` (§2.7): the marker's name, a colon, then zero or more Ed25519 SPKI keys in
- * standard base64 with padding, joined by `,`. Any fault makes the whole set invalid, never a part of it. The part before
- * the first colon is compared with the marker's name, so no source spells the marker with its colon. Never throws.
+ * standard base64 with padding, joined by `,`. Any fault makes the whole set invalid, never a part of it: a weak key
+ * (checked before the key is loaded) too. The part before the first colon is compared with the marker's name, so no
+ * source spells the marker with its colon. Never throws.
  */
 export function parseKeySet(keySet: unknown): KeySetRead {
   if (typeof keySet !== 'string') return { valid: false, fault: 'not-a-string' }
@@ -138,6 +171,7 @@ export function parseKeySet(keySet: unknown): KeySetRead {
     if (der.length !== ED25519_SPKI_BYTES || !der.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)) {
       return { valid: false, fault: 'not-ed25519-spki' }
     }
+    if (isWeakKey(der.subarray(ED25519_SPKI_PREFIX.length))) return { valid: false, fault: 'weak-key' }
     let key: KeyObject
     try {
       key = createPublicKey({ key: der, format: 'der', type: 'spki' })
