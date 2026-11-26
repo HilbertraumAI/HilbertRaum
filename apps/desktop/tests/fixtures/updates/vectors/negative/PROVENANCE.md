@@ -25,6 +25,10 @@ that no vector caught; eleven vectors were added for them and for three cases th
 `ver-running-build-metadata-above-accepted`), the generator was run again (new keys and signatures throughout), and
 the reviewer's checker agreed with all 849.
 
+**Added on 2026-11-26, before release 1: `vectors-edges.json`** (20 vectors; the adversarial review of the trust
+core, T4.4d). The five files above stay byte for byte as committed; the new file has its own section below
+("`vectors-edges.json`"), with its sources, its run and what its writer opened.
+
 ## Sources
 
 | Source | Version | Used for |
@@ -34,6 +38,7 @@ the reviewer's checker agreed with all 849.
 | RFC 8032 §5.1.7 | January 2017 | `env-verify-signature-s-not-below-l` (S is below the group order L) |
 | semver.org 2.0.0 §11 | as `version.ts` cites it | the version rule's order vectors |
 | `src/main/services/updates/version.ts`, `drive-release.ts` (frozen in P3, read, not imported) | commit `930b7d4c` | which strings are versions; how `rootApps` lists a root |
+| `docs/app-updates.md` §2.3, §2.4, §2.5, §2.10, §4.3, §4.5, §10.7; `version.ts` (read, not imported) | commit `5e01fff0` | every `expect` of `vectors-edges.json` |
 
 DSSE's Python reference implementation (`signing_spec.py`) was not opened and is no oracle here (§2.3).
 
@@ -61,7 +66,8 @@ verifier's tasks.
 
 ## The files
 
-849 vectors. An id that ends in `-accepted` has the code `accepted`; every other vector is a refusal.
+869 vectors: 849 in the five files of the first writing, 20 in `vectors-edges.json`. An id that ends in `-accepted`
+has the code `accepted`; every other vector is a refusal.
 
 **A test routes a vector by its form, never by its file or by `expect.stage`** (§10.7 "A vector"):
 
@@ -85,6 +91,7 @@ A test that picked its vectors by `expect.stage` would drop the eleven envelope-
 | `vectors-order.json` | 66 | §4.5's order: pairs of two failing checks with different codes, the earlier one expected; `staleDriveVersion` before and after the version rule; the address set's `runningVersion` (stages `envelope`, `payload` and, for six, `version-rule`) | all with an `envelope` | the pipeline's tests |
 | `vectors-version-rule.json` | 57 | §2.5, the version rule alone (§10.7's second form) | all with `version`, none with an `envelope` | `tests/unit/updates-payload.test.ts`'s version-rule runner (T4.4, 2026-11-26: the T4.2 sheet's Q5 put both runners in that file; _Was:_ `tests/unit/updates-version.test.ts`) |
 | `vectors-caps.json` | 9 | the large boundary vectors: the 4,194,304-byte envelope (as `parts` with `repeat`), 4,096 / 4,097 `files[]` entries, and the largest payload an envelope at the cap can carry (3,145,523 bytes) | all with an `envelope` | the pipeline's tests |
+| `vectors-edges.json` | 20 | the cases the adversarial review found without a vector: a payload's unused base64 bits beyond the lowest one (§2.3), a line feed after a `sha256`, a `version` and an `issued`, a parameter with build metadata as written, a `payloadType` equal to the release type only after Unicode normalisation, and three versions that only the writers' duties forbid (its own section below) | all with an `envelope` | the pipeline's tests |
 | `generate.mjs` | — | how the set was made | — | — |
 
 Each file is a JSON array with one vector per line, plain ASCII (every other character is a `\u` escape). An envelope
@@ -132,6 +139,75 @@ writer's reading of the record, so it proves the vectors are what they claim, no
 The reviewer's checker is the independent half: another model's reading of the same record rows, written before it
 opened this generator or the self-check. It agrees with all 849 vectors, every field of `expect` compared, and its
 eight uncaught mutations are caught by the vectors named above.
+
+## `vectors-edges.json` (added 2026-11-26; the adversarial review, T4.4d)
+
+An adversarial review of the trust core (Fable 5.2, at `aeda35af`) found the verifier sound and named cases that no
+vector held: its M-2, m-5 and m-9. The same writer as the rest of this set (Fable 5.2, task "T4.4b edges") wrote a
+vector for each **from the record at commit `5e01fff0` only**: §2.3 ("The base64 grammar", "`payload`", "A verified
+envelope's type"), §2.4 ("Reading", "`version`", "`issued`", "`files`", "Later writers: `version`"), §2.5 ("Order"),
+§2.10 ("The parameters"), §4.3 ("`files[]` entries", "DSSE `payloadType`"), §4.5 ("Order of an import") and §10.7.
+Every `expect` is stated by hand in `generate.mjs` from those rows; none comes from the code under test. The verifier
+was being changed in the tree at that time (its fix round 4); neither it, its tests nor their working papers were
+opened.
+
+**What the writer opened for this file:** its brief (`impl/p4/T4.4b/edges-brief.md`) and `impl/p4/brief-common.md`;
+the review's disposition table (`impl/p4/T4.4d/review-disposition.md`: one line per finding, with the inputs; not the
+review itself); the record's sections named above and §2.7, §2.8, §2.9, §5.3 ("The 24-byte version cap") at
+`5e01fff0`; `apps/desktop/src/main/services/updates/version.ts` at `5e01fff0` (frozen in P3: which strings are
+versions, and their order); this set's own committed files and the reports of its earlier rounds; `impl/ledger.md`'s
+two lines CF-51 and CF-52; `impl/p4/inputs/SOURCES.md`. Nothing else: not `envelope.ts`, `payload.ts`, `keys.ts`,
+`keys.json`, `member-name.ts`, `bundle-check.ts`, `src/shared/updates/`, any `updates-*.test.ts`,
+`tests/helpers/update-vectors.ts`, the positive set, nor the review's own text and scripts.
+
+| Finding | Vectors | Expect | Record row |
+|---|---|---|---|
+| M-2: a payload whose last base64 character has an unused bit set, other than the lowest one in the standard alphabet | `edge-b64-payload-highest-pad-bit-one-pad` (`AAC=`), `-highest-pad-bit-two-pads` (`AI==`), `-pad-bit-url-safe` (`-_9=`): the group as the whole payload; and each again with `-last-group`: the group after the base64 of a real payload | `UPD-FILE-DAMAGED` (envelope) | §2.3 "The base64 grammar" ("The unused bits of the last character before the padding are zero"), "`payload`" |
+| M-2, the controls | `edge-b64-payload-…-control-zero-bits` (3): the same envelope and signature with `AAA=`, `AA==`, `-_8=` | `UPD-TOO-NEW` (payload): the string is in the grammar, the signature verifies, and the two bytes (or one) are no JSON text or no UTF-8 | §2.3 "The base64 grammar"; §2.4 "Reading" |
+| m-5: a `sha256` with a line feed | `edge-files-sha256-line-feed-after`, `-before` | `UPD-TOO-NEW` | §4.3 "`files[]` entries" ("64 hex characters"); §2.4 "`files`" |
+| m-5: a version with a line feed | `edge-version-line-feed-after-pre-release` (`1.0.1-a` + LF), `-after-build` (`1.0.1+b` + LF) | `UPD-TOO-NEW` | §2.4 "`version`" |
+| m-5: `issued` with a line feed | `edge-issued-line-feed-after-old-accepted`, `-future-accepted` | accepted, `issued` null, no notice | §2.4 "`issued`" ("exactly … 20 ASCII bytes"; "anything else: no date is shown and neither clock check runs") |
+| m-5: a parameter as written | `edge-cap-version-build-metadata-as-written` (`2.0.0+b` over the cap `1.5.0`) | `UPD-ABOVE-MAX-VERSION`, `version` `2.0.0+b`, `maxVersion` `1.5.0` | §2.10 "The parameters" |
+| m-5: a type equal only after normalisation | `edge-type-full-width-plus-known-key` (U+FF0B for `+`) | `UPD-FOR-NEWER-HILBERTRAUM` (envelope) | §2.3 "A verified envelope's type" ("code unit for code unit"); §4.3 "DSSE `payloadType`" |
+| m-9: versions only the writers' duties forbid | `edge-writer-duty-build-metadata-accepted` (`1.0.1+b`), `-pre-release-case-accepted` (`1.0.0-rc1` over a running `1.0.0-RC1`), `-60-digit-major-accepted` (a 60-digit major, 64 bytes) | accepted, the version as written | §2.4 "`version`"; §2.5 "Order" |
+
+**The M-2 vectors.** `AAC=` and `AI==` set only the highest unused bit of their last character (the first writing's
+`env-b64-payload-non-zero-pad-bits-…` vectors set the lowest); `-_9=` sets an unused bit in the URL-safe alphabet. A
+decoder that does not look at those bits reads `00 00`, `00` and `fb ff`. In each vector the embedded key's signature
+is over exactly those bytes (after the real payload's bytes in the `-last-group` vectors), so a reader with a lenient
+decoder verifies the signature and goes on, and only the grammar refuses the file. The generator holds this with its
+own lenient reading and with Node's `Buffer.from(…, 'base64')`, which is lenient too; the self-check holds it again
+with a strict and a lenient decoder of its own. Such a lenient reader would answer `UPD-TOO-NEW` from the payload (the
+bytes are no JSON text), not `accepted`: no last group with a non-zero unused bit can end a JSON text here, since the
+three strings fix the last bytes. Each control shares its vector's key and signature and differs in the one
+character.
+
+**The m-9 vectors pin release 1's reader, and no writer may write these versions.** Release 1 accepts all three for
+ever: its `version` rule is SemVer 2.0.0 of at most 64 bytes. §2.4's "Later writers: `version`" forbids the first two
+(no build metadata; no two releases that differ only in the case of a pre-release identifier). The record names no
+writer bound for the third beyond the 64 bytes (§5.3's "24-byte version cap" only says how `update.log` shows a longer
+version); the release tools are to refuse all three before a release is signed (P5's `check-draft`; the wave's
+ledger, CF-52).
+
+**How the file was made.** `node generate.mjs --out <an empty folder> --only=vectors-edges.json`, Node 24.13.0
+(OpenSSL), Windows 11. That form builds every vector of the set as a full run does (so an id of the new file cannot
+repeat an older one) and writes this file alone; the run made 709 key pairs, of which this file's vectors use 17
+(the other 692 belong to vectors that were built and not written). A full run (`--out` alone) writes all six files,
+the five of the first writing with other keys and signatures than the committed ones. Both forms refuse a folder that
+holds a vectors file, so neither can replace a committed file: **the committed files are the golden**, and of the six
+only `vectors-edges.json` is the output of the `generate.mjs` committed with it; the other five are the output of
+the generator as it stood before this file was added (sha256 `59421ef8…5baf`, in the phase's history), whose
+vector-building code for them is unchanged. Keys as in "Keys and signatures" above: made in memory, the private half
+never written, the generator's last step scanning what it wrote.
+
+**Self-check.** A second script (with the task's working papers, not in the repository), written after the generator
+from the same record rows with its own strict and lenient base64 decoders, its own PAE and its own reading of the
+payload, rebuilt each envelope's bytes, verified the signatures with `node:crypto` and derived each `expect` again:
+20 of 20 agree. It shares this writer's reading of the record. The first writing's reviewer did not see these 20.
+
+**Limits.** No M-2 vector covers a `sig` (the first writing's `env-entry-sig-non-zero-pad-bits…` vectors hold the
+lowest bit there, and a skipped signature entry is never a refusal of its own). The line-feed vectors hold U+000A
+only, at the end (and, for `sha256`, at the start), not other control characters.
 
 ## Limits a reader should know
 

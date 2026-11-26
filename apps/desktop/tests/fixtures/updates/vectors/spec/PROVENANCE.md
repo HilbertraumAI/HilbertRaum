@@ -23,6 +23,19 @@ RFC 8032 §5.1.3 only; the parser was being changed in the tree at that time, an
   values are of the same form. No other vector changed, and none was removed. `pae.json` and `ed25519.json` are byte
   for byte the files of the first writing.
 
+**Changed on 2026-11-26, before release 1 (the adversarial review's M-1).** The review of the trust core (T4.4d) found
+no vector for a non-canonical key strictly inside the range p + 1 to 2^255 - 1, so a parser that refused only the
+values p, p + 1 and 2^255 - 1 would have passed. The record's §10.7 row "`spec/key-set.json`" names the two values
+since commit `5e01fff0`. The same writer (Fable 5.2) added them from the record at `5e01fff0` (§2.7 "A weak key",
+§10.7) only; the parser was being changed in the tree at that time, and neither it nor its tests were opened.
+
+- **Four vectors were added** (83 to 87), each a one-key set that is invalid by "A weak key" (`y` is not below p):
+  `weak-non-canonical-y-p-plus-2` and `-sign-set` (`y` = p + 2: key bytes `ef`, 30 × `ff`, then `7f` or `ff`), and
+  `weak-non-canonical-y-2-255-minus-2` and `-sign-set` (`y` = 2^255 - 2: `fe`, 30 × `ff`, then `7f` or `ff`).
+- `sixteen-keys`, `seventeen-keys` and the three `not-weak-generated-key-…` vectors hold other run-time keys than
+  before (the generator ran again); their expected values are of the same form. No other vector changed, and none was
+  removed. `pae.json` and `ed25519.json` are byte for byte the files of the first writing.
+
 ## Sources
 
 | Source | Version | Used for |
@@ -31,6 +44,7 @@ RFC 8032 §5.1.3 only; the parser was being changed in the tree at that time, an
 | RFC 8032, §7.1 "Test Vectors for Ed25519" | RFC 8032, January 2017, plain text (the copy's sha256 `ed63657f…3c4c3`) | `ed25519.json`, the keys of `key-set.json` |
 | `docs/app-updates.md` §2.7 ("Shape", "The empty set", "A key's id", "A set that does not read", "The file readers"), §2.3 ("The base64 grammar", "JSON"), §10.7 | commit `930b7d4c` | `spki`, `keyId`, every `expect` of `key-set.json` but the weak-key vectors' |
 | `docs/app-updates.md` §2.7 ("A weak key", and "A set that does not read" as it then stands) | commit `63201772` | the `expect` of the `weak-…`, `not-weak-…` and `any-32-bytes-…` vectors |
+| `docs/app-updates.md` §2.7 ("A weak key"), §10.7 ("`spec/key-set.json`": "one value strictly between: `y` = p + 2 and 2^255 − 2, each sign bit") | commit `5e01fff0` | the `expect` of the four `weak-non-canonical-y-p-plus-2…` and `…-y-2-255-minus-2…` vectors |
 | RFC 8032, §5.1.3 "Decoding" and §5.1's curve constants | the same copy | a cross-check of the row's five `y` values (below); no expected value comes from it |
 
 The two copies are working papers of the wave and are not in the repository.
@@ -47,7 +61,7 @@ The two copies are working papers of the wave and are not in the repository.
   8032 §7.1's TEST 1, TEST 2, TEST 3, TEST 1024 and TEST SHA(abc), as printed. The RFC's secret-key lines were never
   copied into any file. `spki` is §2.7's fixed 12 bytes `302a300506032b6570032100` followed by the 32 key bytes, in
   standard base64; `keyId` is the lower-case hex SHA-256 of those 44 bytes.
-- **`key-set.json`** (83 vectors, 22 that read and 61 that do not; read by the key-set parser's unit rows, and in the
+- **`key-set.json`** (87 vectors, 22 that read and 65 that do not; read by the key-set parser's unit rows, and in the
   packaged probe app by T4.4c). The empty set; one, two, three, five and sixteen keys; a whole `keys.json` as
   committed; and one or more invalid vectors per clause of §2.7's "A set that does not read" that an input can reach,
   and of "The file readers". No vector stands for "an entry that `crypto.createPublicKey` throws on": no such input is
@@ -112,6 +126,7 @@ the one its writer declared stops the run.
 |---|---|---|
 | the five small-order `y` values, each with the sign bit clear and set (10) | `any-32-bytes-all-zero` (`y` = 0, sign clear), `weak-small-order-y-0-sign-set`, `weak-small-order-y-1`, `…-y-1-sign-set`, `…-y-p-minus-1`, `…-y-p-minus-1-sign-set`, `…-order-8-a`, `…-order-8-a-sign-set`, `…-order-8-b`, `…-order-8-b-sign-set` | invalid |
 | `y` not below p, at its edges: p, p + 1 and 2^255 - 1, each sign (6) | `weak-non-canonical-y-p`, `…-y-p-sign-set`, `…-y-p-plus-1`, `…-y-p-plus-1-sign-set`, `…-y-2-255-minus-1`, `any-32-bytes-all-ff` (`y` = 2^255 - 1, sign set) | invalid |
+| `y` not below p, strictly inside the range: p + 2 and 2^255 - 2, each sign (4; record commit `5e01fff0`, the review's M-1) | `weak-non-canonical-y-p-plus-2`, `…-y-p-plus-2-sign-set`, `…-y-2-255-minus-2`, `…-y-2-255-minus-2-sign-set` | invalid |
 | a weak key first, in the middle and last of three keys | `weak-key-first-of-three`, `weak-key-among-good-keys`, `weak-key-last-of-three` | invalid as a whole |
 | the values next to each boundary: 2, 3, p - 2, p - 3 (both signs), and each order-8 value with its first or its last byte one off | the nine `not-weak-…` vectors of the table above | reads |
 | three keys from `generateKeyPairSync('ed25519')` | `not-weak-generated-key-1` to `-3` | reads |
@@ -133,7 +148,7 @@ order. Each `why` says which. All nine load with `createPublicKey` on Node 24.13
 
 `node generate.mjs --rfc <rfc8032.txt> --dsse <dsse protocol.md> --out <an empty folder>`, Node 24.13.0, Windows 11.
 `pae.json` and `ed25519.json` come out byte for byte the same on every run (checked: a second run compared with
-`cmp`; and again after the weak-key change, against the committed files). `key-set.json`'s `sixteen-keys` and
+`cmp`; and again after the weak-key change and after the M-1 change, against the committed files). `key-set.json`'s `sixteen-keys` and
 `seventeen-keys` vectors need more keys than the RFC has, and the three `not-weak-generated-key-…` vectors need keys
 from a key generator, so the generator makes fifteen key pairs at run time with `generateKeyPairSync('ed25519')` and
 writes their public halves only; a new run gives other keys there, so **the committed file is the golden** and the
@@ -150,5 +165,6 @@ made a private key for them.
   says: only a weak key is refused, and no library is asked whether a key is a point. Node 24.13.0's OpenSSL loads
   them. Whether Electron's BoringSSL loads them is T4.4c's run; a throw there would make them invalid by §2.7's own
   `createPublicKey` clause. No signature verifies under such a key.
-- The weak-key vectors hold the edges of the non-canonical range (p, p + 1, 2^255 - 1), not all 19 values.
+- The weak-key vectors hold the ends of the non-canonical range (p, p + 1, 2^255 - 1) and two values inside it
+  (p + 2, 2^255 - 2), not all 19 values.
 - A `keys.json` with a duplicate `key_set` key has no vector: §2.7 does not say which one counts.

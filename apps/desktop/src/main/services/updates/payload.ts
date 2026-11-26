@@ -11,11 +11,13 @@
 // `install_as`, `group` and `role` are text it never uses as a path; `summary` is plain text for P6 to show as text;
 // `sha256` is only lower-cased here, P6 compares it with the bytes it hashes.
 //
-// It takes the verified arm of verifyEnvelope's result, so a payload is never read before its signature verified, and
-// every host value as an argument (the running version, the policy's cap, the drive's `app_version` and root apps, the
-// system and its version, glibc, the clock, the UI language): the release tools (P5's check-draft, W-53's reader
-// snapshot) run it on the owner's computer, not on a Kit. They load it through Node's own type stripping with the
-// sibling-import hook, so it imports only its siblings and types, and holds only TypeScript that stripping can erase.
+// Its type asks for the verified arm of verifyEnvelope's result; that the bytes it is handed were verified is the
+// caller's duty, since any code can build that arm (T4.4d m-3; CF-51: P6 adds one row that the code reading an update
+// file hands it only verifyEnvelope's own result, in the same turn as the verification). It takes every host value as
+// an argument (the running version, the policy's cap, the drive's `app_version` and root apps, the system and its
+// version, glibc, the clock, the UI language): the release tools (P5's check-draft, W-53's reader snapshot) run it on
+// the owner's computer, not on a Kit. They load it through Node's own type stripping with the sibling-import hook,
+// so it imports only its siblings and types, and holds only TypeScript that stripping can erase.
 
 import { readJsonObject } from './envelope'
 import type { EnvelopeResult } from './envelope'

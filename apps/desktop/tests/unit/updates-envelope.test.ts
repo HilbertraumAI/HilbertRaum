@@ -192,9 +192,10 @@ describe('parseKeySet: the one parser of keys.json\u{2019}s key_set (record §2.
   // one of the five y values of Ed25519's eight small-order points (0, 1, p - 1 and the record's two order-8 numbers),
   // with either sign bit, makes the whole set invalid. Each encoding is written out here by hand from that rule, not
   // with the parser's arithmetic: 2^255 - 1 is 31 bytes ff and a last byte 7f, so p is ed (ff - 18), 30 bytes ff, 7f;
-  // p - 1 ec, p + 1 ee, p - 2 eb. The order-8 numbers are the record's bytes as it writes them. An independent decoder
-  // (RFC 8032 §5.1.3, then [8]P, T4.1 fix round 3) found that the ten encodings of the five values reach all eight
-  // small-order points; y = 1 and y = p - 1 with the sign bit set decode to no point, and are weak by the rule all the same.
+  // p - 1 ec, p + 1 ee, p + 2 ef, p - 2 eb; 2^255 - 2 is fe, 30 bytes ff, 7f. The order-8 numbers are the record's
+  // bytes as it writes them. An independent decoder (RFC 8032 §5.1.3, then [8]P, T4.1 fix round 3) found that the ten
+  // encodings of the five values reach all eight small-order points; y = 1 and y = p - 1 with the sign bit set decode
+  // to no point, and are weak by the rule all the same.
   const keyOf = (keyHex: string): string => Buffer.concat([Buffer.from(ED25519_PREFIX, 'hex'), Buffer.from(keyHex, 'hex')]).toString('base64')
   const FF30 = 'ff'.repeat(30)
   const ORDER_8_A = '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc'
@@ -215,6 +216,11 @@ describe('parseKeySet: the one parser of keys.json\u{2019}s key_set (record §2.
     ['y = p, sign bit set', `ed${FF30}ff`],
     ['y = p + 1, sign bit clear', `ee${FF30}7f`],
     ['y = p + 1, sign bit set', `ee${FF30}ff`],
+    // Two values strictly between p + 1 and 2^255 - 1 (T4.4d M-1), so "not below p" is never read as a list of encodings.
+    ['y = p + 2, sign bit clear', `ef${FF30}7f`],
+    ['y = p + 2, sign bit set', `ef${FF30}ff`],
+    ['y = 2^255 - 2, sign bit clear', `fe${FF30}7f`],
+    ['y = 2^255 - 2, sign bit set', `fe${FF30}ff`],
     ['y = 2^255 - 1, sign bit clear', `ff${FF30}7f`],
     ['y = 2^255 - 1, sign bit set', `ff${FF30}ff`]
   ])('refuses a weak key, %s: the whole set is invalid', (_label, keyHex) => {
@@ -505,6 +511,15 @@ describe('verifyEnvelope: text, JSON and fields (record §2.3)', () => {
     const raw = Buffer.from([0xff, 0x00, 0xfe, 0x7b])
     expect(run(bytesOf(envelope({ payload: raw })))).toEqual(VERIFIED(raw))
   })
+
+  // T4.4d m-6: node decodes a short base64 text into a slice of its shared buffer pool, beside unrelated small buffers
+  // of the process. The verified payload is the only view of its memory: its buffer starts at it and holds it alone.
+  it('a small verified payload lives in a buffer of its own, not in a slice of a shared one', () => {
+    const r = verifyEnvelope(bytesOf(envelope()), KEYS, RUNNING)
+    expect(r.verified && r.payload.equals(PAYLOAD)).toBe(true)
+    const payload = r.verified ? r.payload : Buffer.alloc(0)
+    expect({ byteOffset: payload.byteOffset, bufferBytes: payload.buffer.byteLength }).toEqual({ byteOffset: 0, bufferBytes: PAYLOAD.length })
+  })
 })
 
 describe('verifyEnvelope: at most 64 signatures, counted after the parse and before any verification (record §2.3)', () => {
@@ -560,7 +575,12 @@ describe('verifyEnvelope: the base64 grammar of payload and sig (record §2.3)',
     ['with = inside', '+w==+w=='],
     ['with a character of neither alphabet', '+/8.'],
     ['with non-zero pad bits, one padding character', '+/9='],
-    ['with non-zero pad bits, two padding characters', '+x==']
+    ['with non-zero pad bits, two padding characters', '+x=='],
+    // T4.4d M-2: the rows above set the lowest unused bit, in the standard alphabet; these set only the highest one
+    // (C = 0b000010 has two unused bits, I = 0b001000 four), and a pad bit in the URL-safe alphabet (9 = 0b111101).
+    ['with only the highest pad bit set, one padding character', 'AAC='],
+    ['with only the highest pad bit set, two padding characters', 'AI=='],
+    ['in the URL-safe alphabet with non-zero pad bits', '-_9=']
   ])('a payload %s is UPD-FILE-DAMAGED', (_label, encoded) => {
     const payload = Buffer.from(encoded, 'base64') // what a lenient decoder reads
     expect(run(bytesOf(envelope({ payload, encoded })))).toEqual(DAMAGED)

@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 // Writes the negative contract vectors of the app-update trust core (docs/app-updates.md section 10.7; F-1, F-2,
-// F-4): vectors-envelope.json, vectors-payload.json, vectors-order.json, vectors-version-rule.json and
-// vectors-caps.json. Plain Node, no dependency, no import from the repository.
+// F-4): vectors-envelope.json, vectors-payload.json, vectors-order.json, vectors-version-rule.json,
+// vectors-caps.json and vectors-edges.json. Plain Node, no dependency, no import from the repository.
 //
 //   node generate.mjs --out <an empty folder>
+//   node generate.mjs --out <an empty folder> --only=vectors-edges.json
+//
+// The second form writes vectors-edges.json alone: that file was added after the other five were committed (the
+// adversarial review's M-2, m-5 and m-9; the record at commit 5e01fff0), and a full run would give the five other
+// keys and signatures. It builds every vector as a full run does (so an id of the new file can never repeat one of
+// the five) and writes the one file; like a full run it refuses a folder that already holds a vectors file, so it
+// can never replace a committed one.
 //
 // Written from the DSSE specification, RFC 8032 and the design record only (PROVENANCE.md), at the record's commit
 // 930b7d4c, before the verifier was committed and without reading it (T4.1 was writing it in the same tree; this
@@ -21,10 +28,15 @@ import { join } from 'node:path'
 
 const outAt = process.argv.indexOf('--out')
 const outDir = outAt < 0 ? null : (process.argv[outAt + 1] ?? null)
-if (!outDir) {
-  console.error('usage: node generate.mjs --out <an empty folder>')
+/** The one file `--only=` may name: the file added after the first five were committed. */
+const ONLY_FILE = 'vectors-edges.json'
+const onlyArgs = process.argv.filter((a) => a === '--only' || a.startsWith('--only='))
+const only = onlyArgs.length === 0 ? null : onlyArgs[0].slice('--only='.length)
+if (!outDir || onlyArgs.length > 1 || (only !== null && only !== ONLY_FILE)) {
+  console.error(`usage: node generate.mjs --out <an empty folder> [--only=${ONLY_FILE}]`)
   process.exit(2)
 }
+// Both forms: never into a folder that holds a vectors file, so no run replaces a committed file.
 if (existsSync(outDir) && readdirSync(outDir).some((n) => /^vectors.*\.json$/.test(n))) {
   console.error('the output folder already holds vectors: they are the golden, write somewhere else')
   process.exit(2)
@@ -1142,12 +1154,125 @@ function pay(part, id, why, payload, expect, host = {}) {
 }
 
 // ================================================================================================================
+// vectors-edges.json: the cases the adversarial review of the trust core found without a vector (its M-2, m-5 and
+// m-9), written from the record at commit 5e01fff0 after the five files above were committed
+// ================================================================================================================
+{
+  const X = 'edges'
+  const S210 = 'app-updates.md section 2.10'
+
+  /**
+   * A lenient base64 reading, as many decoders give it: either alphabet, and the unused bits of the last character
+   * dropped unread. Returns the bytes and those unused bits. The record's grammar (section 2.3) refuses a string
+   * whose unused bits are not zero; this reading says which bytes a decoder without that check would hand on.
+   */
+  function lenient(b64) {
+    let bits = 0
+    let held = 0
+    const out = []
+    for (const c of b64.replace(/=+$/, '')) {
+      const v = c === '-' ? 62 : c === '_' ? 63 : B64.indexOf(c)
+      if (v < 0) throw new Error('no base64 character: ' + c)
+      bits = (bits << 6) | v
+      held += 6
+      if (held >= 8) {
+        held -= 8
+        out.push((bits >> held) & 0xff)
+        bits &= (1 << held) - 1
+      }
+    }
+    return { bytes: Buffer.from(out), unused: bits, unusedCount: held }
+  }
+
+  // ---- M-2: the unused bits of a payload's last character, beyond the lowest one in the standard alphabet
+  const G = `${S23} 'The base64 grammar (payload, sig)' ('The unused bits of the last character before the padding are zero'; RFC 4648 section 3.5) and 'payload' ('in the base64 grammar of the next row, else UPD-FILE-DAMAGED')`
+  const SIGNED = 'the embedded key signed the bytes a lenient decoder reads, so only the grammar refuses the file; the adversarial review, M-2'
+  const padCases = [
+    ['highest-pad-bit-one-pad', 'AAC=', 'AAA=', [0x00, 0x00], 'its last character C (000010) sets only the higher of its two unused bits', '00 00', 'two NUL bytes are UTF-8 and no JSON text'],
+    ['highest-pad-bit-two-pads', 'AI==', 'AA==', [0x00], 'its last character I (001000) sets only the highest of its four unused bits', '00', 'one NUL byte is UTF-8 and no JSON text'],
+    ['pad-bit-url-safe', '-_9=', '-_8=', [0xfb, 0xff], 'in the URL-safe alphabet, its last character 9 (111101) sets the lower of its two unused bits', 'fb ff', 'the bytes fb ff are no UTF-8']
+  ]
+  // A real payload of a multiple of 3 bytes (JSON whitespace fills it), so its base64 ends without padding and a
+  // further group of four characters can follow it.
+  const whole = (() => {
+    const text = JSON.stringify(BASE())
+    return utf8(text + ' '.repeat((3 - (Buffer.byteLength(text) % 3)) % 3))
+  })()
+  if (whole.length % 3 !== 0 || whole.toString('base64').includes('=')) throw new Error('the real payload does not end on a group')
+  for (const [slug, group, control, want, what, hex, controlWhat] of padCases) {
+    const read = lenient(group)
+    const bytes = Buffer.from(want)
+    // The claims each vector makes, held here: the group's unused bits are not zero, a lenient decoder (this file's
+    // own, and Node's) reads the bytes named, and the control differs from the group in those bits only.
+    if (read.unused === 0 || !read.bytes.equals(bytes)) throw new Error(group + ': not the case it is meant to be')
+    if (!Buffer.from(group, 'base64').equals(bytes)) throw new Error(group + ": Node's lenient decoder reads other bytes")
+    const zero = lenient(control)
+    if (zero.unused !== 0 || !zero.bytes.equals(bytes) || zero.unusedCount !== read.unusedCount) throw new Error(control + ': no control for ' + group)
+    if (control.slice(0, -read.unusedCount / 2 - 1) !== group.slice(0, -read.unusedCount / 2 - 1)) throw new Error(control + ': differs from ' + group + ' before the last character')
+
+    // The group as the whole payload.
+    let key = newKey()
+    let sig = key.sign(pae(utf8(RELEASE), bytes)).toString('base64')
+    const env = (payload) => JSON.stringify({ payloadType: RELEASE, payload, signatures: [{ keyid: key.id, sig }] })
+    vec(X, `edge-b64-payload-${slug}`, `${G}: the payload ${group}; ${what}; ${SIGNED} (${hex})`, [key.spki], env(group), DAMAGED())
+    vec(X, `edge-b64-payload-${slug}-control-zero-bits`, `${S23} 'The base64 grammar (payload, sig)' and ${S24} 'Reading' ('A payload that fails it -> UPD-TOO-NEW'): the control of edge-b64-payload-${slug}, the same envelope and signature with the payload ${control}, whose unused bits are zero: it is in the grammar and decodes to the signed bytes (${hex}), the signature verifies, and the answer is the payload's (${controlWhat})`, [key.spki], env(control), TOO_NEW())
+
+    // The group as the last group of a longer payload: a real payload, then the group's bytes.
+    key = newKey()
+    sig = key.sign(pae(utf8(RELEASE), Buffer.concat([whole, bytes]))).toString('base64')
+    const urlSafe = /[-_]/.test(group)
+    const before = urlSafe ? toUrl(whole.toString('base64')) : whole.toString('base64')
+    if (!lenient(before + group).bytes.equals(Buffer.concat([whole, bytes]))) throw new Error(group + ': the longer payload reads as other bytes')
+    vec(X, `edge-b64-payload-${slug}-last-group`, `${G}: ${group} as the last group of a longer payload, after the base64 of a real payload of ${whole.length} bytes${urlSafe ? ' (the whole string in the URL-safe alphabet)' : ''}; ${what}; ${SIGNED} (the real payload, then ${hex})`, [key.spki], env(before + group), DAMAGED())
+  }
+
+  // ---- m-5: a line feed at the end of a value whose grammar a pattern holds; a parameter as written; a type that
+  //      is the release type only after Unicode normalisation
+  const HASH = H('exe')
+  const filesWith = (sha256) => FILES_IN().map((f, i) => (i === 1 ? { ...f, sha256 } : f))
+  const SH = `${S43} 'files[] entries' ('a sha256 of 64 hex characters'; 'Anything else from a known key -> UPD-TOO-NEW') and ${S24} 'files'`
+  pay(X, 'edge-files-sha256-line-feed-after', `${SH}: the second entry's sha256 is 64 hex characters followed by a line feed (U+000A), 65 characters in all; the adversarial review, m-5`, BASE({ files: filesWith(HASH + '\n') }), TOO_NEW())
+  pay(X, 'edge-files-sha256-line-feed-before', `${SH}: the second entry's sha256 is a line feed (U+000A) followed by 64 hex characters, 65 characters in all; the adversarial review, m-5`, BASE({ files: filesWith('\n' + HASH) }), TOO_NEW())
+
+  const VR = `${S24} 'version' ('a string that is SemVer 2.0.0 (section 8.1's grammar, parseSemver) ...; anything else, missing included -> UPD-TOO-NEW')`
+  pay(X, 'edge-version-line-feed-after-pre-release', `${VR}: 1.0.1-a followed by a line feed (U+000A); a pre-release identifier holds only 0-9, A-Z, a-z and the hyphen, so this is no SemVer; the adversarial review, m-5`, BASE({ version: '1.0.1-a\n' }), TOO_NEW())
+  pay(X, 'edge-version-line-feed-after-build', `${VR}: 1.0.1+b followed by a line feed (U+000A); a build identifier holds only 0-9, A-Z, a-z and the hyphen, so this is no SemVer; the adversarial review, m-5`, BASE({ version: '1.0.1+b\n' }), TOO_NEW())
+
+  const IS = `${S24} 'issued' ('exactly YYYY-MM-DDTHH:MM:SSZ (20 ASCII bytes ...)'; 'Absent, or anything else: no date is shown and neither clock check runs')`
+  pay(X, 'edge-issued-line-feed-after-old-accepted', `${IS}: 2000-01-01T00:00:00Z followed by a line feed (U+000A), 21 bytes: no date, so the payload is accepted with issued null and without the confirmation that the date alone would need (section 2.4 'issued old'); the adversarial review, m-5`, BASE({ issued: '2000-01-01T00:00:00Z\n' }), accepted({ issued: null }))
+  pay(X, 'edge-issued-line-feed-after-future-accepted', `${IS}: 2037-01-14T12:00:00Z followed by a line feed (U+000A), 21 bytes: no date, so the payload is accepted with issued null and without the warning that the date alone would give (section 2.4 'issued in the future'); the adversarial review, m-5`, BASE({ issued: '2037-01-14T12:00:00Z\n' }), accepted({ issued: null }))
+
+  pay(X, 'edge-cap-version-build-metadata-as-written', `${S210} ('A version above it -> UPD-ABOVE-MAX-VERSION'; 'The parameters': 'each as the text exactly as the payload, the host or the policy wrote it, never normalised'): version 2.0.0+b is above the cap 1.5.0, and the parameter version is 2.0.0+b with its build metadata; the adversarial review, m-5`, BASE({ version: '2.0.0+b' }), refuse('payload', 'UPD-ABOVE-MAX-VERSION', { version: '2.0.0+b', maxVersion: '1.5.0' }), { maxVersion: '1.5.0' })
+
+  {
+    const WIDE = 'application/vnd.hilbertraum.release\u{ff0b}json'
+    if (WIDE === RELEASE || WIDE.normalize('NFKC') !== RELEASE || WIDE.normalize('NFC') === RELEASE) throw new Error('the type is not the release type under NFKC alone')
+    const s = setup(BASE(), WIDE)
+    vec(X, 'edge-type-full-width-plus-known-key', `${S23} 'A verified envelope's type' ('code unit for code unit'; 'another string that starts with application/vnd.hilbertraum. -> UPD-FOR-NEWER-HILBERTRAUM') and ${S43} 'DSSE payloadType': the release type with U+FF0B (a full-width plus sign) in place of its +, which equals the release type only after Unicode compatibility normalisation (NFKC); a good release payload, signed by the embedded key over the type's UTF-8 bytes; the adversarial review, m-5`, [s.key.spki], envJson(s), refuse('envelope', 'UPD-FOR-NEWER-HILBERTRAUM', RV))
+  }
+
+  // ---- m-9: three versions release 1's reader accepts and no writer may write
+  const PIN = "this vector pins release 1's reader, for ever; the release tools refuse to sign such a version (P5's check-draft; the wave's ledger, CF-52); the adversarial review, m-9"
+  const LW = `${S24} 'Later writers: version'`
+  pay(X, 'edge-writer-duty-build-metadata-accepted', `${S24} 'version' and ${S25} 'Order' (build metadata no part): 1.0.1+b is SemVer of at most 64 bytes and above the running 1.0.0 -> accepted, the version as written. The writers' duty forbids it (${LW}: 'without build metadata', a + cannot stand in a member name): ${PIN}`, BASE({ version: '1.0.1+b' }), accepted({ version: '1.0.1+b' }))
+  pay(X, 'edge-writer-duty-pre-release-case-accepted', `${S24} 'version' and ${S25} 'Order' (SemVer 2.0.0 precedence: alphanumeric pre-release identifiers in ASCII order, so RC1 is below rc1): 1.0.0-rc1 is above the running 1.0.0-RC1 -> accepted, the version as written. The writers' duty forbids the pair (${LW}: 'no two releases differ only in the case of a pre-release identifier', the drive holds both as one folder, section 4.5 'Folder names'): ${PIN}`, BASE({ version: '1.0.0-rc1' }), accepted({ version: '1.0.0-rc1' }), { runningVersion: '1.0.0-RC1' })
+  const MAJOR60 = '123456789012345678901234567890123456789012345678901234567890'
+  const V60 = MAJOR60 + '.0.0'
+  if (MAJOR60.length !== 60 || Buffer.byteLength(V60) !== 64) throw new Error('not a 60-digit major in a version of 64 bytes')
+  pay(X, 'edge-writer-duty-60-digit-major-accepted', `${S24} 'version' ('SemVer 2.0.0 ... of at most 64 bytes') and ${S25} 'Order': a major of 60 digits, then .0.0, is SemVer of exactly 64 bytes and above the running 1.0.0 (the numbers compare exactly at any length) -> accepted, the version as written. No writer writes such a version (${LW} names no bound below 64 bytes; section 5.3 'The 24-byte version cap': update.log shows a version of 25 to 64 bytes as unknown): ${PIN}`, BASE({ version: V60 }), accepted({ version: V60 }))
+}
+
+// ================================================================================================================
 // write, then scan what was written
 // ================================================================================================================
 const written = []
+const isWritten = (part) => only === null || `vectors-${part}.json` === only
+if (only !== null && !parts.has(only.slice('vectors-'.length, -'.json'.length))) throw new Error('no vectors for ' + only)
 for (const [part, vectors] of parts) {
+  if (!isWritten(part)) continue
   const file = join(outDir, `vectors-${part}.json`)
-  writeFileSync(file, '[\n' + vectors.map(asciiJson).join(',\n') + '\n]\n')
+  // `wx`: the write fails if the file exists, whatever the check at the start saw.
+  writeFileSync(file, '[\n' + vectors.map(asciiJson).join(',\n') + '\n]\n', { flag: 'wx' })
   written.push(file)
 }
 // No file may hold a private key in any form. The needles are built from pieces so that this file passes its own scan.
@@ -1168,7 +1293,7 @@ for (const file of [...written, new URL(import.meta.url)]) {
 let count = 0
 for (const [part, vectors] of parts) {
   count += vectors.length
-  console.log(`vectors-${part}.json ${vectors.length}`)
+  console.log(`vectors-${part}.json ${vectors.length}${isWritten(part) ? '' : ' (built, not written)'}`)
 }
 console.log(`${count} vectors, ${seeds.length} key pairs made (none written)`)
 if (bad) process.exit(1)

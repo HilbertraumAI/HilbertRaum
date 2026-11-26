@@ -344,12 +344,19 @@ const keySetVectors = [
   oneKey('weak-small-order-order-8-b', true, ORDER_8_B, false, 'y = the second order-8 value the row prints (c717...037a)'),
   oneKey('weak-small-order-order-8-b-sign-set', true, ORDER_8_B, true, 'y = the second order-8 value the row prints (c717...037a)'),
 
-  // -- a weak key: y not below p (the 19 values p to 2^255 - 1; RFC 8032 section 5.1.3 step 1 refuses them).
+  // -- a weak key: y not below p (the 19 values p to 2^255 - 1; RFC 8032 section 5.1.3 step 1 refuses them):
+  //    the range's ends (p, p + 1 and 2^255 - 1) and two values strictly between (p + 2, 2^255 - 2), each sign bit.
   //    The last vector keeps its id from before the row existed, when it expected a set that reads.
   oneKey('weak-non-canonical-y-p', true, P, false, "y = p ('not below p': the smallest non-canonical value)"),
   oneKey('weak-non-canonical-y-p-sign-set', true, P, true, "y = p ('not below p')"),
   oneKey('weak-non-canonical-y-p-plus-1', true, P + 1n, false, "y = p + 1 ('not below p')"),
   oneKey('weak-non-canonical-y-p-plus-1-sign-set', true, P + 1n, true, "y = p + 1 ('not below p')"),
+  // Two values strictly inside the range, so that 'not below p' is never read as the list p, p + 1, 2^255 - 1
+  // (section 10.7 'spec/key-set.json'; the adversarial review's M-1).
+  oneKey('weak-non-canonical-y-p-plus-2', true, P + 2n, false, "y = p + 2 = 2^255 - 17 ('not below p': a value strictly between p + 1 and 2^255 - 1; it reduces to 2 modulo p, which is none of the five values)"),
+  oneKey('weak-non-canonical-y-p-plus-2-sign-set', true, P + 2n, true, "y = p + 2 = 2^255 - 17 ('not below p': strictly between p + 1 and 2^255 - 1)"),
+  oneKey('weak-non-canonical-y-2-255-minus-2', true, Y_MAX - 1n, false, "y = 2^255 - 2 = p + 17 ('not below p': a value strictly between p + 1 and 2^255 - 1; it reduces to 17 modulo p, which is none of the five values)"),
+  oneKey('weak-non-canonical-y-2-255-minus-2-sign-set', true, Y_MAX - 1n, true, "y = 2^255 - 2 = p + 17 ('not below p': strictly between p + 1 and 2^255 - 1)"),
   oneKey('weak-non-canonical-y-2-255-minus-1', true, Y_MAX, false, "y = 2^255 - 1 = p + 18 ('not below p': the largest value 255 bits hold; it is none of the five values reduced modulo p)"),
   oneKey('any-32-bytes-all-ff', true, Y_MAX, true, "32 bytes ff after the prefix, y = 2^255 - 1 ('not below p')"),
 

@@ -57,7 +57,10 @@ function sextet(c: string): number {
  * The bytes `text` stands for in RFC 4648 base64, or null when it breaks the grammar: one alphabet per string, standard
  * (`+` `/`) or URL-safe (`-` `_`; refused when `standardOnly`), the length a multiple of 4, `=` only as the last one or
  * two characters, no other character (no whitespace, no line break), the unused bits of the last character zero. The
- * empty string is 0 bytes. Checked by hand, because `Buffer.from(…, 'base64')` accepts all of these and more.
+ * empty string is 0 bytes. Checked by hand, because `Buffer.from(…, 'base64')` accepts all of these and more. Once the
+ * grammar holds, that decoder reads the text as it is, in either alphabet (node's `'base64'` takes `-` and `_` as `+`
+ * and `/`), so the text is never rewritten first (T4.4d m-4: rewriting a URL-safe text at the cap cost ~0.6 s and
+ * ~270 MB on Node 24.13).
  */
 function decodeBase64(text: string, standardOnly: boolean): Buffer | null {
   if (text.length % 4 !== 0) return null
@@ -67,7 +70,18 @@ function decodeBase64(text: string, standardOnly: boolean): Buffer | null {
   const urlSafe = /[-_]/.test(body)
   if (urlSafe && (standardOnly || /[+/]/.test(body))) return null
   if (padding > 0 && (sextet(body[body.length - 1]) & (padding === 1 ? 0b11 : 0b1111)) !== 0) return null
-  return Buffer.from(urlSafe ? body.replace(/-/g, '+').replace(/_/g, '/') : body, 'base64')
+  return Buffer.from(body, 'base64')
+}
+
+/**
+ * `bytes` copied into memory of their own. `Buffer.from(…, 'base64')` puts a short result in a slice of node's shared
+ * buffer pool, beside unrelated small buffers of the process (T4.4d m-6); `allocUnsafeSlow` never takes from the pool,
+ * and the copy writes every byte of it.
+ */
+function ownBuffer(bytes: Buffer): Buffer {
+  const own = Buffer.allocUnsafeSlow(bytes.length)
+  bytes.copy(own)
+  return own
 }
 
 // ---- JSON as release 1 reads it (§2.3, rows "Text" and "JSON"; §2.4's payload is read the same way)
@@ -197,7 +211,10 @@ export function pae(payloadType: string, payload: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from(`DSSEv1 ${type.length} `, 'ascii'), type, Buffer.from(` ${payload.length} `, 'ascii'), payload])
 }
 
-/** A verified envelope hands on its payload's bytes as they were signed (no verdict of its own, §2.10); else a refusal. */
+/**
+ * A verified envelope hands on its payload's bytes as they were signed, in a buffer that holds them alone (the very
+ * buffer the signature was checked over), with no verdict of its own (§2.10); else a refusal.
+ */
 export type EnvelopeResult =
   | { readonly verified: true; readonly payload: Buffer }
   | { readonly verified: false; readonly refusal: EnvelopeRefusal }
@@ -234,8 +251,9 @@ export function verifyEnvelope(bytes: Uint8Array, keys: readonly UpdateKey[], ru
   const payloadType = own(envelope, 'payloadType')
   if (typeof payloadType !== 'string' || !payloadType.isWellFormed()) return refuse({ code: 'UPD-FILE-DAMAGED', params: {} })
   const encoded = own(envelope, 'payload')
-  const payload = typeof encoded === 'string' ? decodeBase64(encoded, false) : null
-  if (payload === null) return refuse({ code: 'UPD-FILE-DAMAGED', params: {} })
+  const decoded = typeof encoded === 'string' ? decodeBase64(encoded, false) : null
+  if (decoded === null) return refuse({ code: 'UPD-FILE-DAMAGED', params: {} })
+  const payload = ownBuffer(decoded)
 
   const message = pae(payloadType, payload)
   const ids = new Set(keys.map((k) => k.id))
