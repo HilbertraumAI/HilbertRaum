@@ -7,6 +7,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { readRuntimeMarkerState, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
@@ -246,7 +247,11 @@ function sellableDrive(): string {
   )
   // A real drive keeps its manifests in per-role folders, and a folder is what a manifest walk must skip.
   mkdirSync(join(root, 'model-manifests', 'vision'))
-  writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
+  // The Kit's policy (the updates key) and the two files the Kit builder writes last (T3.3b Q-b, T3.8): the release
+  // record naming the one app's version and the support end in the builder's bytes (the F-13 golden's).
+  writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson({ kit: true }), null, 2))
+  writeDriveFile(root, 'config/drive-release.json', `${JSON.stringify({ format: 1, app_version: APP_VERSION }, null, 2)}\n`)
+  writeDriveFile(root, 'config/kit-support.txt', F13_STAMP)
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
   // The folders a Kit build lays out empty, and the ones the app creates on first use and may leave empty (#893).
@@ -552,6 +557,34 @@ for (const leg of SCRIPT_LEGS) {
         }
         expect(readdirSync(join(root, 'user-skills'))).toEqual([])
       })
+    })
+
+    // W-33 (Δ-37, T1.11 P3-3; T3.8): release 1's Windows start file tells a running app by opening it for writing, so a
+    // read-only root app reads "in flight" at every start and the launch counter never counts. prepare-drive refuses such
+    // a drive before it writes anything, a dry run included, as its other refusals end (exit 1), and names each app.
+    it('prepare-drive refuses a read-only root app before writing anything, a dry run included (W-33, T3.8)', () => {
+      const preparer = `prepare-drive.${leg.ext}`
+      const root = scriptRoot('script-prep-readonly-')
+      const apps = [`HilbertRaum-${APP_VERSION}-portable.exe`, `HilbertRaum-${APP_VERSION}-mac-arm64.app.zip`, `HilbertRaum-${APP_VERSION}.AppImage`]
+      for (const name of apps) {
+        writeFileSync(join(root, name), 'app')
+        chmodSync(join(root, name), 0o444)
+      }
+      try {
+        for (const extra of [[], [f('DryRun')]]) {
+          const r = leg.run(preparer, [f('Target'), root, ...extra])
+          const out = outputOf(r)
+          expect(r.status, out).toBe(1)
+          expect(out).toContain('Refusing to prepare the drive: an app at the drive root is read-only')
+          for (const name of apps) expect(out).toContain(`  - ${name}`)
+          expect(readdirSync(root).sort(), 'nothing written').toEqual([...apps].sort())
+        }
+      } finally {
+        for (const name of apps) chmodSync(join(root, name), 0o666)
+      }
+      const r = leg.run(preparer, [f('Target'), root])
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(existsSync(join(root, 'config', 'policy.json'))).toBe(true)
     })
 
     // App-update W-20, F-13 (T3.3b): prepare-drive writes config/drive-release.json through the helper the Kit builders
@@ -1706,6 +1739,38 @@ for (const leg of SCRIPT_LEGS) {
         expect(readRuntimeMarkerState(dir)).toEqual({ kind: 'marker', marker: record })
         expect(verdictOf(root, 'commercial', { scriptsDir: scripts })).toBe('skip')
       })
+
+      // T3.8 (W-33; T3.12 review 1 M-2): the sell gate fails a file in an engine folder that the marker does not record, by
+      // the walk an install records. A copy this twin installed (a subfolder and macOS metadata in its archive) passes it:
+      // what the twin leaves out of its marker, the gate leaves out too.
+      it('a copy this twin installed has every file of its folder in its marker, by the walk of the sell gate (T3.8)', async () => {
+        const members: Record<string, string> = {
+          ...copy.files,
+          'backends/ggml-vulkan.dll': 'vulkan bytes',
+          '._ggml.dll': 'AppleDouble',
+          '.DS_Store': 'Finder',
+          '__MACOSX/._llama-server.exe': 'AppleDouble'
+        }
+        const archive = makeZip(Object.entries(members).map(([name, bytes]) => ({ name, data: Buffer.from(bytes) })))
+        const source = join(mkdtempSync(join(tmpdir(), 'hilbertraum-walk-src-')), 'llama-walk-bin-win-vulkan-x64.zip')
+        writeFileSync(source, archive)
+        const zipSha = createHash('sha256').update(archive).digest('hex')
+        const root = scratchTarget(zipSha, (y) => y.replace('https://example.invalid/llama-b9585-bin-win-vulkan-x64.zip', pathToFileURL(source).href))
+        const r = leg.run(fetcher, [f('Target'), root, f('Os'), copy.os], { env: downloadEnv(), scriptsDir: isolatedScripts() })
+        expect(r.status, outputOf(r)).toBe(0)
+        const dir = join(root, ...copy.extractTo.split('/'))
+        expect(existsSync(join(dir, 'backends', 'ggml-vulkan.dll')), 'the subfolder was installed').toBe(true)
+        const state = readRuntimeMarkerState(dir)
+        expect(state.kind === 'marker' ? Object.keys(state.marker.binaries ?? {}).sort() : state).toEqual(['backends/ggml-vulkan.dll', 'ggml.dll', 'llama-server.exe'])
+        expect(existsSync(join(dir, '._ggml.dll')), 'the metadata is on the disk, so the gate has it to leave out').toBe(true)
+        // The pin as the gate reads it (the file:// URL the twin fetched from is no URL a pin may hold; the gate reads none).
+        const pin = validateRuntimeSources(parseYaml(runtimeSourcesYaml(zipSha))).sources
+        expect(pin, 'the pin validates').toBeDefined()
+        const res = await assertCommercialDrive(root, [], pin, null, null)
+        expect(res.checks.runtimeCurrent, 'the other pinned builds are not installed: the engine check ran').toBe(false)
+        expect(res.problems.filter((p) => p.startsWith('runtime build win/x64 vulkan:'))).toEqual([])
+        expect(res.checks.runtimeHashed).toBe(true)
+      })
     })
 
     // build-commercial-drive provisions every OS from one host, so it leans on both rules. Each CI leg has
@@ -1788,6 +1853,8 @@ for (const leg of SCRIPT_LEGS) {
         ['telemetry on', (root) => patchPolicy(root, 'network', 'allow_telemetry', true), 'policy: telemetry allowed'],
         ['sha256 match off', (root) => patchPolicy(root, 'models', 'require_sha256_match', false), 'policy: sha256 match not required'],
         ['a workspace database', (root) => writeDriveFile(root, 'workspace/hilbertraum.sqlite.enc', 'db'), 'user data present: workspace/hilbertraum.sqlite.enc'],
+        // T3.8 (W-33): a start on a prepared drive writes updates/update.log, so a Kit that was started before it shipped.
+        ['a started drive', (root) => writeDriveFile(root, 'updates/update.log', 'started'), 'user data present: updates/update.log'],
         ['an imported document', (root) => writeDriveFile(root, 'workspace/documents/a.enc', 'doc'), 'user data present: workspace/documents/*'],
         ['no app skills', (root) => rm(root, 'app-skills'), 'no app skills provisioned'],
         ['a user skill', (root) => writeDriveFile(root, 'user-skills/mine/SKILL.md', 'skill'), 'user skill present on a drive meant to ship empty: user-skills/mine'],
@@ -2063,6 +2130,36 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('no app artifact at the drive root')
         expect(out).toContain('    - canonical gate: not sellable (exit 1')
         expect(out).not.toContain('SELLABLE: canonical gate passed')
+      })
+
+      // T3.3b F4 end to end (T3.8): apps copied by hand after the skip-package flag leave a record without an app version,
+      // and the verify-only check writes nothing, so it refuses the drive and names the way out; after that one command
+      // the same check passes. Neither check touched the record or the support end.
+      it.skipIf(!toolBuilt)('a record without an app version: NOT SELLABLE with the way out, SELLABLE once the record helper ran (T3.8)', () => {
+        const root = sellableDrive()
+        const record = join(root, 'config', 'drive-release.json')
+        const stamp = join(root, 'config', 'kit-support.txt')
+        writeFileSync(record, `${JSON.stringify({ format: 1, systems: [], files: [] }, null, 2)}\n`)
+        writeDriveFile(root, 'config/drive.json', '{}') // the helper writes only on a prepared drive
+        const before = [readFileSync(record), readFileSync(stamp)]
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain(
+          '  - config/drive-release.json records no app version — the apps were copied onto the drive after the record was ' +
+            'written: write it again: node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>, then run ' +
+            'the check again (-VerifyOnly / --verify-only writes nothing)'
+        )
+        expect([readFileSync(record), readFileSync(stamp)], 'the check wrote nothing').toEqual(before)
+        const helper = spawnSync(process.execPath, ['--no-warnings', join(REPO_ROOT, 'scripts', 'lib', 'write-drive-release.mjs'), '--target', root], {
+          encoding: 'utf8'
+        })
+        expect(helper.status, outputOf(helper)).toBe(0)
+        const again = verify(root)
+        const outAgain = outputOf(again)
+        expect(again.status, outAgain).toBe(0)
+        expect(outAgain).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+        expect(readFileSync(stamp), 'the support end as it was').toEqual(before[1])
       })
     })
 

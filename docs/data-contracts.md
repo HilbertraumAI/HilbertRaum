@@ -2296,19 +2296,34 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `registerCoreIpc` → preload `api.runPreflight`; **HomeScreen** shows a non-blocking note.
 ✅ **`services/commercial-drive.ts`** — the sell gate `assertCommercialDrive(rootPath, manifests, runtimeSources?,
   whisperSources?, ocrSources?, opts?: { platforms, appVersion, families? }) → Promise<CommercialAssertion { ok,
-  problems[], checks{ policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData, runtimeCurrent,
-  runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent, userSkillsEmpty,
-  licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent }, modelResults }>`. Never
-  throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
-  directly in `workspace/` or `logs/` (`USER_DATA_DIRS`; a file or a link, never followed, is named `<dir>/<name>`, a
-  non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
+  problems[], checks{ policyCommercial, networkDenied, kitUpdatesKey, weightsVerified, licensesApproved, noUserData,
+  runtimeCurrent, runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent,
+  userSkillsEmpty, licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent,
+  releaseRecordCurrent, supportEndStamped }, modelResults }>` (19 checks; the three T3.8 ones added for app updates).
+  Never throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
+  directly in `workspace/`, `logs/` or `updates/` (`USER_DATA_DIRS`; a file or a link, never followed, is named
+  `<dir>/<name>`, a non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
   `config/working-copy-lost.json*` (`USER_DATA_CONFIG_FILES`, exact or `<name>.*`, any case); one sorted problem per
-  entry, `user data present on a drive meant to ship empty: <path>`. It fails closed: `workspace/`, `logs/`, `config/`
-  or a folder directly in the first two that cannot be listed (no read or enter right), and a file where one of the
-  three folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
+  entry, `user data present on a drive meant to ship empty: <path>` (for `updates/…` followed by ` — this drive was
+  started: delete the updates/ folder …`). It fails closed: `workspace/`, `logs/`, `updates/`, `config/`
+  or a folder directly in the first three that cannot be listed (no read or enter right), and a file where one of the
+  four folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
   folder)`; only a missing path (ENOENT) passes. A link is what Node's `Dirent` calls one (a symlink, a junction; a
   cloud placeholder folder is a folder). The builders' native pre-flight states the same rule (`user data present:
-  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
+  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). **T3.8 (app-update W-33's M1
+  half):** `kitUpdatesKey`: `policy.json` holds an own `updates` object with an own `allow_online_check: true` (read by a
+  private reader, never fed into the network ceiling) and `readUpdatePolicy(...).install` is not `invalid` (`managed`
+  passes); `releaseRecordCurrent`: `readDriveRelease` (F-13) answers `record` with a valid `app_version` equal to
+  `chooseAppVersion(rootApps(root), undefined)`'s single version; `supportEndStamped`: `readKitSupport` answers `month`
+  and the file's bytes equal `formatKitSupport(month)`; `runtimeHashed` (and `optionalRuntimesConsistent` for an
+  optional family) also fails a file in an engine folder that the copy's map does not record, by the walk
+  `installedFileKeys` records (the marker, the top-level `cpu/`, `cpu.new/`, `cpu.old/`, macOS metadata, another
+  build's nested folder and a name the #729 check reported are left out; a folder that cannot be listed fails closed),
+  checked only over a map that hashes every required file; `appArtifactsPresent` judges the root by `rootArtifactOf`
+  and also fails an extracted `*.app` folder (a hidden one included), a name whose version segment is no version, any
+  other root file named `hilbertraum-*` in any case, and a root app with no write bit (`mode & 0o222`, on Windows the
+  read-only attribute). Problem order: posture, the Kit key, weights, reviews, user data, notices, engines, source
+  bundle, OCR, skills, platform matrix, apps, launchers, the record, the support end. The Kit rule (#766): a model SHIPS when it is bundled
   (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
   is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
   `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.
@@ -2333,7 +2348,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   is no builder stamp (exit 1), and echoes the month in words. `-VerifyOnly` and `-DryRun` write neither file. The
   stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`: `absent`, `unreadable`
   (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
-  `tests/fixtures/readers/f13-drive-release/kit-support.json`). PS uses **hashtable** splatting for named params.
+  `tests/fixtures/readers/f13-drive-release/kit-support.json`). Both `prepare-drive` twins (so step 1 too) refuse, before
+  writing anything and in a dry run too, a root app (`HilbertRaum-*-portable.exe`, `-mac-arm64.app.zip`, `.AppImage`,
+  any case) with no write bit (exit 1, one line per app; W-33, T3.8). The final check hands the gate `$NodeTarget`
+  (one trim rule). PS uses **hashtable** splatting for named params.
 ✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
   `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
   env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).

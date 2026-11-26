@@ -17,7 +17,11 @@
        node on PATH) after a native pre-flight -- exits 1 unless the drive is sellable.
        SELLABLE is printed only from the canonical verdict (#233, #234). The gate also
        requires the app artifact + launcher for every platform in -Platforms and a
-       recorded, matching hash for every sidecar binary.
+       recorded, matching hash for every sidecar binary, and (app-update W-33) the Kit's
+       updates key in policy.json, a release record naming the apps' version, the support
+       end in the builder's bytes, every engine file recorded in its marker, the macOS
+       app as its zip and no read-only app; it refuses a drive that was started
+       (anything in updates/).
 
   Between steps 6 and 7 an un-numbered block writes the build's last two files: the Kit's
   support end, config/kit-support.txt (from -SupportEnd, written once per Kit), then the
@@ -76,7 +80,9 @@
 
 .PARAMETER VerifyOnly
   Skip steps 1-6 and the record block and run only the final gate against the drive as it
-  is: nothing is written, and -SupportEnd is not needed (given, it is ignored).
+  is: nothing is written, and -SupportEnd is not needed (given, it is ignored). The gate
+  reads config/drive-release.json and config/kit-support.txt as they are, so after a
+  change to the apps write the record again first (docs/packaging.md).
 
 .PARAMETER DryRun
   Print the plan, download and change nothing -- the final gate still runs and prints
@@ -378,7 +384,8 @@ if (Test-Path -LiteralPath $policyPath) {
 }
 # No user data on a drive meant to ship empty (spec 12.2, #893). Mirrors assertCommercialDrive's
 # rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
-# folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
+# folders is user data (updates/: a start on a prepared drive writes updates/update.log, so a Kit
+# that was started before it shipped; app-update W-33) -- a file or a link by its own name (a link is never followed), a non-empty
 # folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
 # working-copy-lost marker in config/, exact or with a suffix, in any case. Fail closed: a folder
 # that cannot be listed is "user data unreadable: <dir>/", a file where workspace/, logs/ or config/
@@ -387,7 +394,8 @@ if (Test-Path -LiteralPath $policyPath) {
 # cloud placeholder folder) are folders.
 $UserDataDirs = @(
   'workspace',
-  'logs'
+  'logs',
+  'updates'
 )
 $UserDataConfigFiles = @(
   'workspace.json',
@@ -635,12 +643,8 @@ if (-not (Test-Path -LiteralPath $gateTool)) {
 } else {
   Write-Host '  Canonical gate:'
   $global:LASTEXITCODE = 0
-  # Native-arg quoting (PS 5.1): a trailing backslash before the closing quote of a
-  # space-containing path escapes the quote -- hand node the path without it (a bare
-  # drive root like E:\ keeps its backslash).
-  $gateTarget = $Target.TrimEnd('\')
-  if ($gateTarget -match '^[A-Za-z]:$') { $gateTarget += '\' }
-  & $nodeCmd.Source $gateTool --target $gateTarget --platforms ($Platforms -join ',') --app-version $AppVersion
+  # $NodeTarget, as the node helpers get it: PS 5.1's native-arg quoting rule, spelled once at the top.
+  & $nodeCmd.Source $gateTool --target $NodeTarget --platforms ($Platforms -join ',') --app-version $AppVersion
   if ($LASTEXITCODE -ne 0) { $problems += "canonical gate: not sellable (exit $LASTEXITCODE, see above)" }
 }
 if ($problems.Count -gt 0) {

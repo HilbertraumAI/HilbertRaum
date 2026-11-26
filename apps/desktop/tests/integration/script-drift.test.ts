@@ -1186,8 +1186,9 @@ describe('the Kit builders write the support end, then the release record, as th
   })
 
   // PowerShell 5.1's native-argument quoting: a trailing backslash before the closing quote of a space-holding path
-  // escapes the quote, so node is handed the target without it (a bare drive root keeps its own), as the gate is.
-  it('build-commercial-drive.ps1 hands node the target without a trailing backslash, a bare drive root excepted', () => {
+  // escapes the quote, so node is handed the target without it (a bare drive root keeps its own). T3.8: the gate's call
+  // takes the same $NodeTarget, so the trim rule is spelled once.
+  it('build-commercial-drive.ps1 hands node the target without a trailing backslash, a bare drive root excepted, the gate included', () => {
     const lines = trimmed('scripts/build-commercial-drive.ps1')
     const full = lines.indexOf('$Target = [System.IO.Path]::GetFullPath($Target)')
     const trim = lines.indexOf("$NodeTarget = $Target.TrimEnd('\\')")
@@ -1195,6 +1196,9 @@ describe('the Kit builders write the support end, then the release record, as th
     expect(trim).toBeGreaterThan(full)
     expect(lines[trim + 1]).toBe("if ($NodeTarget -match '^[A-Za-z]:$') { $NodeTarget += '\\' }")
     expect(lines.filter((l) => l.startsWith('$NodeTarget ')), 'set once').toHaveLength(1)
+    expect(lines.filter((l) => l.includes(".TrimEnd('\\')")), 'one trim rule').toHaveLength(1)
+    expect(lines.filter((l) => l.includes('$gateTarget')), 'no second spelling').toEqual([])
+    expect(lines.filter((l) => l.includes('$gateTool --target'))).toEqual([expect.stringContaining('$gateTool --target $NodeTarget ')])
   })
 
   it('both builders check the stamp before step 1 and write it right before the record, with the same flags', () => {

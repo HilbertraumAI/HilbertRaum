@@ -215,6 +215,20 @@ Write-Host "Prepare drive at: $Target" -ForegroundColor Cyan
 if ($DryRun) { Write-Host '(dry run -- nothing will be created)' -ForegroundColor Yellow }
 Write-Host ''
 
+# --- A read-only app at the root (app-update W-33; docs/app-updates.md section 11.3) ---
+# Release 1's Windows start file tells a running app by opening it for writing, so a read-only app reads as running at
+# every start: its launch counter never counts, and a broken new version never falls back. Refused before anything is
+# written, a dry run included; the sell gate refuses the same. The apps by the start files' root names, in any case
+# (the Windows start file's own match ignores case).
+$ReadOnlyApps = @(Get-ChildItem -LiteralPath $Target -File -Force -ErrorAction SilentlyContinue |
+  Where-Object { ($_.Name -like 'HilbertRaum-*-portable.exe' -or $_.Name -like 'HilbertRaum-*-mac-arm64.app.zip' -or $_.Name -like 'HilbertRaum-*.AppImage') -and $_.IsReadOnly })
+if ($ReadOnlyApps.Count -gt 0) {
+  Write-Host 'Refusing to prepare the drive: an app at the drive root is read-only:' -ForegroundColor Red
+  foreach ($a in $ReadOnlyApps) { Write-Host "  - $($a.Name)" -ForegroundColor Red }
+  Write-Host '  Clear its read-only attribute (attrib -r "<name>"), then run again.' -ForegroundColor Red
+  exit 1
+}
+
 # --- Directories --------------------------------------------------------------------
 Write-Host 'Directories:'
 foreach ($d in $Dirs) {

@@ -10,22 +10,27 @@ import {
   type RuntimeFamily,
   type RuntimeSources
 } from '../../shared/runtime-sources'
-import { isCommercialPolicy, loadPolicy } from './policy'
+import { isCommercialPolicy, loadPolicy, readUpdatePolicy } from './policy'
 import {
   engineSwapDirs,
   findNeverInstalledFiles,
   markerBinaryKey,
+  NESTED_NET_FOLDERS,
   planOcrDownloads,
   planRuntimeDownload,
   readRuntimeMarkerState,
   recordedFilePath,
   requiredInstallFiles,
+  RUNTIME_MARKER_FILE,
   sidecarFamilySpec,
   type RuntimeDownloadPlan,
   type SidecarFamilySpec
 } from './assets'
+import { isMacMetadataName } from './archive-size'
 import { manifestFiles, sha256File } from './models'
 import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
+import { chooseAppVersion, readDriveRelease, rootApps, rootArtifactOf, type DriveSystem, type RootApp } from './updates/drive-release'
+import { formatKitSupport, KIT_SUPPORT_REL, readKitSupport } from './updates/kit-support'
 
 // The commercial-drive gate: the final posture assertion (spec §12.2).
 //
@@ -40,6 +45,13 @@ import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './d
 // models must verify, NETWORK DENIED — spec §12.2), contain NO user data, and carry the
 // app artifact + launcher for every platform it is sold for. The assertion FAILS LOUDLY
 // if any of that is violated.
+//
+// What a never-updated Kit runs for its whole support period is what this gate lets through, so since the app-update
+// wave (T3.8, W-33's M1 half) it also reads what release 1 reads on every Kit: the Kit's reserved update key in
+// policy.json, the release record `config/drive-release.json` (T3.3a's frozen reader, its `app_version` judged by the
+// root-app classifier the record's writer uses) and the support end `config/kit-support.txt` (the builder's bytes); and
+// it refuses a started Kit (`updates/`), an engine file no marker records, an extracted `.app` and a read-only root app.
+// No problem line holds bytes of a file: only fixed names, a validated version, an errno or fault token, file names.
 
 /**
  * Distribution-level license/attribution artifacts every prepared drive carries at its
@@ -66,11 +78,14 @@ export const DRIVE_LICENSE_ARTIFACTS = [
  * `zim-transient/` on first use and may leave them empty. A rule rather than a list of names:
  * the vault, the logger and the knowledge-pack service write about twenty names, several of them
  * plaintext (the decrypt temp, `.recovery`, the password-change journal, `zim-transient/`,
- * `logs/app.log` in dev mode), and a list missed each new one. `build-commercial-drive.{ps1,sh}`
+ * `logs/app.log` in dev mode), and a list missed each new one. `updates/` (app-update W-33, T3.8):
+ * every start on a prepared drive appends to `updates/update.log` (F-11), so a Kit that was started
+ * before it shipped fails (a test start belongs on a copy); an empty `updates/` passes like the
+ * others (the T3.8 sheet's Q2). `build-commercial-drive.{ps1,sh}`
  * re-state the rule in their native pre-flight; `tests/integration/script-drift.test.ts` pins
  * both scripts' literals to this list and to `USER_DATA_CONFIG_FILES`.
  */
-export const USER_DATA_DIRS = ['workspace', 'logs'] as const
+export const USER_DATA_DIRS = ['workspace', 'logs', 'updates'] as const
 
 /**
  * The `config/` files only a used workspace leaves (#893): the vault descriptor and the
@@ -86,40 +101,35 @@ export const USER_DATA_CONFIG_FILES = ['workspace.json', 'working-copy-lost.json
 export interface KitPlatformSpec {
   /** The double-click launcher for that OS (`launchers/`). */
   launcher: string
-  /** The release artifact name for a given app version. */
+  /** The release artifact name for a given app version: the name the gate's lines expect. */
   artifact: (version: string) => string
-  /** The version segment of a release artifact name of this platform, else null. */
-  artifactVersion: (name: string) => string | null
 }
-
-const versionOf =
-  (re: RegExp) =>
-  (name: string): string | null =>
-    re.exec(name)?.[1] ?? null
 
 /**
  * Per-platform artifact + launcher names — the same names the launchers glob for on the
- * drive root and the release workflow uploads. macOS additionally accepts a lone extracted
- * `*.app` bundle, whose version is read from its Info.plist; beside a zip the launcher
- * refuses to start (#235), and so does this gate.
+ * drive root and the release workflow uploads. Which root entry IS an app, and which version its
+ * name carries, is the root-app classifier's (`rootArtifactOf`, updates/drive-release.ts, T3.8):
+ * `artifact(v)` only spells the expected name, and commercial-drive.test.ts holds the two together.
+ * A Kit carries the macOS app as its zip; an extracted `*.app` folder is refused (T3.8, owner
+ * 2026-11-26: it carries no version, so the record cannot name it).
  */
 export const KIT_PLATFORM_SPECS: Record<KitPlatform, KitPlatformSpec> = {
   'win-x64': {
     launcher: 'Start HilbertRaum.cmd',
-    artifact: (v) => `HilbertRaum-${v}-portable.exe`,
-    artifactVersion: versionOf(/^HilbertRaum-(.+)-portable\.exe$/)
+    artifact: (v) => `HilbertRaum-${v}-portable.exe`
   },
   'mac-arm64': {
     launcher: 'Start HilbertRaum.command',
-    artifact: (v) => `HilbertRaum-${v}-mac-arm64.app.zip`,
-    artifactVersion: versionOf(/^HilbertRaum-(.+)-mac-arm64\.app\.zip$/)
+    artifact: (v) => `HilbertRaum-${v}-mac-arm64.app.zip`
   },
   'linux-x64': {
     launcher: 'start-hilbertraum.sh',
-    artifact: (v) => `HilbertRaum-${v}.AppImage`,
-    artifactVersion: versionOf(/^HilbertRaum-(.+)\.AppImage$/)
+    artifact: (v) => `HilbertRaum-${v}.AppImage`
   }
 }
+
+/** The Kit platform of each system the root-app classifier names (one fixed map). */
+const PLATFORM_OF_SYSTEM: Record<DriveSystem, KitPlatform> = { win32: 'win-x64', darwin: 'mac-arm64', linux: 'linux-x64' }
 
 /** The platform matrix a kit is declared for + the app version being built (#233). */
 export interface CommercialGateOptions {
@@ -137,60 +147,59 @@ export interface CommercialGateOptions {
 
 interface FoundAppArtifact {
   name: string
+  /** The platform the root-app classifier gives the name; null for a name it gives none (refused). */
   platform: KitPlatform | null
+  /** The version the name carries by the classifier; null for none (always null for a folder). */
   version: string | null
   size: number
   isDir: boolean
+  /** No one may write the file (on Windows the read-only attribute). Always false for a folder. */
+  readOnly: boolean
 }
 
-/** `CFBundleShortVersionString` of an extracted bundle, or null when unreadable. */
-function readBundleVersion(appDir: string): string | null {
-  try {
-    const plist = readFileSync(join(appDir, 'Contents', 'Info.plist'), 'utf8')
-    return /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim() ?? null
-  } catch {
-    return null
-  }
-}
-
-/** Every app artifact at the drive root: `HilbertRaum-*` files and `*.app` directories. */
+/**
+ * Every app artifact at the drive root, as the root-app classifier `rootArtifactOf` judges each file (T3.8: one
+ * classifier, the one the release record's writer and release 1's version rule use), plus the gate's own stricter
+ * looks: any root FOLDER ending `.app` (a hidden one included, which the classifier skips as bash's `*` does) counts as
+ * the mac app, and is refused; any other root FILE whose name starts `HilbertRaum-` in any case is kept with no
+ * platform, and refused (#233: none unrecognised; the Windows start file finds its app without case, the T3.8 sheet F5).
+ * A link is neither (never followed).
+ */
 function scanAppArtifacts(rootPath: string): FoundAppArtifact[] {
   const found: FoundAppArtifact[] = []
-  let entries: import('node:fs').Dirent[]
+  let entries: Dirent[]
   try {
     entries = readdirSync(rootPath, { withFileTypes: true })
   } catch {
     return found
   }
   for (const entry of entries) {
-    if (entry.isDirectory() && /\.app$/.test(entry.name)) {
-      found.push({
-        name: entry.name,
-        platform: 'mac-arm64',
-        version: readBundleVersion(join(rootPath, entry.name)),
-        size: 1,
-        isDir: true
-      })
+    if (entry.isDirectory()) {
+      if (entry.name.endsWith('.app')) {
+        found.push({ name: entry.name, platform: 'mac-arm64', version: null, size: 1, isDir: true, readOnly: false })
+      }
       continue
     }
-    if (!entry.isFile() || !entry.name.startsWith('HilbertRaum-')) continue
+    if (!entry.isFile()) continue
+    const artifact = rootArtifactOf(entry.name, 'file')
+    if (artifact === null && !entry.name.toLowerCase().startsWith('hilbertraum-')) continue
     let size = 0
+    let readOnly = false
     try {
-      size = statSync(join(rootPath, entry.name)).size
+      const info = statSync(join(rootPath, entry.name))
+      size = info.size
+      readOnly = (info.mode & 0o222) === 0
     } catch {
       size = 0
     }
-    let platform: KitPlatform | null = null
-    let version: string | null = null
-    for (const p of KIT_PLATFORMS) {
-      const v = KIT_PLATFORM_SPECS[p].artifactVersion(entry.name)
-      if (v !== null) {
-        platform = p
-        version = v
-        break
-      }
-    }
-    found.push({ name: entry.name, platform, version, size, isDir: false })
+    found.push({
+      name: entry.name,
+      platform: artifact === null ? null : PLATFORM_OF_SYSTEM[artifact.system],
+      version: artifact?.version ?? null,
+      size,
+      isDir: false,
+      readOnly
+    })
   }
   return found
 }
@@ -207,6 +216,14 @@ export interface CommercialAssertion {
      *  PERMITTED on a sold drive, so they do not count as a network violation here. */
     networkDenied: boolean
     /**
+     * The Kit's `updates` block (app-update U1 (b), F-8; T3.8): `policy.json` carries `"updates": {"allow_online_check":
+     * true}` as the Kit builders write it (own keys only; a missing or unreadable file fails it), and release 1's install
+     * keys read as valid (`readUpdatePolicy` never answers `invalid`, which would block every import on the Kit for
+     * good; an administrator's deliberate `allow_user_install: false` passes). Release 1 acts on no value of
+     * `allow_online_check`; the network ceiling (`networkDenied`) is untouched by it.
+     */
+    kitUpdatesKey: boolean
+    /**
      * At least one model is bundled, and every model the drive SHIPS is present + SHA-256
      * VERIFIED (no placeholder/mismatch/missing file). A model ships when it is bundled
      * (`bundled_on_preconfigured_drive`) or has any file on the drive (#766). A model with no
@@ -222,10 +239,10 @@ export interface CommercialAssertion {
     licensesApproved: boolean
     /**
      * No user data present (a sold drive ships empty — spec §12.2): nothing but empty folders
-     * directly in `workspace/` and `logs/`, and no `config/workspace.json*` or
+     * directly in `workspace/`, `logs/` and `updates/` (a started Kit, T3.8), and no `config/workspace.json*` or
      * `config/working-copy-lost.json*` (#893; `USER_DATA_DIRS`, `USER_DATA_CONFIG_FILES`).
-     * Fail closed: one of those folders, or a folder in `workspace/` or `logs/`, that cannot be
-     * listed, and a file where one of the three folders belongs, fail it too; only a missing one passes.
+     * Fail closed: one of those folders, or a folder in one of the first three, that cannot be
+     * listed, and a file where one of the four folders belongs, fail it too; only a missing one passes.
      */
     noUserData: boolean
     /**
@@ -240,7 +257,10 @@ export interface CommercialAssertion {
      * bytes still match it (#234). Opt-in like `runtimeCurrent`. A hashless (legacy)
      * marker fails here, not in `runtimeCurrent`. #998: so does any further file the marker
      * records (an install since #998 records every file) that is missing, modified or
-     * outside its folder; a marker that records only the required files passes as before.
+     * outside its folder. T3.8 (T3.12 review 1 M-2): and any file in the folder that the marker does
+     * not record, by exactly the walk an install records (`installedFileKeys`: never the marker, the
+     * `cpu/` net and its swap folders, or macOS metadata), so a marker that records only the required
+     * files passes only over a folder that holds only those.
      */
     runtimeHashed: boolean
     /**
@@ -296,11 +316,24 @@ export interface CommercialAssertion {
     /**
      * Exactly one non-empty app artifact per declared platform, named for `appVersion`,
      * none for an undeclared platform, none unrecognised (#233). One extra artifact —
-     * an older build left beside the new one — fails the drive.
+     * an older build left beside the new one — fails the drive. T3.8: judged by the root-app
+     * classifier; an extracted `.app` folder, a name that carries no version and a read-only app
+     * (W-33: release 1's start file would read it as running at every start) fail it too.
      */
     appArtifactsPresent: boolean
     /** The launcher file of every declared platform is present + non-empty at the root. */
     launchersPresent: boolean
+    /**
+     * T3.8 (W-33's M1 half, W-20): `config/drive-release.json` reads as a record (the frozen F-13 reader) whose valid
+     * `app_version` is the one version the root's apps carry by the classifier (`chooseAppVersion`'s "single").
+     * Checked whether or not a platform matrix was declared.
+     */
+    releaseRecordCurrent: boolean
+    /**
+     * T3.8 (W-17, G-13): `config/kit-support.txt` reads as a month (`readKitSupport`, F-13) and its bytes are the
+     * builder's (`formatKitSupport`: the month and one line feed). Its range is the ship-time check's (P11c).
+     */
+    supportEndStamped: boolean
   }
   /** The per-weight verification detail of every model the Kit ships (for surfacing which failed). */
   modelResults: ModelVerifyResult[]
@@ -418,6 +451,195 @@ function unreadableMarkerLine(label: string, extractTo: string, code: string | n
   )
 }
 
+/** The errno code of a failure (`EPERM`, …), validated as one: never the message, which names a path. */
+function errnoToken(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : null
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/** The largest policy.json the Kit-key reader takes into memory (the update policy reader's cap). */
+const POLICY_MAX_BYTES = 1_048_576
+
+/**
+ * Whether `<configDir>/policy.json` carries the Kit's reserved update key exactly as the Kit builders write it (U1 (b),
+ * T3.8): an own `updates` object holding an own `allow_online_check` that is `true`. Never throws: a missing, unreadable
+ * or damaged file carries no key. Read here, not through policy.ts: release 1 reads no value of the key, and no reader
+ * of policy.ts may ever feed it into the network ceiling. One leading byte-order mark is read past, as both of
+ * policy.ts's readers do.
+ */
+function hasKitUpdatesKey(configDir: string): boolean {
+  let doc: unknown
+  try {
+    const path = join(configDir, 'policy.json')
+    const info = statSync(path)
+    if (!info.isFile() || info.size > POLICY_MAX_BYTES) return false
+    const text = readFileSync(path, 'utf8')
+    doc = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+  } catch {
+    return false
+  }
+  if (!isPlainObject(doc) || !Object.hasOwn(doc, 'updates')) return false
+  const updates = doc.updates
+  return isPlainObject(updates) && Object.hasOwn(updates, 'allow_online_check') && updates.allow_online_check === true
+}
+
+/** Whether an own `updates` block of `<configDir>/policy.json` is an object (a non-object one is the Kit-key line's). */
+function updatesBlockIsObject(configDir: string): boolean {
+  try {
+    const text = readFileSync(join(configDir, 'policy.json'), 'utf8')
+    const doc: unknown = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+    return isPlainObject(doc) && Object.hasOwn(doc, 'updates') && isPlainObject(doc.updates)
+  } catch {
+    return false
+  }
+}
+
+/** Whether `path`, a link, resolves to a regular file (`runtime-download.ts` recordedKind: an install records only such a link). */
+function linkResolvesToFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * T3.8 (W-33; T3.12 review 1 M-2, Δ-61): the files in the engine copy at `dir` that its marker's map does not record,
+ * `markerBinaryKey` form, sorted by code unit, by exactly the walk an install records (`installedFileKeys` in
+ * runtime-download.ts and the two fetch-runtime twins), so a copy any of the three installers wrote passes, whatever
+ * its archive held: regular files and links that resolve to a file, at any depth; never the marker or, at the top, the
+ * `cpu/` net and its swap folders (`NESTED_NET_FOLDERS`: copies with their own markers, which report for themselves),
+ * never macOS metadata (`isMacMetadataName`). Also skipped: another build's own folder nested here (`otherCopies`), and
+ * a name the #729 check already reported (`reported`). Names are compared byte for byte with the map's keys. Fails
+ * closed: a folder that cannot be listed is returned in `unlistable` (with its errno token), never read as empty.
+ */
+function unrecordedEngineFiles(
+  dir: string,
+  recorded: Readonly<Record<string, string>>,
+  otherCopies: readonly string[],
+  reported: readonly string[]
+): { unrecorded: string[]; unlistable: Array<{ rel: string; code: string | null }> } {
+  const unrecorded: string[] = []
+  const unlistable: Array<{ rel: string; code: string | null }> = []
+  const skip = new Set(otherCopies.map((d) => resolve(d)))
+  const walk = (current: string, rel: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch (err) {
+      unlistable.push({ rel, code: errnoToken(err) })
+      return
+    }
+    for (const entry of entries) {
+      if (!rel && (entry.name === RUNTIME_MARKER_FILE || NESTED_NET_FOLDERS.includes(entry.name))) continue
+      const key = rel ? `${rel}/${entry.name}` : entry.name
+      if (isMacMetadataName(key)) continue
+      const full = join(current, entry.name)
+      if (entry.isDirectory()) {
+        if (!skip.has(resolve(full))) walk(full, key)
+        continue
+      }
+      const isFile = entry.isFile() || (entry.isSymbolicLink() && linkResolvesToFile(full))
+      if (isFile && !Object.hasOwn(recorded, key) && !reported.includes(key)) unrecorded.push(key)
+    }
+  }
+  walk(dir, '')
+  return { unrecorded: unrecorded.sort(), unlistable }
+}
+
+/** How the gate's lines name the record helper: the builder's own call, the target spelled as the operator's drive root. */
+const WRITE_RECORD = 'node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>'
+
+/** What the gate adds to a user-data line for an entry in `updates/` (T3.8): the drive was started, and the way out. */
+const STARTED_DRIVE = ' — this drive was started: delete the updates/ folder (a test start belongs on a copy, never on the Kit)'
+
+/**
+ * T3.8 (W-33's M1 half, W-20): the problem with the drive's release record, or null when it is current. The record is
+ * read by the frozen F-13 reader; "the version the root's apps carry" is the helper's own rule, `chooseAppVersion`
+ * called with no existing value, so only "single" can answer. The record is not compared with `--app-version` here: an
+ * artifact of another version already has its own line, and then this one names the mismatch with the apps.
+ */
+function releaseRecordProblem(rootPath: string): string | null {
+  const read = readDriveRelease(rootPath)
+  if (read.kind === 'absent') {
+    return `config/drive-release.json is missing — write it: ${WRITE_RECORD}, then run the check again (-VerifyOnly / --verify-only writes nothing)`
+  }
+  if (read.kind === 'unreadable') {
+    return `config/drive-release.json could not be read (${read.code ?? 'read failed'}) — check the drive, then run the gate again`
+  }
+  if (read.kind === 'damaged') {
+    // The helper refuses to write over something that is no regular file (a folder or a link), so that one goes first.
+    const first = read.fault === 'not-a-file' ? 'delete what is at that name, then ' : ''
+    return `config/drive-release.json is damaged (${read.fault}) — ${first}write it again: ${WRITE_RECORD}`
+  }
+  if (read.appVersion.state !== 'valid') {
+    return (
+      'config/drive-release.json records no app version — the apps were copied onto the drive after the record was ' +
+      `written: write it again: ${WRITE_RECORD}, then run the check again (-VerifyOnly / --verify-only writes nothing)`
+    )
+  }
+  const recorded = read.appVersion.value
+  let apps: RootApp[] = []
+  try {
+    apps = rootApps(rootPath)
+  } catch {
+    apps = [] // a root that cannot be listed carries no version; the artifact check says why
+  }
+  const carried = chooseAppVersion(apps, undefined)
+  if (carried.value === null) {
+    return (
+      `config/drive-release.json records app version ${recorded}, but the apps on the drive carry no single version — ` +
+      `fix the apps (see above), then write the record again: ${WRITE_RECORD}`
+    )
+  }
+  if (carried.value !== recorded) {
+    return `config/drive-release.json records app version ${recorded}, the apps on the drive carry ${carried.value} — write the record again: ${WRITE_RECORD}`
+  }
+  return null
+}
+
+/**
+ * T3.8 (W-17, G-13): the problem with the Kit's support end, or null when it is stamped: read by the frozen F-13 reader,
+ * then the file's bytes compared with the builder's (`formatKitSupport`), as the builder's own helper compares them, so
+ * only its 8 bytes pass (a hand edit's CR LF or byte-order mark reads for the app, never for a sale). No range check: a
+ * month too close to dispatch is the ship-time check's (P11c, CF-37). Only the Kit builder writes the stamp, so every
+ * way out runs it.
+ */
+function supportEndProblem(rootPath: string): string | null {
+  const read = readKitSupport(rootPath)
+  if (read.kind === 'absent') {
+    return (
+      "config/kit-support.txt is missing — stamp the Kit's support end: run build-commercial-drive with -SupportEnd / " +
+      '--support-end <YYYY-MM> (it writes the stamp once per Kit)'
+    )
+  }
+  if (read.kind === 'unreadable') {
+    return `config/kit-support.txt could not be read (${read.code ?? 'read failed'}) — check the drive, then run the gate again`
+  }
+  if (read.kind === 'damaged') {
+    return (
+      `config/kit-support.txt is not a support end the app can read (${read.fault}) — look at it by hand; to stamp the ` +
+      'Kit again, delete the file on purpose and run build-commercial-drive with -SupportEnd / --support-end'
+    )
+  }
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(join(rootPath, ...KIT_SUPPORT_REL.split('/')))
+  } catch (err) {
+    return `config/kit-support.txt could not be read (${errnoToken(err) ?? 'read failed'}) — check the drive, then run the gate again`
+  }
+  if (!bytes.equals(Buffer.from(formatKitSupport(read.month), 'latin1'))) {
+    return (
+      "config/kit-support.txt holds a month, but not in the builder's bytes (YYYY-MM and one line feed) — delete the " +
+      'file on purpose and stamp it again with build-commercial-drive -SupportEnd / --support-end'
+    )
+  }
+  return null
+}
+
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
@@ -469,6 +691,29 @@ export async function assertCommercialDrive(
     problems.push('policy.json allows telemetry (must always be off)')
   }
 
+  // --- The Kit's updates block (T3.8: U1 (b), T3.1 review R1-1; owner 2026-11-26, the T3.8 sheet Q4) ---
+  // Every Kit carries `updates.allow_online_check: true` (the Kit builders write it; release 1 reads no value of it), so a
+  // drive prepared without the Kit switch, or hand-edited, is no Kit. And install keys release 1 reads as junk would
+  // block every import on the Kit for good: refused at sale, while a deliberate `false` (managed) passes. A non-object
+  // `updates` block is one cause, so only the first line names it.
+  const configDir = join(rootPath, 'config')
+  let kitUpdatesKey = true
+  if (!hasKitUpdatesKey(configDir)) {
+    kitUpdatesKey = false
+    problems.push(
+      'policy.json does not carry the Kit\'s update key ("updates": { "allow_online_check": true }) — build the drive with ' +
+        'build-commercial-drive (its first step writes the Kit policy), never with prepare-drive alone'
+    )
+  }
+  if (readUpdatePolicy(configDir).install === 'invalid' && updatesBlockIsObject(configDir)) {
+    kitUpdatesKey = false
+    problems.push(
+      "policy.json's updates block holds an install key release 1 cannot read (updates.allow_user_install must be true or " +
+        'false, updates.max_version a version) — it would refuse every update on this Kit: fix the block, or build the ' +
+        'drive again with build-commercial-drive (its first step writes the Kit policy)'
+    )
+  }
+
   // --- What the Kit ships (#766, owner call 2026-11-02) ---
   // A Kit preloads its BUNDLED set and lists every other manifest for in-app download. A model
   // ships when it is bundled or has ANY file on the drive: a half-installed or unverifiable
@@ -513,7 +758,7 @@ export async function assertCommercialDrive(
   const userData = userDataArtifacts(rootPath)
   const noUserData = userData.present.length === 0 && userData.unreadable.length === 0
   for (const path of userData.present) {
-    problems.push(`user data present on a drive meant to ship empty: ${path}`)
+    problems.push(`user data present on a drive meant to ship empty: ${path}${path.startsWith('updates/') ? STARTED_DRIVE : ''}`)
   }
   for (const path of userData.unreadable) {
     problems.push(`user data unreadable on a drive meant to ship empty: ${path}`)
@@ -718,9 +963,9 @@ export async function assertCommercialDrive(
       }
       // #998: every further file the copy's own marker records (installs since #998 record every file the
       // archive put there: the DLLs and the backends loaded at run time) must still be there, inside the
-      // install folder, with the bytes recorded. A marker that records only the required files passes as
-      // before: what is recorded is verified, a full list is never required. A key under another build's own
-      // folder (the `cpu/` net under `<os>/`) is that build's to report.
+      // install folder, with the bytes recorded. What is recorded is verified here; T3.8's walk below fails a
+      // file the map leaves out. A key under another build's own folder (the `cpu/` net under `<os>/`) is that
+      // build's to report.
       const requiredKeys = new Set(required.map((p) => markerBinaryKey(plan.extractTo, p)))
       const nested = otherExtractDirs(plan.extractTo).map((d) => resolve(d))
       for (const [key, expected] of Object.entries(marker.binaries ?? {})) {
@@ -744,6 +989,32 @@ export async function assertCommercialDrive(
             'hashed',
             `${label}: ${key} does not match the SHA-256 recorded in the install marker — the file or the ` +
               'marker was modified after install; re-run fetch-runtime --commercial'
+          )
+        }
+      }
+      // T3.8 (W-33; T3.12 review 1 M-2, Δ-61): and every file in the folder is in the map (`unrecordedEngineFiles`: the
+      // walk an install records), so a library copied in by hand, or left from a killed download, never ships unseen by
+      // the pre-spawn check. Only over a map that hashes every required file: a map without one has its own line above,
+      // never also a list of the folder. fetch-runtime --commercial skips a copy whose map hashes the required files
+      // (the T3.8 sheet F1), so the way out is deleting, never a re-run.
+      if (required.every((p) => marker.binaries?.[markerBinaryKey(plan.extractTo, p)])) {
+        const walk = unrecordedEngineFiles(plan.extractTo, marker.binaries ?? {}, otherExtractDirs(plan.extractTo), stray)
+        for (const folder of walk.unlistable) {
+          fail(
+            'hashed',
+            `${label}: ${build.extractTo}/${folder.rel ? `${folder.rel}/` : ''} could not be listed (${folder.code ?? 'read failed'}) — ` +
+              'check the drive, then run the gate again'
+          )
+        }
+        const names = walk.unrecorded
+        if (names.length > 0) {
+          const counted = names.length === 1 ? `1 file under ${build.extractTo} is` : `${names.length} files under ${build.extractTo} are`
+          const listed = names.slice(0, 5).join(', ') + (names.length > 5 ? `, and ${names.length - 5} more` : '')
+          fail(
+            'hashed',
+            `${label}: ${counted} not recorded in the install marker: ${listed} — delete what does not belong to the ` +
+              `engine; for an engine installed by an older fetch-runtime, delete ${build.extractTo} and run ` +
+              'build-commercial-drive again (fetch-runtime skips an engine it finds installed)'
           )
         }
       }
@@ -911,18 +1182,38 @@ export async function assertCommercialDrive(
     const version = opts!.appVersion.trim()
     const found = scanAppArtifacts(rootPath)
     for (const a of found) {
+      if (a.isDir) {
+        // T3.8 (owner 2026-11-26, the T3.8 sheet Q1; reverses #233's earlier acceptance, which predates the record): a
+        // Kit carries the macOS app as its zip (exFAT cannot hold the bundle's links; the start file unpacks it). A
+        // folder carries no version, so the record cannot name it and the signed payload cannot verify it.
+        appArtifactsPresent = false
+        problems.push(
+          `app artifact "${a.name}" is an extracted app folder — a Kit carries ${KIT_PLATFORM_SPECS['mac-arm64'].artifact(version)} ` +
+            `(the start file unpacks it): replace the folder by the zip, then write the record again: ${WRITE_RECORD}`
+        )
+      }
       if (a.platform === null) {
         appArtifactsPresent = false
         problems.push(
           `app artifact "${a.name}" is not a release artifact of any platform (expected ` +
-            `${KIT_PLATFORMS.map((p) => KIT_PLATFORM_SPECS[p].artifact('<version>')).join(', ')} ` +
-            'or an extracted HilbertRaum.app)'
+            `${KIT_PLATFORMS.map((p) => KIT_PLATFORM_SPECS[p].artifact('<version>')).join(', ')})`
         )
       } else if (!declared.includes(a.platform)) {
         appArtifactsPresent = false
         problems.push(
           `app artifact "${a.name}" is for ${a.platform}, a platform this kit is not declared for ` +
             `(declared: ${declared.join(', ')}) — remove it or declare the platform`
+        )
+      }
+      if (a.platform !== null && a.readOnly) {
+        // W-33 (Δ-37, T1.11 P3-3): release 1's Windows start file tells a running app by opening it for writing
+        // (docs/app-updates.md §5.6), so a read-only app reads "in flight" at every start: the launch counter never
+        // counts and a broken new version never falls back. prepare-drive refuses the same.
+        appArtifactsPresent = false
+        problems.push(
+          `app artifact "${a.name}" is read-only — clear the read-only attribute (attrib -r on Windows, chmod u+w on ` +
+            "macOS or Linux): with it set, release 1's start file reads the app as running at every start, and its " +
+            'launch counter never counts'
         )
       }
     }
@@ -938,15 +1229,16 @@ export async function assertCommercialDrive(
           `${p}: more than one app artifact at the drive root (${mine.map((a) => a.name).join(', ')}) — ` +
             'a drive must carry exactly one; delete the others'
         )
-      } else {
+      } else if (!mine[0].isDir) {
+        // A folder has its own line above.
         const a = mine[0]
-        if (!a.isDir && a.size === 0) {
+        if (a.size === 0) {
           appArtifactsPresent = false
           problems.push(`${p}: app artifact "${a.name}" is zero bytes`)
         }
         if (a.version === null) {
           appArtifactsPresent = false
-          problems.push(`${p}: cannot read the version of "${a.name}" (Contents/Info.plist CFBundleShortVersionString)`)
+          problems.push(`${p}: app artifact "${a.name}" carries no version in its name (expected ${spec.artifact(version)})`)
         } else if (a.version !== version) {
           appArtifactsPresent = false
           problems.push(`${p}: app artifact "${a.name}" is version ${a.version}, the kit is being built as ${version}`)
@@ -966,12 +1258,20 @@ export async function assertCommercialDrive(
     }
   }
 
+  // --- The release record and the support end (T3.8: W-33's M1 half, W-20, W-17) ---
+  // After the apps, which the record's lines refer to, and whether or not a platform matrix was declared.
+  const recordProblem = releaseRecordProblem(rootPath)
+  if (recordProblem !== null) problems.push(recordProblem)
+  const stampProblem = supportEndProblem(rootPath)
+  if (stampProblem !== null) problems.push(stampProblem)
+
   return {
     ok: problems.length === 0,
     problems,
     checks: {
       policyCommercial,
       networkDenied,
+      kitUpdatesKey,
       weightsVerified,
       licensesApproved,
       noUserData,
@@ -985,7 +1285,9 @@ export async function assertCommercialDrive(
       licenseArtifactsPresent,
       platformMatrixDeclared,
       appArtifactsPresent,
-      launchersPresent
+      launchersPresent,
+      releaseRecordCurrent: recordProblem === null,
+      supportEndStamped: stampProblem === null
     },
     modelResults
   }

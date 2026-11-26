@@ -135,12 +135,17 @@ HILBERTRAUM/
 │                                                #   zim-transient/ are fine (#893)
 ├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
 │                                                #   drive, by the same sell-gate rule (#893)
+├── updates/                                    # update.log (written at every start on a prepared drive, app-updates.md
+│                                                #   §8.2) — none on a sold drive: the sell gate refuses any entry in it
+│                                                #   (a Kit that was started; app-update W-33, T3.8); an empty one passes
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}  # + drive-release.json (the record of the apps, start
                                                 #   files and engines, the build's last write; on a DIY
                                                 #   drive when node was on PATH), kit-support.txt on a Kit
                                                 #   only (its support end, YYYY-MM, written once; the sell
-                                                #   gate reads both), workspace.json once a workspace exists, and
+                                                #   gate requires both: the record naming the version the
+                                                #   root's apps carry, the stamp in the builder's 8 bytes,
+                                                #   T3.8), workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
                                                 #   saved state (#875) or a start shredded the session an
                                                 #   unclean end left (#892); a workspace created here removes a
@@ -171,8 +176,11 @@ HILBERTRAUM/
 > criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
 > plaintext off, models must verify, no phone-home — model downloads are a permitted user action, but
-> update-checks + telemetry are denied) and contains **no user data** — built + asserted
-> by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
+> update-checks + telemetry are denied) with the Kit's `updates.allow_online_check: true`, and contains
+> **no user data** and no `updates/` entry (it was never started) — built + asserted
+> by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). Its root
+> carries the macOS app as its zip, never an extracted `.app`, and no app there is read-only (release
+> 1's Windows start file would read a read-only app as running at every start). See
 > [`packaging.md`](packaging.md).
 
 > **Portability is a whole-stack property, not just the launcher (issue #188).** The launcher

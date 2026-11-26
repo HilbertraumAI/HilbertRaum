@@ -13,7 +13,11 @@
 #      node on PATH) after a native pre-flight -- exits 1 unless the drive is sellable.
 #      SELLABLE is printed only from the canonical verdict (#233, #234). The gate also
 #      requires the app artifact + launcher for every platform in --platforms and a
-#      recorded, matching hash for every sidecar binary.
+#      recorded, matching hash for every sidecar binary, and (app-update W-33) the Kit's
+#      updates key in policy.json, a release record naming the apps' version, the support
+#      end in the builder's bytes, every engine file recorded in its marker, the macOS
+#      app as its zip and no read-only app; it refuses a drive that was started
+#      (anything in updates/).
 #
 # Between steps 6 and 7 an un-numbered block writes the build's last two files: the Kit's support end,
 # config/kit-support.txt (from --support-end, written once per Kit), then the drive's release record,
@@ -49,7 +53,9 @@
 #                   still written: after copying the apps by hand, write the record again
 #                   (docs/packaging.md) before the --verify-only check
 #   --verify-only skip steps 1-6 and the record block, run only the final gate against the drive as
-#                 it is: nothing is written, and --support-end is not needed (given, it is ignored)
+#                 it is: nothing is written, and --support-end is not needed (given, it is ignored).
+#                 The gate reads config/drive-release.json and config/kit-support.txt as they are,
+#                 so after a change to the apps write the record again first (docs/packaging.md)
 #   --dry-run     download and change nothing; the final gate still runs and prints its verdict
 set -euo pipefail
 
@@ -351,7 +357,8 @@ else
 fi
 # No user data on a drive meant to ship empty (spec 12.2, #893). Mirrors assertCommercialDrive's
 # rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
-# folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
+# folders is user data (updates/: a start on a prepared drive writes updates/update.log, so a Kit
+# that was started before it shipped; app-update W-33) -- a file or a link by its own name (a link is never followed), a non-empty
 # folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
 # working-copy-lost marker in config/, exact or with a suffix, in any ASCII case (the TS gate's Unicode toLowerCase() also folds rare
 # characters such as the Kelvin sign; a recorded non-goal). Fail closed: a folder
@@ -362,6 +369,7 @@ fi
 USER_DATA_DIRS=(
   workspace
   logs
+  updates
 )
 USER_DATA_CONFIG_FILES=(
   workspace.json

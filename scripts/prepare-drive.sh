@@ -144,6 +144,29 @@ echo "Prepare drive at: $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be created)"
 echo
 
+# A read-only app at the root (app-update W-33; docs/app-updates.md §11.3). Release 1's Windows start file tells a running
+# app by opening it for writing, so a read-only app reads as running at every start: its launch counter never counts, and
+# a broken new version never falls back. Refused before anything is written, a dry run included; the sell gate refuses
+# the same. The apps by the start files' root names, in any case (the Windows start file's own match ignores case).
+# "Read-only" is the mode, no write bit for anyone (what the read-only attribute reads as on Windows, Git Bash
+# included), never this user's own right, which root always has. POSIX find: -perm -<bits> is "all of these set".
+READ_ONLY_APPS=()
+ro_glob_restore="$(shopt -p nullglob nocaseglob || true)"
+shopt -s nullglob nocaseglob
+for ro_app in "$TARGET"/HilbertRaum-*-portable.exe "$TARGET"/HilbertRaum-*-mac-arm64.app.zip "$TARGET"/HilbertRaum-*.AppImage; do
+  [[ -f "$ro_app" && ! -L "$ro_app" ]] || continue
+  if [[ -z "$(find "$ro_app" -prune \( -perm -200 -o -perm -020 -o -perm -002 \) -print)" ]]; then
+    READ_ONLY_APPS+=("${ro_app##*/}")
+  fi
+done
+eval "$ro_glob_restore"
+if [[ ${#READ_ONLY_APPS[@]} -gt 0 ]]; then
+  echo "Refusing to prepare the drive: an app at the drive root is read-only:" >&2
+  for ro_name in "${READ_ONLY_APPS[@]}"; do echo "  - $ro_name" >&2; done
+  echo "  Clear its read-only attribute (chmod u+w \"<name>\"), then run again." >&2
+  exit 1
+fi
+
 echo "Directories:"
 for d in "${DIRS[@]}"; do
   full="$TARGET/$d"
