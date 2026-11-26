@@ -610,6 +610,18 @@ describe('checkPayload: files[] (record §2.4, §4.3, §4.4)', () => {
     expect(run({ files: [entry({ size: raw('-0') })] })).toBe('accepted')
   })
 
+  // T4.5's review, m-6: a reader in another language gives 0 for the text -0, and so does staged.txt (CF-50); the
+  // accepted payload and §5.9's reading carry +0, never -0 (the record's §4.3: "-0 is 0").
+  it('size -0 is carried as 0 by the import and by readPayloadFiles alike', () => {
+    const text = payloadText({ files: [entry({ size: raw('-0') })] })
+    expect(text).toContain('"size":-0,')
+    expect(Object.is(JSON.parse('-0'), -0), 'JSON.parse gives -0 for the text -0').toBe(true)
+    const env = verified(text)
+    const sign = (size: number | undefined): string => (Object.is(size, 0) ? '+0' : Object.is(size, -0) ? '-0' : String(size))
+    const carried = { checkPayload: sign(accepted(checkPayload(env, WIN)).files[0]!.size), readPayloadFiles: sign(readPayloadFiles(env)?.[0]?.size) }
+    expect(carried).toEqual({ checkPayload: '+0', readPayloadFiles: '+0' })
+  })
+
   it.each<[string, unknown]>([
     ['-1', -1],
     ['8,589,934,592', 8_589_934_592],

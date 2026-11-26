@@ -180,7 +180,8 @@ function readFiles(payload: Record<string, unknown>): AcceptedFile[] | null {
       group = value
     }
     const installAs = own(entry, 'install_as')
-    out.push({ name, size, sha256: sha256.toLowerCase(), group, installAs: typeof installAs === 'string' ? installAs : null })
+    // -0 (JSON.parse's value for the text `-0`) passed the size check and is carried as 0: `-0 === 0` (T4.5's review, m-6).
+    out.push({ name, size: size === 0 ? 0 : size, sha256: sha256.toLowerCase(), group, installAs: typeof installAs === 'string' ? installAs : null })
   }
   // Uniqueness is member-name.ts's rule (table A.3), imported, never copied (CF-45).
   return hasFoldedDuplicate(out.map((file) => file.name)) ? null : out
