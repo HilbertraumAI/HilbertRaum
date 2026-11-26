@@ -14,7 +14,8 @@
 # is absent when the probe first reads free, and the probe reads free at most -MaxProbeFreeMs (1500) ms after
 # WM_CLOSE. The rename's time is recorded beside it, for comparison only. The verdict line names the rule and
 # marks a limit other than 1500.
-# Exit code: 0 pass, 1 a run failed the pass rule, 2 the app did not start, 3 the host profile changed,
+# Exit code: 0 pass, 1 a run failed the pass rule, 2 the app did not start (no app process within 240 s, or no app
+# window within 300 s: nothing of that run is measured), 3 the host profile changed,
 # 5 a bad parameter, or a drive root that already holds an exe of -Exe's name with other content.
 #
 # Usage (Windows PowerShell 5.1 or pwsh, from any folder; nothing else of HilbertRaum may be running):
@@ -112,7 +113,17 @@ for ($i = 1; $i -le $Runs; $i++) {
     if ([T11]::Exited($hApp)) { break }
     [Threading.Thread]::Sleep($IntervalMs)
   }
-  $r.window_ms = if ($hwnd -ne [IntPtr]::Zero) { [math]::Round($sw.Elapsed.TotalMilliseconds, 1) } else { $null }
+  # No window: the app ended before its first one (its image path is then unreadable), or it stays alive behind
+  # something that is no app window (main's own error box). Either way the app did not start: one line, the stub and
+  # the app stopped if they still run (both this script's: it started the stub, the stub the app), nothing measured.
+  if ($hwnd -eq [IntPtr]::Zero) {
+    $appWas = if ([T11]::Exited($hApp)) { "the app exited, code $([T11]::ExitCode($hApp))" } else { Stop-Process -Id $appPid -Force -ErrorAction SilentlyContinue; 'the app still ran: stopped' }
+    $stubWas = if ([T11]::Exited($hStub)) { "the stub exited, code $([T11]::ExitCode($hStub))" } else { Stop-Process -Id $stub.Id -Force -ErrorAction SilentlyContinue; 'the stub still ran: stopped' }
+    Write-Log $log "run $i : no $AppImageName window within 300 s ($appWas; $stubWas)"
+    foreach ($h in @($hStub, $hApp)) { [void][T11]::CloseHandle($h) }
+    exit 2
+  }
+  $r.window_ms = [math]::Round($sw.Elapsed.TotalMilliseconds, 1)
   $appExe = [T11]::ImagePath($appPid)
   $unpack = Split-Path -Parent $appExe
   $nsNew = @(Get-TempNsDirs | Where-Object { $nsBefore -notcontains $_ })

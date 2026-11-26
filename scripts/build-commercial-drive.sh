@@ -182,14 +182,20 @@ else
     echo "build-commercial-drive needs node 22.18 or later on PATH: it writes config/kit-support.txt and config/drive-release.json" >&2
     exit 1
   fi
+  # The lines node_helper shows are kept, then shown, so the check below can tell whether there was one (node_helper is
+  # prepare-drive.sh's, byte for byte, so it counts nothing itself).
   check_exit=0
-  node_helper kit-support.txt "$KIT_SUPPORT_HELPER" --target "$TARGET" --support-end "$SUPPORT_END" --check || check_exit=$?
+  check_shown="$(node_helper kit-support.txt "$KIT_SUPPORT_HELPER" --target "$TARGET" --support-end "$SUPPORT_END" --check)" || check_exit=$?
+  if [[ -n "$check_shown" ]]; then printf '%s\n' "$check_shown"; fi
   if [[ $check_exit -eq 2 ]]; then exit 2; fi
   # Only the helper's own lines are shown, so a node that ended without one (a helper file missing from the checkout,
   # whose "Cannot find module" line names a path) would leave no word at all: name the helper and its exit, as the
-  # record block below does (T3.6 B-1).
+  # record block below does (T3.6 B-1). A refusal of the helper's own (another month already on this drive, a stamp
+  # not in the builder's bytes, an old Node) has said why in its line, which then stands alone (P3 exit L-1).
   if [[ $check_exit -ne 0 ]]; then
-    echo "  write-kit-support.mjs failed (exit $check_exit) before step 1: run it by hand with --check to see why" >&2
+    if [[ -z "$check_shown" ]]; then
+      echo "  write-kit-support.mjs failed (exit $check_exit) before step 1: run it by hand with --check to see why" >&2
+    fi
     exit 1
   fi
 fi

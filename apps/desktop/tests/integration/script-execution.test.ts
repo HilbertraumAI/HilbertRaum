@@ -79,6 +79,15 @@ function pathWithoutNode(): string {
   return dirs.join(delimiter)
 }
 
+/** A PATH whose first folder holds a stub node that writes `lines` to stderr and exits `code`, then this PATH without node:
+ *  a node.cmd for the .ps1 leg, a sh script for the .sh leg. No line holds a character cmd or sh reads specially. */
+function stubNodePath(ext: 'ps1' | 'sh', lines: string[], code: number): string {
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
+  if (ext === 'ps1') writeFileSync(join(dir, 'node.cmd'), ['@echo off', ...lines.map((l) => `>&2 echo ${l}`), `exit /b ${code}`, ''].join('\r\n'))
+  else writeFileSync(join(dir, 'node'), ['#!/bin/sh', ...lines.map((l) => `echo "${l}" >&2`), `exit ${code}`, ''].join('\n'), { mode: 0o755 })
+  return `${dir}${delimiter}${pathWithoutNode()}`
+}
+
 /** A runtime-sources.yaml whose sha256 fields are all `sha`; URLs on a reserved TLD. */
 function runtimeSourcesYaml(sha: string): string {
   return [
@@ -642,14 +651,10 @@ for (const leg of SCRIPT_LEGS) {
       // A stub node that prints a line naming a path, then a line of the helper's own, and fails: the run shows the
       // helper's line only, notes the failure, and still exits 0.
       it("a node that fails is a note, never the exit code, and only the helper's own lines are shown", () => {
-        const stubDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
-        if (leg.ext === 'ps1') {
-          writeFileSync(join(stubDir, 'node.cmd'), '@echo off\r\n>&2 echo at C:\\someone\\checkout\\x.mjs:1\r\n>&2 echo drive-release.json: stub refusal; nothing written\r\nexit /b 1\r\n')
-        } else {
-          writeFileSync(join(stubDir, 'node'), '#!/bin/sh\necho "at /home/someone/checkout/x.mjs:1" >&2\necho "drive-release.json: stub refusal; nothing written" >&2\nexit 1\n', { mode: 0o755 })
-        }
+        const pathLine = leg.ext === 'ps1' ? 'at C:\\someone\\checkout\\x.mjs:1' : 'at /home/someone/checkout/x.mjs:1'
+        const stubPath = stubNodePath(leg.ext, [pathLine, 'drive-release.json: stub refusal; nothing written'], 1)
         const root = scriptRoot('script-record-stub-')
-        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: `${stubDir}${delimiter}${pathWithoutNode()}` } })
+        const r = leg.run(preparer, [f('Target'), root], { env: { PATH: stubPath } })
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(existsSync(join(root, 'config', 'policy.json')), 'the layout went on').toBe(true)
@@ -657,6 +662,24 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('note: config/drive-release.json not written (exit 1); the drive works without it')
         expect(out).not.toContain('someone')
         expect(existsSync(record(root))).toBe(false)
+      })
+
+      // P3 exit L-2: the record is optional, so its helper's failure must not reach a caller in any form. `powershell -File`
+      // exits 0 after a normal end, whatever ran last (the row above), but a caller in the same session reads
+      // $LASTEXITCODE, which still held the failed node's exit when the script ended without an exit code of its own. Bash
+      // has no such channel: the .sh twin's status is its last command's, an echo (the row above, on the .sh leg).
+      it.runIf(leg.ext === 'ps1')('a caller in the same PowerShell session reads $LASTEXITCODE 0 after a record helper that failed (P3 exit L-2)', () => {
+        const callerDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-caller-'))
+        writeFileSync(join(callerDir, 'caller.ps1'), ['param([string]$Script, [string]$Target)', '& $Script -Target $Target', '"caller: LASTEXITCODE=$LASTEXITCODE"', ''].join('\r\n'))
+        const root = scriptRoot('script-record-session-')
+        const r = leg.run('caller.ps1', [join(REPO_ROOT, 'scripts', preparer), root], {
+          scriptsDir: callerDir,
+          env: { PATH: stubNodePath(leg.ext, ['drive-release.json: stub refusal; nothing written'], 1) }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out, 'the record helper failed').toContain('note: config/drive-release.json not written (exit 1); the drive works without it')
+        expect(r.stdout).toContain('caller: LASTEXITCODE=0')
       })
 
       it('with the Kit flag it leaves the record to the builder, which writes it as its last step', () => {
@@ -770,20 +793,36 @@ for (const leg of SCRIPT_LEGS) {
       // path) left the run at its two header lines and exit 1. A stub node stands in for it; a dry run, so nothing runs
       // after the check even if it went on.
       it('a stamp check that fails before step 1 without a line of its own is named in one fixed line, exit 1 (T3.6 B-1)', () => {
-        const stubDir = mkdtempSync(join(tmpdir(), 'hilbertraum-script-stub-node-'))
-        if (leg.ext === 'ps1') {
-          writeFileSync(join(stubDir, 'node.cmd'), '@echo off\r\n>&2 echo Error: Cannot find module C:\\someone\\checkout\\scripts\\lib\\ts-sibling-imports.mjs\r\nexit /b 1\r\n')
-        } else {
-          writeFileSync(join(stubDir, 'node'), '#!/bin/sh\necho "Error: Cannot find module /home/someone/checkout/scripts/lib/ts-sibling-imports.mjs" >&2\nexit 1\n', { mode: 0o755 })
-        }
+        const missing = leg.ext === 'ps1'
+          ? 'Error: Cannot find module C:\\someone\\checkout\\scripts\\lib\\ts-sibling-imports.mjs'
+          : 'Error: Cannot find module /home/someone/checkout/scripts/lib/ts-sibling-imports.mjs'
         const root = scriptRoot('script-check-dies-')
         const r = leg.run(builder, [f('Target'), root, f('DryRun'), f('SupportEnd'), SUPPORT_END], {
-          env: { PATH: `${stubDir}${delimiter}${pathWithoutNode()}` }
+          env: { PATH: stubNodePath(leg.ext, [missing], 1) }
         })
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('  write-kit-support.mjs failed (exit 1) before step 1: run it by hand with --check to see why')
         expect(out).not.toContain('someone')
+        expect(out).not.toMatch(/^\[1\] /m)
+        expect(readdirSync(root), 'nothing written').toEqual([])
+      })
+
+      // P3 exit L-1: that fixed line is for a check that ended without a word. A refusal of the helper's own (another month
+      // already on the drive, a stamp not in the builder's bytes, an old Node) has said why in its line; the fixed line after
+      // it called a deliberate refusal a broken toolchain and sent the owner to a hand run that only repeats it.
+      it('a stamp check that refuses with a line of its own shows that line alone, once, exit 1 (P3 exit L-1)', () => {
+        const refusal =
+          `kit-support.txt: this drive's support end is already 2099-11; refusing to change it to ${SUPPORT_END}. It is written once per Kit. ` +
+          'To re-stamp unsold stock, delete config/kit-support.txt on purpose and run again; nothing written'
+        const root = scriptRoot('script-check-refuses-')
+        const r = leg.run(builder, [f('Target'), root, f('DryRun'), f('SupportEnd'), SUPPORT_END], {
+          env: { PATH: stubNodePath(leg.ext, [refusal], 1) }
+        })
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out.split(`  ${refusal}`), 'the helper\'s line, once').toHaveLength(2)
+        expect(out).not.toContain('write-kit-support.mjs failed')
         expect(out).not.toMatch(/^\[1\] /m)
         expect(readdirSync(root), 'nothing written').toEqual([])
       })

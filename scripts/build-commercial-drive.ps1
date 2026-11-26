@@ -182,17 +182,19 @@ function Run([string]$script, [hashtable]$params) {
   if ($LASTEXITCODE -ne 0) { Write-Host "$script failed (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 }
 # Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
-# of its own, each starting with $prefix; returns its exit code. stderr is merged so those lines can be picked out; in
+# of its own, each starting with $prefix; returns its exit code, and leaves how many lines it showed in
+# $script:NodeHelperShown (the stamp check below reads it). stderr is merged so those lines can be picked out; in
 # PowerShell 5.1 a merged stderr line is an error record, which 'Stop' turns into a terminating error, so the call runs
 # under 'Continue', in this function's scope only. prepare-drive.ps1 holds the same function (script-drift.test.ts).
 function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {
   $ErrorActionPreference = 'Continue'
   $global:LASTEXITCODE = 0
+  $script:NodeHelperShown = 0
   $lines = @(& $node --no-warnings @helperArgs 2>&1)
   $code = $LASTEXITCODE
   foreach ($line in $lines) {
     $text = "$line"
-    if ($text.StartsWith($prefix)) { Write-Host "  $text" }
+    if ($text.StartsWith($prefix)) { Write-Host "  $text"; $script:NodeHelperShown++ }
   }
   return $code
 }
@@ -220,9 +222,12 @@ if ($VerifyOnly) {
   if ($checkExit -eq 2) { exit 2 }
   # Only the helper's own lines are shown, so a node that ended without one (a helper file missing from the checkout,
   # whose "Cannot find module" line names a path) would leave no word at all: name the helper and its exit, as the
-  # record block below does (T3.6 B-1).
+  # record block below does (T3.6 B-1). A refusal of the helper's own (another month already on this drive, a stamp
+  # not in the builder's bytes, an old Node) has said why in its line, which then stands alone (P3 exit L-1).
   if ($checkExit -ne 0) {
-    Write-Host "  write-kit-support.mjs failed (exit $checkExit) before step 1: run it by hand with --check to see why" -ForegroundColor Red
+    if ($script:NodeHelperShown -eq 0) {
+      Write-Host "  write-kit-support.mjs failed (exit $checkExit) before step 1: run it by hand with --check to see why" -ForegroundColor Red
+    }
     exit 1
   }
 }

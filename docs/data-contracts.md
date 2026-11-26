@@ -2551,9 +2551,10 @@ otherwise `month`. It checks the form only: whether the month is past is the sup
   value (exit 2); an `-AppArtifact` that is not there and a differently named prior app at the root (exit 1); a
   missing node (exit 1); then the helper's `--check`, which checks the month itself: one that is no `YYYY-MM` or is
   before this computer's current UTC month exits 2, and a `config/kit-support.txt` that holds another month or is no
-  builder stamp exits 1; it echoes the month in words. On any exit of that check other than 0 and 2 the builder adds
-  one fixed line, `write-kit-support.mjs failed (exit N) before step 1: …`, and exits 1 (T3.6 B-1: a helper that dies
-  without a line of its own, such as Node's "Cannot find module", is no silent exit 1). `-VerifyOnly` and `-DryRun`
+  builder stamp exits 1; it echoes the month in words. When that check exits other than 0 and 2 having shown no line
+  of its own, the builder adds one fixed line, `write-kit-support.mjs failed (exit N) before step 1: …`, and exits 1
+  (T3.6 B-1: a helper that dies without a line of its own, such as Node's "Cannot find module", is no silent exit 1);
+  a refusal with its own line stands alone (P3 exit L-1). `-VerifyOnly` and `-DryRun`
   write neither file. The stamp's reader and format are `src/main/services/updates/kit-support.ts` (`readKitSupport`:
   `absent`, `unreadable` (errno token), `damaged` (`not-a-file`, `empty`, `too-large`, `not-a-month`) or `month`; F-13, golden
   `tests/fixtures/readers/f13-drive-release/kit-support.json`). Both `prepare-drive` twins (so step 1 too) refuse, before

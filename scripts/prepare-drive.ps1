@@ -154,17 +154,19 @@ function Join-DrivePath([string]$rel) {
 }
 
 # Runs a node helper of scripts/lib (node --no-warnings: Node's own warnings name local paths) and shows only the lines
-# of its own, each starting with $prefix; returns its exit code. stderr is merged so those lines can be picked out; in
+# of its own, each starting with $prefix; returns its exit code, and leaves how many lines it showed in
+# $script:NodeHelperShown (only the builder's stamp check reads it). stderr is merged so those lines can be picked out; in
 # PowerShell 5.1 a merged stderr line is an error record, which 'Stop' turns into a terminating error, so the call runs
 # under 'Continue', in this function's scope only. build-commercial-drive.ps1 holds the same function (script-drift.test.ts).
 function Invoke-NodeHelper([string]$node, [string]$prefix, [string[]]$helperArgs) {
   $ErrorActionPreference = 'Continue'
   $global:LASTEXITCODE = 0
+  $script:NodeHelperShown = 0
   $lines = @(& $node --no-warnings @helperArgs 2>&1)
   $code = $LASTEXITCODE
   foreach ($line in $lines) {
     $text = "$line"
-    if ($text.StartsWith($prefix)) { Write-Host "  $text" }
+    if ($text.StartsWith($prefix)) { Write-Host "  $text"; $script:NodeHelperShown++ }
   }
   return $code
 }
@@ -450,3 +452,7 @@ if ($Kit) {
 Write-Host ''
 Write-Host 'Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan
 Write-Host "  `$env:HILBERTRAUM_DRIVE_ROOT = '$Target'"
+# The success path ends with an exit code of its own, as fetch-models, fetch-runtime and verify-models do: without it a
+# caller in the same PowerShell session read $LASTEXITCODE as the last native call left it, a record helper's failure
+# included, which is a note above and never this script's exit code (P3 exit L-2). The .sh twin ends with its echo.
+exit 0
