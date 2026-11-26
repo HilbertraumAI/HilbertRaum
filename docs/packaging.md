@@ -779,20 +779,21 @@ record what the drive was built with   # un-numbered, the build's last writes (W
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
              commercial posture (encrypted, no phone-home — downloads OK, allow_update_checks false, no telemetry)
              + the Kit's reserved updates key ("updates": {"allow_online_check": true}, never read by
-               this version) and no junk install key (T3.8)
+               this version), no junk install key, and no max_version below the Kit's version (T3.8)
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234),
                every further file a marker records is there with its bytes (#998), and
                every file in an engine folder is in its marker (T3.8)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233):
                the macOS app as its zip (never an extracted .app), its version in its name, not read-only (T3.8)
-             + no user data: nothing but empty folders in workspace/, logs/ and updates/
-               (a started Kit, T3.8), no config/workspace.json or config/working-copy-lost.json (exact, or
+             + no user data: nothing but empty folders in workspace/ and logs/, nothing at all
+               in updates/ (a started Kit, T3.8), no config/workspace.json or config/working-copy-lost.json (exact, or
                with a .<suffix>, any case), and every
                one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
-             + config/drive-release.json naming the version the root's apps carry (T3.8)
+             + config/drive-release.json naming the version the root's apps carry, and no
+               highest_version_seen (T3.8)
              + config/kit-support.txt in the builder's bytes (T3.8)
 ```
 
@@ -844,10 +845,11 @@ sell gate's record check, and its line names this way out (T3.8).
 
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
 `.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
-find two) — and when an `--app-artifact` path does not exist. `prepare-drive` (step 1) also refuses,
-before it writes anything, a root app that is read-only (exit 1): release 1's Windows start file
-would read it as running at every start, so its launch counter never counts (app-update W-33). Both refusals come before step 1, so no
-download runs first (#769: the missing artifact used to surface at step 4). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
+find two) — and when an `--app-artifact` path does not exist. Both of these refusals come before step 1,
+so no download runs first (#769: the missing artifact used to surface at step 4). `prepare-drive`
+(step 1) itself refuses, before it writes anything, a root app that is read-only (exit 1): release 1's
+Windows start file would read it as running at every start, so its launch counter never counts
+(app-update W-33); as the first step, it too stops the build before any download. `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
 `mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
@@ -899,19 +901,24 @@ also reads what release 1 reads on every Kit, each refusal one line with its way
 - `policy.json` must carry the Kit's reserved key `"updates": {"allow_online_check": true}` (only
   `build-commercial-drive` writes it, through `prepare-drive -Kit`), and no `updates.allow_user_install`
   or `updates.max_version` release 1 reads as junk (it would refuse every update on the Kit); an
-  administrator's deliberate `false` passes. `network.allow_update_checks` stays refused as before.
+  administrator's deliberate `false` passes. A valid `updates.max_version` below the Kit's own version
+  (the one its root apps carry, in SemVer order) is refused for the same reason; one equal to it or
+  above passes (owner 2026-11-26). `network.allow_update_checks` stays refused as before.
 - `config/drive-release.json` must read as a record whose `app_version` is the one version the root's
   apps carry, judged by the same root-app rule the record's helper uses (`rootArtifactOf`): missing,
   unreadable, damaged, without a version, or naming another one is refused, and the line says to write
   the record again (`node --no-warnings scripts/lib/write-drive-release.mjs --target <drive root>`),
   then check again (`-VerifyOnly` writes nothing); a folder or a link at the record's name is deleted
   first. Root apps of no single version (two versions, or a folder `.app` that carries none) get their
-  own line.
+  own line, and a record without a version over no versioned app says to fix the apps first. A record
+  that holds `highest_version_seen` (left by a later version that ran on a reused stick) is refused:
+  the helper keeps that field, so delete `config/drive-release.json`, then write it again.
 - `config/kit-support.txt` must be the builder's 8 bytes (the month and one line feed); a hand edit's CR
   LF or byte-order mark is refused (delete the file on purpose and stamp it again with the builder).
   Its month is not range-checked here: that is the ship-time check's.
-- Nothing in `updates/` (a start writes `updates/update.log`: the Kit was started; delete the folder;
-  an empty `updates/` passes, like an empty `logs/`).
+- Nothing in `updates/`, not even an empty folder such as `applying/` (a start writes
+  `updates/update.log`: the Kit was started; delete the folder; an empty `updates/` itself passes, like
+  an empty `logs/`).
 - Every file in an engine folder must be in its marker's map, by the walk an install records (never
   the marker, the `cpu/` net and its swap folders, or macOS `._*`, `.DS_Store`, `__MACOSX/`): a
   hand-copied library, a leftover archive or a `Thumbs.db` is refused. `fetch-runtime --commercial`
@@ -921,6 +928,8 @@ also reads what release 1 reads on every Kit, each refusal one line with its way
   carries `HilbertRaum-<version>-mac-arm64.app.zip`; owner 2026-11-26, reversing #233's acceptance),
   a name whose version segment is no version is refused, any other root file named `HilbertRaum-*` in
   any case is refused (the Windows start file matches without case), and so is a read-only app.
+- A name the gate prints from the disk (user data, a user skill, an app, an engine file) shows each
+  control, format or separator character as `\u{…}`, so a crafted name cannot drive the console.
 
 The problems come in a fixed order: the policy (the Kit key after the posture), weights and reviews,
 user data, notices, the engines, the source bundle, OCR and skills, the apps and start files, then the
@@ -936,7 +945,7 @@ plaintext off, models must verify, **no phone-home** — model downloads are a p
 but `network.allow_update_checks` is `false` and there is no telemetry; the Kit's reserved
 `updates.allow_online_check: true` beside it is a name this version never reads, so a Kit checks for
 no update) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
-that **no user data is present** (spec §12.2: `workspace/`, `logs/` and `updates/` hold nothing but empty folders,
+that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders, `updates/` nothing at all,
 and `config/` holds no `workspace.json` or `working-copy-lost.json`, exact or with a `.<suffix>`, in any case; the gate names each leftover,
 OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
 file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is

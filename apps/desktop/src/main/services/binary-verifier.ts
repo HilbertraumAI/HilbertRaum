@@ -128,8 +128,10 @@ let enforced = false
  * Whether a COMMERCIAL drive (policy.json in the sold posture) refuses to spawn a binary
  * whose install marker records no hash (#234). The sell gate and `fetch-runtime
  * --commercial` already refuse hashless markers at build time; refusing them at spawn
- * would stop already-sold kits from launching until re-provisioned, which is the owner's
- * call — shipped OFF until #234 is answered. Flip to true to enable.
+ * would stop already-sold kits from launching until re-provisioned. The owner ruled
+ * (2026-11-25) that this stays off for ever: a copy with no marker, a marker without
+ * `binaries`, an empty map or a program-only map starts with only its recorded part
+ * checked (tolerate, document; docs/app-updates.md §11.4).
  */
 export const REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false
 

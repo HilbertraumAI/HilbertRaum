@@ -142,16 +142,18 @@ HILBERTRAUM/
 ├── updates/                                    # update.log (a line per start, failed start and unlock attempt on a
 │                                                #   prepared drive; update.log.tmp only during a trim, or left by a
 │                                                #   failed one; app-updates.md §8.2) — none on a sold drive: the sell
-│                                                #   gate refuses any entry in it (a Kit that was started; app-update
-│                                                #   W-33, T3.8); an empty one passes
+│                                                #   gate refuses any entry in it, an empty folder included (a Kit
+│                                                #   that was started; app-update W-33, T3.8); an empty updates/
+│                                                #   itself passes
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}  # + drive-release.json (the record of the apps, start
                                                 #   files and engines, the build's last write; on a DIY
                                                 #   drive when node was on PATH), kit-support.txt on a Kit
                                                 #   only (its support end, YYYY-MM, written once; the sell
                                                 #   gate requires both: the record naming the version the
-                                                #   root's apps carry, the stamp in the builder's 8 bytes,
-                                                #   T3.8), workspace.json once a workspace exists, and
+                                                #   root's apps carry and holding no highest_version_seen,
+                                                #   the stamp in the builder's 8 bytes, T3.8),
+                                                #   workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
                                                 #   saved state (#875) or a start shredded the session an
                                                 #   unclean end left (#892); a workspace created here removes a
@@ -184,7 +186,8 @@ HILBERTRAUM/
 > plaintext off, models must verify, no phone-home — model downloads are a permitted user action;
 > `network.allow_update_checks` is `false` and there is no telemetry) plus the Kit's reserved
 > `"updates": {"allow_online_check": true}` (a name this version never reads, so it checks for no
-> update; below), and contains **no user data** and no `updates/` entry (it was never started) — built + asserted
+> update; below) and no `updates.max_version` below its own version, and contains **no user data** and no
+> `updates/` entry (it was never started) — built + asserted
 > by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). Its root
 > carries the macOS app as its zip, never an extracted `.app`, and no app there is read-only (release
 > 1's Windows start file would read a read-only app as running at every start). See
@@ -314,7 +317,7 @@ gate calls it, since the in-app update it governs is not built yet.
 |---|---|---|
 | `updates.allow_online_check` | the Kit builder only, `true` (`prepare-drive --kit`) | a reserved name: this version reads no value of it, junk included, and never adds it to the network ceiling or the status line; `network.allow_update_checks` stays `false` |
 | `updates.allow_user_install` | an administrator, by hand | absent or `true`: installing a signed update is allowed; `false`: every install is blocked ("managed"), whatever `max_version` says; any other value, `null` included: blocked as an invalid value |
-| `updates.max_version` | an administrator, by hand | absent: no cap; a strict SemVer 2.0.0 version (at most 256 characters, ASCII, no `v`, no spaces, no leading zeros): updates up to and including it, in SemVer order; any other value: blocked as invalid |
+| `updates.max_version` | an administrator, by hand | absent: no cap; a strict SemVer 2.0.0 version (at most 256 characters, ASCII, no `v`, no spaces, no leading zeros): updates up to and including it, in SemVer order; any other value: blocked as invalid. The sell gate refuses a Kit whose cap is junk or below the Kit's own version (either would block every update for good) |
 
 A present `updates` that is not an object blocks as invalid; `"updates": {}` means every key absent;
 unknown keys inside are ignored, and key names are exact (a typo blocks nothing). A **missing

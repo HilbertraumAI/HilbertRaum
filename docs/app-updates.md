@@ -3859,7 +3859,7 @@ gate, which both builders call, also:
 - requires every root start file and `READ ME FIRST.txt` to match the sha256 the signed payload lists;
 - requires the drive's `runtime-sources.yaml` to equal the Kit app's bundled copy, and
   `DRIVE-NOTICES.md` to be generated from it;
-- refuses any file in `updates/` (a Kit ships with no `updates/` folder; a smoke start is made on a copy;
+- refuses any entry in `updates/` (a Kit ships with no `updates/` folder; a smoke start is made on a copy;
   as built in P3);
 - refuses a root app with the read-only attribute, and `prepare-drive` has the same check (W-33,
   Δ-37; as built in P3): release 1's launch counter would never count on such an app (§11.3);
@@ -3870,26 +3870,39 @@ gate, which both builders call, also:
   live one.
 
 **As built in P3** (T3.8, the M1 half of W-33, `commercial-drive.ts`; replaceable tooling, nothing here
-is frozen; its review is pending). The gate's `checks` gain `kitUpdatesKey`, `releaseRecordCurrent` and
-`supportEndStamped` (19 in all), and it:
+is frozen). Reviewed (T3.8 review 1, class A: sound with limits, no blocker, no major); its fix round 1
+added the refusals of a record holding `highest_version_seen`, an empty folder inside `updates/` and a
+`max_version` below the Kit's version, and the escaping of printed names (below). The gate's `checks`
+gain `kitUpdatesKey`, `releaseRecordCurrent` and `supportEndStamped` (19 in all), and it:
 - requires `policy.json` to hold an own `updates` object whose own `allow_online_check` is `true`, read
   by a private reader of the gate's own (never through `policy.ts`, never fed into the network ceiling),
   so U1 (b) is enforced at sale (T3.1's review R1-1; this answers CF-30 for every Kit built since); and
   refuses a Kit whose `readUpdatePolicy` answers `invalid` (a junk `allow_user_install` or
   `max_version`), since release 1 would block every import on it for good (owner, 2026-11-26), while
   `managed`, a deliberate `false`, passes; a non-object `updates` gets the Kit-key line alone;
+- refuses a Kit whose `readUpdatePolicy` answers a valid `max_version` below the Kit's own version (the
+  one version its root apps carry, compared with `compareSemver`, so `0.1.59-rc.1` is below `0.1.59` and
+  `0.1.100` above it): release 1 would refuse every update on it for good (owner, 2026-11-26, review
+  m-8). A cap equal to or above the Kit's version passes; the line says to remove the key or raise it.
+  Over apps of no single version the apps' own lines refuse the Kit, and this check waits for them;
 - requires `config/drive-release.json` to read as a record whose valid `app_version` equals the one
   version the root's apps carry (`rootArtifactOf`, `chooseAppVersion`'s `single`, §8.5). An absent,
   unreadable or damaged record, one with no valid `app_version` or another version, and apps of no single
   version each get one line that names the way out: write the record again with
   `node --no-warnings scripts/lib/write-drive-release.mjs`, then check again, since `-VerifyOnly` writes
-  nothing (a folder or link at the name is deleted first);
+  nothing (a folder or link at the name is deleted first). A record without an app version over no
+  versioned app at the root (apps not copied yet, or named in another case) says to fix the apps first,
+  since writing it again would give the same record (review m-3). A record that holds
+  `highest_version_seen`, in any form, is refused too: a Kit has seen no version, and the helper keeps
+  every field it does not own, so the line says to delete the record, then write it again (review m-1: a
+  stick reused after a later version ran on it);
 - requires `config/kit-support.txt` to read as a month whose bytes are exactly the builder's 8
   (`readKitSupport`, `formatKitSupport`): a hand edit's CR LF or byte-order mark, or a missing line
   feed, is refused; there is no range check (above). Its lines name `build-commercial-drive -SupportEnd`;
-- refuses a Kit with any entry in `updates/` ("this drive was started: delete the updates/ folder"):
-  `updates` joins `USER_DATA_DIRS` and both builders' own lists; an empty `updates/` passes, like an empty
-  `logs/`;
+- refuses a Kit with any entry in `updates/` ("this drive was started: delete the updates/ folder"),
+  an empty folder such as `updates/applying/` included (review m-2: a Kit ships none; elsewhere an empty
+  folder passes): `updates` joins `USER_DATA_DIRS` and both builders' own lists; an empty `updates/`
+  itself passes, like an empty `logs/`;
 - fails `runtimeHashed` (`optionalRuntimesConsistent` for the knowledge-pack tools) for a file in an
   engine folder that the copy's map does not record, found by exactly `installedFileKeys`' walk (never the
   marker, a top-level `cpu/`, `cpu.new/` or `cpu.old/`, macOS `._*`, `.DS_Store` or `__MACOSX/`; a link
@@ -3907,10 +3920,15 @@ is frozen; its review is pending). The gate's `checks` gain `kitUpdatesKey`, `re
 - and both `prepare-drive` twins refuse a root app (the three root globs, any case) with no write bit
   before they write anything, in a dry run too: one line per app, exit 1 (W-33, T1.11 P3-3).
 
+Every gate line that prints a name read from the disk or from a marker's map (the user-data, user-skill,
+app and engine lines) prints each control, format or separator character as `\u{…}` (review m-10), so a
+crafted name cannot drive the builder's console.
+
 The problems are listed in this order: posture, the Kit key, weights, reviews, user data, notices,
 engines, source bundle, OCR, skills, platform matrix, apps, start files, record, support end. The `.ps1`
 builder hands the gate its own target (`$NodeTarget`, one trim rule); neither builder adds a native
-pre-flight line of its own for the record, the stamp, the Kit key or the engine walk.
+pre-flight line of its own for the record, the stamp, the Kit key, the cap or the engine walk, and their
+user-data pre-flight passes an empty folder inside `updates/`, which only the gate refuses.
 
 Limits as built (also in [`known-limitations.md`](known-limitations.md)): a locally compiled macOS or
 Linux voice engine (`runtime/whisper.cpp/mac`, `…/linux`) has no marker, and no gate check looks at it

@@ -78,6 +78,14 @@ const STAMP_MISSING_LINE =
   "config/kit-support.txt is missing — stamp the Kit's support end: run build-commercial-drive with -SupportEnd / --support-end " +
   '<YYYY-MM> (it writes the stamp once per Kit)'
 
+/**
+ * A crafted name (T3.8 review m-10) and how the gate's lines print it: a C1 control (U+009B, which a terminal may read as
+ * the start of an escape sequence), a right-to-left override and a line separator, each `\u{…}`. Every Kit file system
+ * can hold each one (NTFS forbids only the C0 controls).
+ */
+const CRAFTED = `x${String.fromCharCode(0x9b)}2J${String.fromCharCode(0x202e, 0x2028)}.txt`
+const ESCAPED = 'x\\u{9B}2J\\u{202E}\\u{2028}.txt'
+
 /** An extracted macOS bundle with an Info.plist: refused on a Kit since T3.8 (a Kit carries the zip; owner, sheet Q1). */
 function provisionExtractedApp(root: string, version: string): void {
   const contents = join(root, 'HilbertRaum.app', 'Contents')
@@ -617,10 +625,14 @@ describe('assertCommercialDrive', () => {
 
   // F-8, G-14 built the simpler way (owner 2026-11-23): every Kit carries `updates.allow_online_check: true` and keeps
   // `network.allow_update_checks: false`. The gate passes the Kit's own literal, and an administrator's deliberate
-  // `allow_user_install: false` ("managed", owner 2026-11-26); the shapes it refuses are the table after this one.
+  // `allow_user_install: false` ("managed", owner 2026-11-26); the shapes it refuses are the table after this one. A
+  // `max_version` cap at or above the Kit's own version passes, in SemVer order (owner 2026-11-26, T3.8 review m-8).
   it.each<[string, (kitBlock: Record<string, unknown>) => unknown]>([
     ["the Kit's literal", (block) => block],
-    ["an admin's allow_user_install false", (block) => ({ ...block, allow_user_install: false })]
+    ["an admin's allow_user_install false", (block) => ({ ...block, allow_user_install: false })],
+    ["a max_version equal to the Kit's version", (block) => ({ ...block, max_version: APP_VERSION })],
+    ['a max_version above it in SemVer order, below it as text', (block) => ({ ...block, max_version: '0.1.100' })],
+    ['a max_version of a later major version', (block) => ({ ...block, max_version: '2.0.0' })]
   ])('passes a Kit whose policy carries an updates block: %s', async (_label, updates) => {
     const root = tempDir('hilbertraum-commercial-kit-')
     const policy = buildPolicyJson({ kit: true })
@@ -680,6 +692,29 @@ describe('assertCommercialDrive', () => {
     expect(res.checks.policyCommercial).toBe(true)
     expect(res.checks.networkDenied).toBe(true)
     expect(res.ok).toBe(false)
+  })
+
+  // Owner 2026-11-26 (T3.8 review m-8): a valid cap below the Kit's own version (the one version the root's apps carry)
+  // is no junk, yet release 1 would refuse every update on that Kit for good, so it is refused at sale like junk. A
+  // pre-release of the Kit's version is below it in SemVer order.
+  const CAP_LINE = (cap: string): string =>
+    `policy.json's updates.max_version ${cap} is below this Kit's version ${APP_VERSION} — release 1 would refuse every ` +
+    `update on this Kit: remove updates.max_version, or set it to ${APP_VERSION} or later`
+  it.each([
+    ['a typo for the Kit version', '0.1.5'],
+    ["a pre-release of the Kit's version", `${APP_VERSION}-rc.1`]
+  ])("refuses a Kit whose updates.max_version is below the Kit's own version: %s (T3.8 review m-8)", async (_label, cap) => {
+    const root = tempDir('hilbertraum-commercial-kitcap-')
+    mkdirSync(join(root, 'config'), { recursive: true })
+    writeFileSync(join(root, 'config', 'policy.json'), kitPolicyText((block) => ({ ...block, max_version: cap })))
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+    expect(res.problems).toEqual([CAP_LINE(cap)])
+    expect(res.checks.kitUpdatesKey).toBe(false)
+    expect(res.checks.networkDenied).toBe(true)
   })
 
   it('fails when the policy allows a plaintext workspace', async () => {
@@ -976,6 +1011,22 @@ describe('assertCommercialDrive', () => {
     expect(res.checks.noUserData).toBe(true)
   })
 
+  // T3.8 review m-2: inside updates/ any entry fails, an empty folder included (a Kit ships none): an apply or import cut
+  // short on a test start, then emptied by hand, leaves `applying/` or `staging/`. An empty folder in workspace/ still
+  // passes (the fresh-layout row below).
+  it.each([['applying'], ['staging']])('refuses an empty folder inside updates/: %s/ (T3.8 review m-2)', async (name) => {
+    const root = tempDir('hilbertraum-commercial-updates-emptydir-')
+    writePolicy(root, buildPolicyJson({ kit: true }))
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'updates', name), { recursive: true })
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+    expect(res.problems).toEqual([`user data present on a drive meant to ship empty: updates/${name}/${STARTED}`])
+    expect(res.checks.noUserData).toBe(false)
+  })
+
   it('names every leftover of a used drive, in a stable order', async () => {
     const root = tempDir('hilbertraum-commercial-many-')
     writePolicy(root, buildPolicyJson({ kit: true }))
@@ -992,6 +1043,29 @@ describe('assertCommercialDrive', () => {
       'workspace/documents/*',
       'workspace/rekey-journal.json'
     ])
+  })
+
+  // T3.8 review m-10: a name read from the disk reaches the builder's console, so every control, format or separator
+  // character in it is printed escaped, in the user-data, user-skill and app lines alike (the engine lines: below).
+  it.each<[string, (root: string) => void, string]>([
+    ['a user-data line', (root) => writeDriveFile(root, `workspace/${CRAFTED}`, 'x'), `user data present on a drive meant to ship empty: workspace/${ESCAPED}`],
+    ['a user-skill line', (root) => mkdirSync(join(root, 'user-skills', CRAFTED), { recursive: true }), `user skill present on a drive meant to ship empty: user-skills/${ESCAPED}`],
+    [
+      'an app line',
+      (root) => writeFileSync(join(root, `HilbertRaum-${CRAFTED}`), 'app-bytes'),
+      `app artifact "HilbertRaum-${ESCAPED}" is not a release artifact of any platform (expected HilbertRaum-<version>-portable.exe, ` +
+        'HilbertRaum-<version>-mac-arm64.app.zip, HilbertRaum-<version>.AppImage)'
+    ]
+  ])('prints a name from the disk with its non-printable characters escaped: %s (T3.8 review m-10)', async (_label, plant, line) => {
+    const root = tempDir('hilbertraum-commercial-printable-')
+    writePolicy(root, buildPolicyJson({ kit: true }))
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    provisionApp(root)
+    plant(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+    expect(res.problems).toEqual([line])
   })
 
   it('flags a non-empty workspace/documents/ directory as user data', async () => {
@@ -1422,6 +1496,41 @@ describe('assertCommercialDrive', () => {
       ])
     })
 
+    // T3.8 review m-10: the engine lines print a name from the disk (a file the map leaves out, the folder #729's program
+    // sits in) or from the marker (a key it records) with the same escape as the user-data and app lines.
+    it.each<[string, (win: string) => void, string]>([
+      [
+        'a file the marker does not record',
+        (win) => writeFileSync(join(win, CRAFTED), 'x'),
+        `runtime build win/x64 vulkan: 1 file under runtime/llama.cpp/win is not recorded in the install marker: ${ESCAPED}${WAY_OUT('runtime/llama.cpp/win')}`
+      ],
+      [
+        "the folder #729's program sits in",
+        (win) => {
+          mkdirSync(join(win, CRAFTED))
+          writeFileSync(join(win, CRAFTED, 'llama-connect.exe'), 'tunnel')
+        },
+        `runtime build win/x64 vulkan: ${ESCAPED}/llama-connect.exe under runtime/llama.cpp/win must not ship — re-run fetch-runtime for this build`
+      ],
+      [
+        'a file the marker records',
+        (win) =>
+          writeRuntimeMarker(win, {
+            version: 'b9585',
+            backend: 'vulkan',
+            os: 'win',
+            arch: 'x64',
+            binaries: { 'llama-server.exe': createHash('sha256').update('fake-binary').digest('hex'), [CRAFTED]: 'a'.repeat(64) }
+          }),
+        `runtime build win/x64 vulkan: ${ESCAPED} is recorded in the install marker but missing under runtime/llama.cpp/win — re-run fetch-runtime --commercial`
+      ]
+    ])('prints an engine name with its non-printable characters escaped: %s (T3.8 review m-10)', async (_label, plant, line) => {
+      const { root, chat } = sellableEngines('hilbertraum-commercial-rt-printable-')
+      plant(join(root, 'runtime', 'llama.cpp', 'win'))
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.problems).toEqual([line])
+    })
+
     it('passes what an install never records: the marker, the cpu/ net, macOS metadata; and a recorded file in a subfolder (T3.8)', async () => {
       const { root, chat } = sellableEngines('hilbertraum-commercial-rt-recorded-tree-')
       const win = join(root, 'runtime', 'llama.cpp', 'win')
@@ -1443,21 +1552,34 @@ describe('assertCommercialDrive', () => {
     })
 
     // An install records a link by its own name only when it resolves to a file (runtime-download.ts recordedKind and both
-    // fetch-runtime twins), so the walk counts such a link and never counts or enters a link to a folder. The file-link
-    // half needs the right to make one (Windows: symlink privilege; every CI leg has it).
-    it('counts a link in an engine folder only when it resolves to a file (T3.8)', async () => {
-      const { root, chat } = sellableEngines('hilbertraum-commercial-rt-links-')
-      const win = join(root, 'runtime', 'llama.cpp', 'win')
-      const target = tempDir('hilbertraum-commercial-rt-link-target-')
-      writeFileSync(join(target, 'inside.dll'), 'x')
-      symlinkSync(target, join(win, 'linked-folder'), 'junction')
-      expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).problems).toEqual([])
+    // fetch-runtime twins), so the walk counts such a link and never counts or enters a link to a folder. A junction
+    // needs no privilege; a link to a file needs the right to make one (Windows: Developer Mode or the symlink
+    // privilege), so its row is skipped where this account lacks it, and the skip shows in the counts (T3.8 review m-9).
+    const canLinkFiles = ((): boolean => {
+      const dir = tempDir('hilbertraum-commercial-rt-link-probe-')
+      writeFileSync(join(dir, 'target'), 'x')
       try {
-        symlinkSync(join(target, 'inside.dll'), join(win, 'linked.dll'), 'file')
+        symlinkSync(join(dir, 'target'), join(dir, 'link'), 'file')
+        return true
       } catch (err) {
-        if (['EPERM', 'EACCES'].includes((err as NodeJS.ErrnoException).code ?? '')) return
+        if (['EPERM', 'EACCES'].includes((err as NodeJS.ErrnoException).code ?? '')) return false
         throw err
       }
+    })()
+
+    it('never counts or enters a link to a folder in an engine folder (T3.8)', async () => {
+      const { root, chat } = sellableEngines('hilbertraum-commercial-rt-links-')
+      const target = tempDir('hilbertraum-commercial-rt-link-target-')
+      writeFileSync(join(target, 'inside.dll'), 'x')
+      symlinkSync(target, join(root, 'runtime', 'llama.cpp', 'win', 'linked-folder'), 'junction')
+      expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).problems).toEqual([])
+    })
+
+    it.skipIf(!canLinkFiles)('counts a link to a file in an engine folder (T3.8)', async () => {
+      const { root, chat } = sellableEngines('hilbertraum-commercial-rt-filelink-')
+      const target = tempDir('hilbertraum-commercial-rt-filelink-target-')
+      writeFileSync(join(target, 'inside.dll'), 'x')
+      symlinkSync(join(target, 'inside.dll'), join(root, 'runtime', 'llama.cpp', 'win', 'linked.dll'), 'file')
       const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
       expect(unrecorded(res.problems)).toEqual([
         `runtime build win/x64 vulkan: 1 file under runtime/llama.cpp/win is not recorded in the install marker: linked.dll${WAY_OUT('runtime/llama.cpp/win')}`
@@ -1958,6 +2080,73 @@ describe('assertCommercialDrive', () => {
           `fix the apps (see above), then write the record again: ${WRITE_RECORD}`
       ])
       expect(res.checks.releaseRecordCurrent).toBe(false)
+    })
+
+    // T3.8 review m-3: with no versioned app at the root (-SkipPackage, then -VerifyOnly before the apps are copied; or the
+    // apps named in another case, which the record's rule does not count), writing the record again gives the same record,
+    // so the line says to fix the apps first, as for apps of no single version.
+    const NO_APPS_LINE =
+      'config/drive-release.json records no app version, and the apps on the drive carry no single version — fix the ' +
+      `apps (see above), then write the record again: ${WRITE_RECORD}`
+    it.each<[string, (root: string) => void]>([
+      [
+        'no app at the root',
+        (root) => {
+          for (const p of ALL_PLATFORMS) rmSync(join(root, ARTIFACT[p]))
+        }
+      ],
+      [
+        'the apps named in another case',
+        (root) => {
+          for (const p of ALL_PLATFORMS) {
+            rmSync(join(root, ARTIFACT[p]))
+            writeFileSync(join(root, ARTIFACT[p].toLowerCase()), 'app-bytes')
+          }
+        }
+      ]
+    ])('refuses a record without an app version over no versioned app, saying to fix the apps first: %s (T3.8 review m-3)', async (_title, edit) => {
+      const { root, chat } = kitDrive('hilbertraum-commercial-record-noapps-')
+      writeRecord(root, JSON.stringify({ format: 1, systems: [], files: [] }))
+      edit(root)
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.problems.filter((p) => p.startsWith('config/drive-release.json'))).toEqual([NO_APPS_LINE])
+      expect(res.problems.at(-1), 'after the apps lines').toBe(NO_APPS_LINE)
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      expect(res.checks.releaseRecordCurrent).toBe(false)
+    })
+
+    // T3.8 review m-1: the record helper keeps every field it does not own, so a stick that ran a later version (which
+    // records highest_version_seen, G-19 (b)) keeps the field through a rebuild. A Kit has seen no version: a record that
+    // holds the field, in any form, is refused, and the way out deletes the record before writing it again.
+    const SEEN_LINE =
+      'config/drive-release.json holds highest_version_seen (a Kit has seen no version, and writing the record again keeps ' +
+      `the field) — delete config/drive-release.json, then write it again: ${WRITE_RECORD}`
+    it.each<[string, unknown]>([
+      ['a version', '2.0.0'],
+      ['a value that is no version', 'latest'],
+      ['null', null]
+    ])('refuses a record that holds highest_version_seen: %s (T3.8 review m-1)', async (_title, seen) => {
+      const { root, chat } = kitDrive('hilbertraum-commercial-record-seen-')
+      writeRecord(root, JSON.stringify({ format: 1, app_version: APP_VERSION, highest_version_seen: seen }))
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.problems).toEqual([SEEN_LINE])
+      expect(res.checks.releaseRecordCurrent).toBe(false)
+    })
+
+    it("the highest_version_seen line's way out works: written again the field stays, written after a delete it passes (T3.8 review m-1)", async () => {
+      const { root, chat } = kitDrive('hilbertraum-commercial-record-seen-helper-')
+      writeRecord(root, JSON.stringify({ format: 1, app_version: APP_VERSION, highest_version_seen: '2.0.0' }))
+      writeFileSync(join(root, 'config', 'drive.json'), '{}') // the helper writes only on a prepared drive
+      const helper = join(__dirname, '..', '..', '..', '..', 'scripts', 'lib', 'write-drive-release.mjs')
+      const writeAgain = (): void => {
+        const run = spawnSync(process.execPath, ['--no-warnings', helper, '--target', root], { encoding: 'utf8' })
+        expect(run.status, `${run.stdout}${run.stderr}`).toBe(0)
+      }
+      writeAgain()
+      expect((await assertCommercialDrive(root, [chat], null, null, null, kit())).problems).toEqual([SEEN_LINE])
+      rmSync(join(root, RECORD))
+      writeAgain()
+      expect((await assertCommercialDrive(root, [chat], null, null, null, kit())).problems).toEqual([])
     })
 
     // The helper and the gate agree: what write-drive-release.mjs records over the drive (the builder's last write) passes.
