@@ -3178,6 +3178,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
+  'main.dialog.importUpdate': 'Update aus Datei installieren',
+  'main.dialog.filterUpdate': 'Update-Datei',
   'main.zim.unavailable': 'Wissenspakete sind in dieser Sitzung nicht verfügbar.',
   // #340 Tier-2: die beiden freundlichen Fehler des Speicherpfads.
   'main.zim.articleUnavailable': 'Dieser Artikel ist gerade nicht verfügbar und konnte deshalb nicht gespeichert werden. Das Paket ist womöglich deaktiviert, entfernt oder sein Laufwerk abgezogen.',

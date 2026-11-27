@@ -3114,6 +3114,8 @@ export const es: UiCatalog<'es'> = {
   'main.dialog.exportLog': 'Guardar los registros de diagnóstico',
   'main.dialog.filterDocuments': 'Documentos',
   'main.dialog.filterAll': 'Todos los archivos',
+  'main.dialog.importUpdate': 'Install update from a file',
+  'main.dialog.filterUpdate': 'Update file',
   'main.zim.unavailable': 'Los paquetes de conocimiento no están disponibles en esta sesión.',
   'main.zim.articleUnavailable':
     'Este artículo no está disponible ahora mismo, así que no se pudo guardar. Puede que el ' +

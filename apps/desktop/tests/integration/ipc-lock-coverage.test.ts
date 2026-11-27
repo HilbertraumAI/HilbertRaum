@@ -241,7 +241,9 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design). The password change answers a result, not a throw: its refusal during a lock teardown (the AUD-02 latch) is lock-admission-race.test.ts "refuses changeWorkspacePassword while the lock teardown is parked"',
   registerStartFailureIpc:
-    'backend-start-failure.test.ts (#1024) — pre-unlock by design: the state of a run whose back-end start threw. It takes no AppContext (there is none), answers getWorkspaceState with a constant and the log tail + clipboard pair of Diagnostics’ Copy; the rows pin that exact channel set',
+    'backend-start-failure.test.ts (#1024; app-update W-82) — pre-unlock by design: the state of a run whose back-end start threw. It takes no AppContext (there is none), answers getWorkspaceState with a constant and the log tail + clipboard pair of Diagnostics’ Copy, and registers F-14’s four update channels again (registerUpdatesIpc, on its narrow context); the rows pin that exact channel set',
+  registerUpdatesIpc:
+    'updates-ipc.test.ts (app-update F-14, W-82) — callable while locked by design: the update channels answer before unlock and in a start that failed, so none refuses while locked and updates:importFile opens main’s own file dialog then (MODULES needs a channel that refuses and no dialog). It takes the narrow context (the senders, the layout or null, isDev, the app version), never AppContext, so no workspace and no database, and calls no requireUnlocked(); that test holds F-14’s list as a golden row (tests/fixtures/updates/import/f14-locked-channels.json) and those per-channel rows',
   registerDictationIpc:
     'dictation-ipc.test.ts (locked-vault and mid-lock (AUD-02 latch) rejection, #860 L6; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:

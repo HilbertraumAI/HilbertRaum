@@ -1,12 +1,24 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  powerMonitor,
+  session,
+  shell,
+  type OpenDialogOptions,
+  type WebContents
+} from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot, type ResolvedPaths } from './services/workspace'
-import { runBackendStart, runWindowStart } from './backend-start'
+import { oneUpdateService, runBackendStart, runWindowStart } from './backend-start'
 import { safeFailureForLog } from './services/failure-for-log'
-import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
+import { applyUiLanguageSetting, initMainI18n, mainUiLanguage, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
 import { recoverEngineSwaps } from './services/runtime-download'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
@@ -28,7 +40,7 @@ import {
 import { setStampAppVersion } from './services/db'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
-import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
+import { loadPolicy, currentPolicyStatus, isCommercialPolicy, readUpdatePolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture, offlineGuardInstalled } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
@@ -87,6 +99,7 @@ import {
 } from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
+import { registerUpdatesIpc } from './ipc/registerUpdatesIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
@@ -103,8 +116,13 @@ import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
-import { writeStartupLine } from './services/updates/update-log'
+import { appendUpdateLogLine, writeStartupLine } from './services/updates/update-log'
 import { embeddedKeySet } from './services/updates/keys'
+import { readDriveRelease, rootApps } from './services/updates/drive-release'
+import { readKitSupport } from './services/updates/kit-support'
+import { createUpdateService, NODE_BUNDLE_FS, NODE_START_FS, type UpdateServiceDeps } from './services/updates/service'
+import { NODE_STAGING_FS } from './services/updates/staging'
+import { parseSemver, type Semver } from './services/updates/version'
 import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
@@ -216,6 +234,74 @@ let ctx: AppContext | null = null
 // carries it (`backend-start.ts`), for the update plan's channels to find the drive.
 let backendPaths: ResolvedPaths | null = null
 
+// App-update W-4 (F-14; docs/app-updates.md §3.5 "Who picks the file"): main's own dialog for an update file, parented
+// to the window that called (a window driven without focus gets it too), one file, no default folder, titled in main's
+// language at each call. The picked path never leaves main. The service counts a dialog that cannot open as closed.
+async function chooseUpdateFile(caller: unknown): Promise<string | null> {
+  const sender = (caller as { sender?: WebContents } | null | undefined)?.sender
+  const parent = sender ? BrowserWindow.fromWebContents(sender) : null
+  const options: OpenDialogOptions = {
+    title: tMain('main.dialog.importUpdate'),
+    properties: ['openFile'],
+    filters: [
+      { name: tMain('main.dialog.filterUpdate'), extensions: ['hrupdate'] },
+      { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+    ]
+  }
+  const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+  return picked.canceled || picked.filePaths.length !== 1 ? null : picked.filePaths[0]!
+}
+
+// CF-50: the runtime glibc on Linux, from Node's diagnostic report. The report is built synchronously on this thread, so
+// its network part (the slow one) is left out for the call and the setting put back in the same step (T6.3 sheet answer
+// 5). Only a Linux import asks, once per import.
+function runtimeGlibc(): string | null {
+  const report = process.report as typeof process.report & { excludeNetwork?: unknown }
+  const previous = report.excludeNetwork
+  const exclude = typeof previous === 'boolean'
+  if (exclude) report.excludeNetwork = true
+  try {
+    const header = (report.getReport() as { header?: { glibcVersionRuntime?: unknown } }).header
+    return typeof header?.glibcVersionRuntime === 'string' ? header.glibcVersionRuntime : null
+  } finally {
+    if (exclude) report.excludeNetwork = previous
+  }
+}
+
+/** The running version of a build whose own version does not parse: that build embeds no key (fail closed). */
+const UNPARSED_VERSION: Semver = { text: '0.0.0', major: '0', minor: '0', patch: '0', prerelease: [], build: [] }
+
+// What the update service is handed (UpdateServiceDeps; T6.2's notes-2): the layout, the embedded key set, this app's
+// version and computer, the clock, the drive's readers, main's dialog, the update.log appender and node:fs. An app
+// version that does not parse (never, for a build of this tree: updates-ipc.test.ts) fails closed with no key, so every
+// update file answers UPD-NOT-AVAILABLE (T6.3 sheet answer 4). The build date is T6.4a's reader; the start step's P7
+// hook and the audit sink (PR-6b) are not set.
+function updateServiceDeps(layout: ResolvedPaths | null): UpdateServiceDeps {
+  const running = parseSemver(app.getVersion())
+  if (running === null) log.warn('Update service: the app version does not parse, so no update file is accepted')
+  return {
+    paths: layout,
+    keys: running === null ? [] : embeddedKeySet.keys,
+    runningVersion: running ?? UNPARSED_VERSION,
+    host: {
+      platform: process.platform,
+      osVersion: () => process.getSystemVersion(),
+      glibc: runtimeGlibc,
+      uiLanguage: mainUiLanguage
+    },
+    clock: { now: () => Date.now(), monotonic: () => performance.now() },
+    reads: { policy: readUpdatePolicy, driveRelease: readDriveRelease, rootApps, kitSupport: readKitSupport, buildDate: () => null },
+    chooseFile: chooseUpdateFile,
+    appendLog: appendUpdateLogLine,
+    fs: { bundle: NODE_BUNDLE_FS, staging: NODE_STAGING_FS, start: NODE_START_FS }
+  }
+}
+
+// App-update W-82 (record §3.5 "The service and its start"): the process's one update service. initBackend builds it,
+// start step included, right after the Update keys line; the failure state gets that one, or builds it when the start
+// threw before that (backend-start.ts's oneUpdateService).
+const updateServiceFor = oneUpdateService((layout) => createUpdateService(updateServiceDeps(layout)))
+
 // The three model resolvers + the four availability-driven service selectors that used to
 // live inline here were extracted (M-A3): `resolveModelByRole` (services/resolve-model.ts)
 // collapses the embeddings/reranker/transcriber resolvers; `composeServices`
@@ -275,6 +361,11 @@ function initBackend(): void {
   // embeds none, so every update file answers "not available"). A count and a flag only: never a key or an id. This use
   // also keeps the key set in the main bundle, where the release guard looks for it (docs/app-updates.md §2.7).
   log.info('Update keys', { count: embeddedKeySet.keys.length, valid: embeddedKeySet.valid })
+  // App-update W-4, W-82 (F-14; record §3.5 "The service and its start"): the process's one update service, its start
+  // step run now, before the policy and the workspace's start, so a start that throws there keeps it for the failure
+  // state; and its four channels, callable while locked, on their narrow context (never `ctx`).
+  const updates = updateServiceFor(paths)
+  registerUpdatesIpc({ trustedSenders, paths, isDev, appVersion: app.getVersion() }, updates)
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
@@ -1275,7 +1366,8 @@ app.whenReady().then(() => {
     trustedSenders,
     isDev,
     appVersion: app.getVersion(),
-    paths: () => backendPaths
+    paths: () => backendPaths,
+    updates: updateServiceFor
   })
   // #1024 review M-2: everything after the back end runs inside `runWindowStart`. A throw here (the app's own renderer
   // files, the menu, the window) used to open no window at all while this process held the single-instance lock, so

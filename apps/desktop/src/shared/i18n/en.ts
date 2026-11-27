@@ -3192,6 +3192,8 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.dialog.importUpdate': 'Install update from a file',
+  'main.dialog.filterUpdate': 'Update file',
   'main.zim.unavailable': 'Knowledge packs are not available in this session.',
   // #340 Tier-2: the save-as-document path's two friendly failures.
   'main.zim.articleUnavailable': 'This article is not available right now, so it could not be saved. The pack may be disabled, removed, or its drive unplugged.',
