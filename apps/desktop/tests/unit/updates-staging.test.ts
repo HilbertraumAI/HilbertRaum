@@ -1370,6 +1370,26 @@ describe('the commit tests <v>/ again before it writes, leaves what it cannot pr
     expect(readdirSync(drive.at('updates/staging')).sort()).toEqual(['0.9.0', '1.1.0'])
   })
 
+  // Review A's re-check of fix round 1, n-1: a removal of another version that fails once begun (a call inside its walk)
+  // still fails the commit, at most one staged update (notes-1 reading 6); a remove error while staging is
+  // UPD-CANT-WRITE-DRIVE with the thrown error's code and system call (record §4.5 "Errors while staging", the events row's
+  // `err` and `syscall`), no `link` (no name was a link). The walk's first level and files/ fail through the same unlink.
+  it('another version whose removal fails once begun (a member\u{2019}s unlink fails EIO after its staged.json went): refused UPD-CANT-WRITE-DRIVE with that cause, <v>/ never marked', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.0.5', 'std')
+    const rec = recorded(drive, [{ call: 'unlink', when: (rel) => rel === 'updates/staging/1.0.5/files/apply.cmd', error: injected('EIO', 'unlink') }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EIO', syscall: 'unlink' }, link: null })
+    } finally {
+      await file.close()
+    }
+    // "Every removal": staged.json first, so the cut removal leaves no valid one. "The commit": the markers come after the
+    // other versions' removal, so the refusal wrote none into <v>/.
+    expect(isAbsent(drive.at('updates/staging/1.0.5/staged.json'))).toBe(true)
+    expect(readdirSync(drive.at('updates/staging/1.1.0'))).toEqual(['files'])
+  })
+
   // Review A h7 and A01: a link among the other versions (also one lstat reads as a folder) and a stray file are left.
   it.each(FOLDER_KINDS)('another entry that is %s, and a stray file, are left as they are; the real other version goes', async (_label, make) => {
     const drive = freshDrive()
