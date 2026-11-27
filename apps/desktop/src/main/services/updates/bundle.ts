@@ -188,6 +188,7 @@ export interface ReadOptions {
   readonly input: PayloadInput
   readonly fs: BundleFileSystem
   /** Asked at each check point between two checks (§3.5 updates:cancel); true ends the read as `cancelled`. */
+  // The hook must not throw (the service's never does; T6.2 holds that row): a throw is answered as UPD-CANT-READ-FILE.
   readonly cancelled: () => boolean
 }
 
@@ -196,6 +197,7 @@ export interface StageOptions {
   readonly incomingDir: string
   /** `updates/staging/<v>/files/`, made and checked by the caller: a member whose hash matches is moved here. */
   readonly filesDir: string
+  // Both hooks must not throw (the service's never do; T6.2 holds that row): a throw is answered as a drive error, by its code.
   /** Asked before each member and after each slice (§3.5 updates:cancel); true ends the data pass as `cancelled`. */
   readonly cancelled: () => boolean
   /** Told the bytes staged so far after each slice is written (§4.5 "Progress"; of `totalBytes`). */
@@ -415,8 +417,9 @@ export async function readUpdateFile(path: string, options: ReadOptions): Promis
     if (!walked.members.some((member) => member.file.name === script)) return refuse({ code: 'UPD-NO-HELPER', params: {} })
     if (cancelled()) return stop()
 
+    const file = checkedUpdateFile(handle, fs, payload, envelope, walked.members)
     handedOn = true
-    return { kind: 'checked', file: checkedUpdateFile(handle, fs, payload, envelope, walked.members) }
+    return { kind: 'checked', file }
   } catch (error) {
     // The update file's open, its fstat or a read failed (§4.5 "Errors while staging": a read error is UPD-CANT-READ-FILE).
     return refuse({ code: 'UPD-CANT-READ-FILE', params: {} }, causeOf(error))

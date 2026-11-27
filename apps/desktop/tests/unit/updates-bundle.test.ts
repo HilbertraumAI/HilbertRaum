@@ -122,6 +122,8 @@ interface Faults {
   readZeroFrom?: number
   /** Each read and each write moves at most this many bytes. */
   chunk?: number
+  /** At most this many bytes for the read it names (0: the read returns nothing; undefined: no cap). */
+  readCap?: (read: { position: number; length: number; dataPass: boolean }) => number | undefined
   openMember?: unknown
   write?: unknown
   writeNothing?: boolean
@@ -165,11 +167,12 @@ function recorder(faults: Faults = {}): Recorder {
     async read(buffer, offset, length, position) {
       if (rec.dataPass && faults.readInDataPass !== undefined && rec.reads.filter((r) => r.dataPass).length >= (faults.readInDataPassAfter ?? 0)) throw faults.readInDataPass
       rec.reads.push({ position, length, dataPass: rec.dataPass })
-      if (faults.readZeroFrom !== undefined && position >= faults.readZeroFrom) {
+      const cap = faults.readCap?.({ position, length, dataPass: rec.dataPass })
+      if (cap === 0 || (faults.readZeroFrom !== undefined && position >= faults.readZeroFrom)) {
         await nextTurn()
         return { bytesRead: 0 }
       }
-      const result = await real.read(buffer, offset, faults.chunk === undefined ? length : Math.min(length, faults.chunk), position)
+      const result = await real.read(buffer, offset, Math.min(length, cap ?? length, faults.chunk ?? length), position)
       faults.afterRead?.(position, result.bytesRead)
       return result
     },
@@ -514,11 +517,75 @@ const READER_CASES = table.cases.filter((c) => !SERVICE_PREFIXES.some((prefix) =
 /** A FIFO exists on macOS and Linux only; O_NONBLOCK keeps its open from holding. These rows run in CI. */
 const POSIX_ONLY = new Set(['open-named-pipe'])
 
+/**
+ * The cases left to the service's tests (T6.2, T6.3), sorted, as the split stood when the reader was reviewed (T6.1 fix
+ * round 1, m-2): a case that moves between the reader and the service, or leaves the table, turns the split row red, so
+ * the move is an edit here that a review sees. T6.2 and T6.3 hold the other half: each of these runs in exactly one of
+ * their files.
+ */
+const LEFT_CASE_IDS: readonly string[] = [
+  'accept-case-only-version-replaces', 'accept-commit-removes-other-versions', 'accept-replaces-staged-same-version',
+  'accept-updates-folder-other-case', 'argument-without-own-token-opens-the-dialog', 'busy-second-call', 'cancel-idle',
+  'cancel-while-checking-before-the-dialog', 'cancel-while-choosing', 'cancel-while-committing',
+  'commit-cleared-append-fails', 'commit-cleared-helper-blocked-other-computer', 'commit-cleared-last-line-crlf',
+  'commit-cleared-last-valid-line-wins', 'commit-cleared-line-appended', 'commit-cleared-token-avoids-seen',
+  'commit-cleared-unknown-code-marks', 'commit-last-result-is-a-link', 'commit-marker-write-fails',
+  'commit-not-cleared-already-cleared', 'commit-not-cleared-applied', 'commit-not-cleared-other-version',
+  'dialog-closed', 'discard-in-progress', 'discard-junk-argument', 'discard-link-inside', 'discard-not-a-drive',
+  'discard-other-version', 'discard-removal-fails', 'discard-staged', 'discard-version-as-path',
+  'discard-while-a-run-goes', 'link-incoming-is-a-file', 'link-incoming-is-a-link',
+  'link-inside-earlier-version-folder', 'link-order-before-free-space', 'link-version-is-a-file',
+  'link-version-is-a-link', 'path-absent-member-name-not-counted', 'path-at-259', 'path-at-260',
+  'path-not-checked-on-linux', 'path-order-before-version-folder-link', 'path-present-99-byte-name-at-259',
+  'path-present-99-byte-name-at-260', 'pay-issued-365d-1s-confirmed', 'pre-in-progress',
+  'pre-in-progress-applying-is-a-file', 'pre-margin-below', 'pre-margin-bsize-zero-below', 'pre-margin-exactly-64-mib',
+  'pre-not-a-drive', 'pre-not-available', 'pre-not-available-before-not-a-drive', 'pre-order-in-progress-before-probe',
+  'pre-order-not-a-drive-before-policy', 'pre-order-policy-before-updates-link', 'pre-order-probe-before-margin',
+  'pre-order-staging-link-before-in-progress', 'pre-policy-invalid', 'pre-policy-managed', 'pre-probe-enospc',
+  'pre-probe-erofs', 'pre-probe-name-occupied', 'pre-probe-other-failure',
+  'pre-repeat-after-another-refusal-logs-again', 'pre-repeat-after-same-code-past-the-dialog',
+  'pre-repeat-same-refusal-one-line', 'pre-repeat-with-a-discard-line-between', 'pre-staging-is-a-file',
+  'pre-staging-is-a-link', 'pre-staging-listing-fails', 'pre-updates-is-a-file', 'pre-updates-is-a-link',
+  'pre-updates-listing-fails', 'pre-updates-mkdir-eexist-then-nothing', 'pre-updates-mkdir-enospc',
+  'pre-updates-mkdir-erofs', 'probe-empty-folder-removed', 'probe-final-delete-fails-ignored',
+  'probe-leftover-file-removed', 'probe-link-removed-not-followed', 'space-at-the-formula',
+  'space-bsize-zero-at-the-formula', 'space-bsize-zero-one-under', 'space-counts-held-bytes-as-free',
+  'space-counts-held-bytes-one-under', 'space-counts-incoming-bytes-as-free', 'space-large-cluster',
+  'space-large-cluster-under', 'space-link-inside-counts-zero', 'space-members-present-only',
+  'space-members-present-only-under', 'space-one-cluster-under', 'space-order-before-old-file',
+  'space-other-version-not-counted-as-free', 'space-statfs-fails', 'start-all-reasons-in-order',
+  'start-applying-exists-no-sweep', 'start-applying-stat-fails', 'start-extra-file-in-files-ignored',
+  'start-files-folder-is-a-link', 'start-incoming-link-left', 'start-incoming-with-unverified-exe',
+  'start-invalid-marker-array', 'start-invalid-marker-bom', 'start-invalid-marker-entry-not-object',
+  'start-invalid-marker-files-empty', 'start-invalid-marker-files-not-array', 'start-invalid-marker-folder-name-case',
+  'start-invalid-marker-format-2', 'start-invalid-marker-format-missing', 'start-invalid-marker-format-string',
+  'start-invalid-marker-group-empty', 'start-invalid-marker-group-null', 'start-invalid-marker-is-a-folder',
+  'start-invalid-marker-is-a-link', 'start-invalid-marker-name-breaks-rule', 'start-invalid-marker-names-fold-equal',
+  'start-invalid-marker-not-json', 'start-invalid-marker-over-cap', 'start-invalid-marker-sha256-63',
+  'start-invalid-marker-sha256-upper-case', 'start-invalid-marker-size-8gib', 'start-invalid-marker-size-fraction',
+  'start-invalid-marker-size-negative', 'start-invalid-marker-size-string', 'start-invalid-marker-two-names',
+  'start-invalid-marker-version-not-semver', 'start-invalid-marker-version-other', 'start-link-entry-left',
+  'start-member-is-a-folder', 'start-member-is-a-link', 'start-member-missing', 'start-member-other-size',
+  'start-no-marker', 'start-not-a-prepared-drive', 'start-nothing', 'start-notice-until-a-commit',
+  'start-removal-fails', 'start-staged-survives', 'start-staging-is-a-file', 'start-staging-is-a-link',
+  'start-stat-fails-entry-left', 'start-stray-file', 'start-two-staged-highest-shown', 'start-updates-not-real',
+  'start-valid-marker-at-cap', 'start-valid-marker-duplicate-key-last-wins', 'start-valid-marker-format-1.0',
+  'start-valid-marker-unknown-keys', 'start-valid-marker-whitespace-and-line-end', 'start-valid-marker-with-group',
+  'start-wait-ends-after-10-s', 'token-redeem-file-no-longer-old', 'token-redeem-file-now-another-version',
+  'token-spent-by-dialog-call', 'token-spent-by-early-refusal', 'token-unknown'
+]
+
 describe('the import case table through the reader (tests/fixtures/updates/import/cases.json; record §4.3, §4.5, §4.7)', () => {
   it('the reader-side cases are found, and every injected fault and every run of several calls among them has a setup', () => {
     expect(READER_CASES.length).toBeGreaterThan(200)
     expect(READER_CASES.every((c) => c.kind === 'import' || c.kind === 'calls')).toBe(true)
     expect(READER_CASES.filter((c) => (c.inject !== undefined || c.kind === 'calls') && SETUPS[c.id] === undefined).map((c) => c.id)).toEqual([])
+  })
+
+  it('the split is pinned: 372 cases, 213 run here, and the 159 left ids exactly as listed', () => {
+    const left = table.cases.filter((c) => !READER_CASES.includes(c)).map((c) => c.id)
+    expect({ cases: table.cases.length, run: READER_CASES.length, left: left.length }).toEqual({ cases: 372, run: 213, left: 159 })
+    expect([...left].sort()).toEqual(LEFT_CASE_IDS)
   })
 
   it.each(READER_CASES.filter((c) => !POSIX_ONLY.has(c.id)).map((c) => [c.id, c] as const))('%s', async (_id, c) => {
@@ -605,13 +672,42 @@ function caseFile(caseId: string): { dir: string; path: string; file: ReturnType
   return { dir, path, file }
 }
 
-/** A case's file read with `faults` on the win32 host, then staged when it is checked. */
-async function faultedRun(faults: Faults, caseId = 'accept-std'): Promise<Run> {
-  const { dir, path } = caseFile(caseId)
+/** Bytes written to a scratch folder as the picked file. */
+function bytesFile(bytes: Buffer): { dir: string; path: string } {
+  const dir = scratch()
+  mkdirSync(join(dir, 'download'))
+  const path = join(dir, 'download', 'update.hrupdate')
+  writeFileSync(path, bytes)
+  return { dir, path }
+}
+
+/**
+ * A good update file of version 1.1.0 with these members after member 0, in this order, signed by the test key; with
+ * member 0's size and where each member's data starts.
+ */
+function customFile(members: ReadonlyArray<readonly [string, Buffer]>): { bytes: Buffer; envelopeSize: number; dataAt: Record<string, number> } {
+  const files = members.map(([name, data]) => ({ name, size: data.length, sha256: sha256(data) }))
+  const payload = JSON.stringify({ format: 1, product: 'hilbertraum', kind: 'release', channel: 'stable', version: '1.1.0', files })
+  const envelope = envelopeBytes(Buffer.from(payload, 'utf8'), {}, signers)
+  const parts = [ustarMember({ name: 'hilbertraum-release.dsse.json' }, envelope), ...members.map(([name, data]) => ustarMember({ name }, data))]
+  const dataAt: Record<string, number> = {}
+  let at = parts[0]!.length
+  members.forEach(([name], i) => {
+    dataAt[name] = at + 512
+    at += parts[i + 1]!.length
+  })
+  return { bytes: makeUstarFile({ members: parts }), envelopeSize: envelope.length, dataAt }
+}
+
+/** A case's file (by id) or the given bytes, read with `faults` on the win32 host, then staged when it is checked. */
+async function faultedRun(faults: Faults, source: string | Buffer = 'accept-std'): Promise<Run> {
+  const { dir, path } = typeof source === 'string' ? caseFile(source) : bytesFile(source)
   const rec = recorder(faults)
   const read = await readUpdateFile(path, { keys: TEST_KEYS, input: payloadInput(namedHost('win32')), fs: rec.fs, cancelled: () => false })
   const run: Run = { read, stage: null, staging: null, rec, progress: [] }
   if (read.kind === 'checked') {
+    // Nothing was written before the data pass: the header walk runs before any member is written (§4.3).
+    expect(rec.drivePaths).toEqual([])
     run.staging = makeStaging(dir, read.file.payload.version)
     rec.dataPass = true
     run.stage = await read.file.stage({ ...run.staging, cancelled: () => false, progress: () => undefined })
@@ -719,6 +815,96 @@ describe('a file-system call that fails is a typed verdict, never a throw (recor
     const run = await faultedRun({ unlink: injected('EPERM', 'unlink') }, 'data-hash-mismatch')
     expect(verdict(run.stage)).toEqual({ kind: 'refused', code: 'UPD-FILE-DAMAGED', params: {}, cause: null })
     expect(readdirSync(run.staging!.filesDir)).not.toContain('notes.txt')
+  })
+})
+
+/** The standard case's file (built in memory here; each row writes its own copy) and where its reads fall. */
+const STD = buildCaseFile(table, table.cases.find((c) => c.id === 'accept-std')!.build!, signers)
+const STD_ENVELOPE_SIZE = STD.envelope![1]
+const STD_FIRST_HEADER = 512 + Math.ceil(STD_ENVELOPE_SIZE / 512) * 512
+const APPLY_CMD = Buffer.from('@echo off\r\nexit /b 0\r\n', 'latin1')
+
+describe('a read that ends inside the length the open gave is UPD-FILE-DAMAGED, at each read (record §4.5 "The update file\u{2019}s open", T6.1 reading 1)', () => {
+  // Member 0's own read is the row "a read of member 0 that ends before the length the open gave" above; these are the
+  // other seven reads. Each read named returns 0 bytes (the file shrank after the open); a mutation that drops the test
+  // of that read's result answers otherwise, so each row holds its own branch.
+  type Row = { source: string | Buffer; readCap: NonNullable<Faults['readCap']>; dataPass: boolean; member?: string }
+  const DAMAGED = { kind: 'refused', code: 'UPD-FILE-DAMAGED', params: {}, cause: null }
+  const rows: Array<[string, () => Row]> = [
+    ['the first block', () => ({ source: 'accept-std', readCap: (r) => (!r.dataPass && r.position === 0 ? 0 : undefined), dataPass: false })],
+    [
+      'member 0\u{2019}s padding (dropping the test reads the fresh zeros as padding)',
+      () => {
+        expect(STD_FIRST_HEADER - 512 - STD_ENVELOPE_SIZE).toBeGreaterThan(0)
+        return { source: 'accept-std', readCap: (r) => (!r.dataPass && r.position === 512 + STD_ENVELOPE_SIZE ? 0 : undefined), dataPass: false }
+      }
+    ],
+    [
+      'a header of the walk (dropping the test reads the fresh zeros as an end block: incomplete)',
+      () => ({ source: 'accept-std', readCap: (r) => (!r.dataPass && r.position === STD_FIRST_HEADER ? 0 : undefined), dataPass: false })
+    ],
+    [
+      'the second end block (dropping the test keeps the first end block\u{2019}s zeros: a complete end)',
+      () => ({ source: 'accept-std', readCap: (r) => (!r.dataPass && r.position === STD.bytes.length - 512 ? 0 : undefined), dataPass: false })
+    ],
+    [
+      'a header of the data pass, its last 12 bytes (dropping the test leaves the fresh zeros, which equal the walk\u{2019}s)',
+      () => ({
+        source: 'accept-std',
+        readCap: (r) => (r.dataPass && r.position === STD_FIRST_HEADER ? 500 : r.dataPass && r.position === STD_FIRST_HEADER + 500 ? 0 : undefined),
+        dataPass: true,
+        member: 'apply.cmd'
+      })
+    ],
+    [
+      'the second slice of the last member, two identical 1 MiB slices (dropping the test hashes the stale first slice: a match)',
+      () => {
+        const file = customFile([['apply.cmd', APPLY_CMD], ['rep.bin', Buffer.alloc(2 * READ_SLICE_BYTES, 0x5a)]])
+        const second = file.dataAt['rep.bin']! + READ_SLICE_BYTES
+        return { source: file.bytes, readCap: (r) => (r.dataPass && r.position === second ? 0 : undefined), dataPass: true, member: 'rep.bin' }
+      }
+    ],
+    [
+      'a member\u{2019}s padding after 600 zero bytes (dropping the test checks the stale zeros of its data)',
+      () => {
+        const file = customFile([['apply.cmd', APPLY_CMD], ['zeros.bin', Buffer.alloc(600)]])
+        const pad = file.dataAt['zeros.bin']! + 600
+        return { source: file.bytes, readCap: (r) => (r.dataPass && r.position === pad ? 0 : undefined), dataPass: true, member: 'zeros.bin' }
+      }
+    ]
+  ]
+  it.each(rows)('%s', async (_label, row) => {
+    const { source, readCap, dataPass, member } = row()
+    const run = await faultedRun({ readCap }, source)
+    if (dataPass) {
+      expect(verdict(run.read)).toEqual({ kind: 'checked' })
+      expect(verdict(run.stage)).toEqual(DAMAGED)
+      expect(readdirSync(run.staging!.filesDir)).not.toContain(member)
+    } else {
+      expect(verdict(run.read)).toEqual(DAMAGED)
+      expect(run.stage).toBeNull()
+    }
+  })
+})
+
+describe('a cancel stops the read at the check point that asks, with what the read had learned (record §3.5 updates:cancel, §4.5 import-cancelled)', () => {
+  // `readTo`: how far into the file the reader had read when it stopped (the end of its furthest read).
+  it.each([
+    [1, 'after the open', { version: undefined, stale: null, readTo: 0 }],
+    [2, 'after member 0\u{2019}s header', { version: undefined, stale: null, readTo: 512 }],
+    [3, 'after member 0\u{2019}s bytes', { version: undefined, stale: null, readTo: 512 + STD_ENVELOPE_SIZE }],
+    [4, 'after the payload check', { version: '1.1.0', stale: false, readTo: 512 + STD_ENVELOPE_SIZE }],
+    [5, 'after the walk and the apply script', { version: '1.1.0', stale: false, readTo: STD.bytes.length }]
+  ] as const)('check point %i, %s', async (k, _where, expected) => {
+    const { path } = bytesFile(STD.bytes)
+    const rec = recorder()
+    let asked = 0
+    const read = await readUpdateFile(path, { keys: TEST_KEYS, input: payloadInput(namedHost('win32')), fs: rec.fs, cancelled: () => ++asked === k })
+    expect(verdict(read)).toEqual({ kind: 'cancelled' })
+    const facts = read.kind === 'cancelled' ? { version: read.payload?.version, stale: read.staleDriveVersion } : {}
+    expect({ ...facts, readTo: Math.max(0, ...rec.reads.map((r) => r.position + r.length)), asked }).toEqual({ ...expected, asked: k })
+    expect(rec.closed).toBe(rec.opened)
+    expect(rec.drivePaths).toEqual([])
   })
 })
 
