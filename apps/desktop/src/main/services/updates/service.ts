@@ -91,7 +91,8 @@ import type {
 
 /** The channels' one wait for the start step's sweep, from its start (record §4.5 "The start step"). */
 export const START_WAIT_MS = 10_000
-/** The drive part of `status` is read at most once per this many milliseconds of the monotonic clock (§3.5). */
+/** The drive part of `status` is read at most once per this many milliseconds of the monotonic clock, and never while a
+ *  run or a discard goes (§3.5). */
 export const DRIVE_READS_MS = 250
 
 const APPLYING_FOLDER = 'applying'
@@ -380,6 +381,9 @@ class Service implements UpdateService {
   /** The last import line this process wrote, for the repeated-refusal rule (N-7). */
   private lastImportLine: { readonly code: string | null; readonly beforeDialog: boolean } | null = null
   private driveReads: { readonly at: number; readonly reads: DriveReads } | null = null
+  /** The drive reads the run or the discard going took when it started: every status answer while it goes carries them,
+   *  and nothing of the drive is read for status meanwhile (§3.5; T6.2p). Null between them. */
+  private heldReads: DriveReads | null = null
   private audit: UpdateAuditHook | null = null
   /** The channels' one wait: resolved at once, or when the sweep ends or 10 s after it started. */
   private wait: Promise<void> = Promise.resolve()
@@ -450,7 +454,8 @@ class Service implements UpdateService {
       return await this.runImport(run, redeem, caller)
     } finally {
       this.run = null
-      // The reads made while it went show the run's own policy: the next answer reads again (§3.5's 250 ms rule).
+      this.heldReads = null
+      // The reads it took at its start show the run's own policy: the next answer reads again (§3.5's 250 ms rule).
       this.driveReads = null
     }
   }
@@ -477,6 +482,9 @@ class Service implements UpdateService {
     if (drive === null) return { kind: 'refused', refusal: this.notADrive() }
     const policy = this.deps.reads.policy(drive.configPath)
     run.policy = policy
+    // Status's drive reads, taken once here with the run's own policy, before its first check of the drive and its first
+    // write: every answer while the run goes carries them (§3.5; T6.2p).
+    this.heldReads = this.startReads(drive, run)
     if (policy.install === 'managed') return this.refuseBeforeDialog({ code: 'UPD-POLICY-MANAGED', params: {} })
     if (policy.install === 'invalid') return this.refuseBeforeDialog({ code: 'UPD-POLICY-INVALID', params: {} })
     const ctx = this.context(drive)
@@ -645,13 +653,8 @@ class Service implements UpdateService {
   private driveStatus(run: Run | null): UpdatesDriveStatus {
     const drive = this.drive
     if (drive === null) return NO_DRIVE
-    const now = this.deps.clock.monotonic()
-    let cached = this.driveReads
-    if (cached === null || !(now - cached.at < DRIVE_READS_MS)) {
-      cached = { at: now, reads: this.readDrive(drive, run) }
-      this.driveReads = cached
-    }
-    const { updatesFolder, inProgress, policy, supportEnd } = cached.reads
+    // While a run or a discard goes: the reads it took at its start, and nothing of the drive is read (§3.5; T6.2p).
+    const { updatesFolder, inProgress, policy, supportEnd } = this.heldReads ?? this.lastReads(drive, run)
     return {
       kind: 'prepared',
       updatesFolder,
@@ -664,8 +667,27 @@ class Service implements UpdateService {
     }
   }
 
+  /** The last drive reads while they are younger than DRIVE_READS_MS by the monotonic clock and not ended, else new ones
+   *  (§3.5's 250 ms rule). */
+  private lastReads(drive: PreparedPaths, run: Run | null): DriveReads {
+    const now = this.deps.clock.monotonic()
+    let cached = this.driveReads
+    if (cached === null || !(now - cached.at < DRIVE_READS_MS)) {
+      cached = { at: now, reads: this.readDrive(drive, run) }
+      this.driveReads = cached
+    }
+    return cached.reads
+  }
+
+  /** The reads a run or a discard takes when it starts (§3.5): the last ones, or new ones when those are 250 ms old or
+   *  ended. A read that throws (a handed hook; none of main's own throws) leaves none held, so status reads as between
+   *  runs, and the run or the discard goes on as before. */
+  private startReads(drive: PreparedPaths, run: Run | null): DriveReads | null {
+    return quietly(null, () => this.lastReads(drive, run))
+  }
+
   /** The drive part's reads: `updates/` by the links row, `updates/applying/` by one lstat, the policy (the run's own
-   *  while a run goes, never read again for it) and the support end. */
+   *  when a run takes them at its start, never read again for it) and the support end. */
   private readDrive(drive: PreparedPaths, run: Run | null): DriveReads {
     const found = findUpdates(this.deps.fs.start, drive.rootPath)
     return {
@@ -700,6 +722,8 @@ class Service implements UpdateService {
     // P7's place: a start that answers UPD-OLDER-THAN-DRIVE refuses here and writes no line (no such check in PR-6a).
     this.discarding = true
     try {
+      // Status's drive reads, taken once here: every answer while the discard goes carries them (§3.5; T6.2p).
+      this.heldReads = this.startReads(drive, null)
       // The request's own string version, read once: the drive half and the answer below see the same one.
       const asked = requestedVersion(argument)
       const staged = this.staged
@@ -722,6 +746,7 @@ class Service implements UpdateService {
       return { kind: 'refused', refusal: end.refusal }
     } finally {
       this.discarding = false
+      this.heldReads = null
     }
   }
 
@@ -786,11 +811,10 @@ class Service implements UpdateService {
     }
   }
 
-  /** A run or a discard may have removed the staged update: none is claimed from here (null while the drive still holds
-   *  it is the safe direction; the next start reads again), and the drive is read again at the next answer (§3.5). */
+  /** A run may have removed the staged update: none is claimed from here (null while the drive still holds it is the
+   *  safe direction; the next start reads again). The run's end ends the drive reads (§3.5). */
   private stagedMayBeGone(): void {
     this.staged = null
-    this.driveReads = null
   }
 
   private reportLeft(step: string, failure: RemovalFailure | null): void {

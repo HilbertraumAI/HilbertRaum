@@ -1174,7 +1174,7 @@ describe('the start step: a synchronous part of lstats, then the sweep on a late
     const afterDiscard = (await h.service.status()).drive
     expect(afterDiscard).toMatchObject({ staged: null, policy: { install: 'allowed', maxVersion: null, file: 'unreadable' } })
     expect(policyReads()).toBe(3)
-    // While a run goes, the policy is the run's own read, also when the drive is read again meanwhile.
+    // While a run goes, the policy is the run's own read, however old the reads it took at its start are.
     seams.beforeStage = async () => {
       setPolicy(h.drive, { install: 'allowed', maxVersion: '9.9.9' })
       h.mono.value += 250
@@ -1528,12 +1528,17 @@ describe('staged is null from the moment a run or a discard may have removed it 
     second = true
     const run = tracked(h.service.importFile())
     await held.reached
-    expect(await supportEnd(), 'the clock has not moved: the data pass of the staged version ended the cached reads').toEqual({ state: 'month', month: '2027-06' })
+    // While a run goes nothing of the drive is read (record §3.5 updates:status, T6.2p): its answers carry the reads it
+    // took at its start, from before kit-support.txt changed, however old they are; staged is null from its data pass on.
+    h.mono.value += 250
+    expect(await supportEnd(), 'the reads the run took at its start').toEqual({ state: 'absent' })
+    expect(await stagedOf(h), 'null from the data pass of the staged version on').toBeNull()
     expect(await h.service.cancel()).toEqual({ kind: 'stopping' })
     held.release()
     expect(await run.promise).toEqual({ kind: 'cancelled' })
     expect(stagedVersions(h.drive)).toEqual([])
     expect(await stagedOf(h)).toBeNull()
+    expect(await supportEnd(), 'the run ended: the next answer read the drive again').toEqual({ state: 'month', month: '2027-06' })
     expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'not-staged' })
     expect(await stagedOf(h)).toBeNull()
     expect(h.lines()).toEqual([onThisSystem(vector('i56')), onThisSystem(vector('i68'))])
@@ -1648,13 +1653,133 @@ describe('a cancel after the data pass, and the reads after a run (record §3.5 
       dialog: ['file'],
       bundleRules: [{ call: 'write', when: (rel) => rel.startsWith('updates/staging/.incoming-'), error: injected('EIO', 'write'), times: 1 }]
     })
+    // The clock never moves: the reads the run took at its start hold the run's own policy and are still younger than
+    // 250 ms after it, so only the run's end can make the next status read the drive again (T6.2p: no read while it goes).
     seams.beforeStage = async () => {
       setPolicy(h.drive, { install: 'allowed', maxVersion: '9.9.9' })
-      h.mono.value += 250
       expect(await policyOf(h), 'the run\u{2019}s own read').toEqual({ install: 'allowed', maxVersion: null, file: 'unreadable' })
     }
     expect(await h.service.importFile()).toMatchObject(CANT_WRITE_ANSWER)
-    expect(await policyOf(h), 'the clock has not moved since the read during the run').toEqual({ install: 'allowed', maxVersion: '9.9.9', file: 'read' })
+    expect(await policyOf(h), 'the clock has not moved since the run took its reads').toEqual({ install: 'allowed', maxVersion: '9.9.9', file: 'read' })
+  })
+})
+
+describe('while a run or a discard goes, status reads nothing of the drive (record §3.5 updates:status; T6.2p)', () => {
+  // T6.2p measured one status read holding the main process 97.5 ms on a USB 2 stick, behind the data pass's own writes.
+  // The drive reads of status (§3.5, "the drive part"): the calls of the start file system and the policy and support-end
+  // hooks. The run or the discard takes them once when it starts, and every answer while it goes carries those.
+  const driveReads = (h: Harness): { start: number; policy: number; kitSupport: number } => ({
+    start: h.start.calls.length,
+    policy: h.reads.filter((read) => read === 'policy').length,
+    kitSupport: h.reads.filter((read) => read === 'kitSupport').length
+  })
+  const supportEndOf = (status: UpdatesStatus): unknown => (status.drive.kind === 'prepared' ? status.drive.supportEnd : 'none')
+
+  interface Going {
+    items?: ReadonlyArray<Record<string, unknown>>
+    options: () => HarnessOptions
+    go: (h: Harness) => Promise<unknown>
+    /** Where it holds (the shared `held` gate when not given), and how it is let go. */
+    reached?: (h: Harness) => Promise<void>
+    release?: (h: Harness) => void
+    state: string
+    answer: Record<string, unknown>
+  }
+  const runs = (h: Harness): Promise<unknown> => h.service.importFile()
+  const goings: Array<[string, Going]> = [
+    [
+      'a run checking before the dialog (its probe held)',
+      { options: () => ({ dialog: ['closed'], stagingRules: [{ call: 'open', when: (rel) => rel === 'updates/.write-probe', hold: held }] }), go: runs, state: 'checking', answer: { kind: 'closed' } }
+    ],
+    [
+      'a run choosing (the dialog open)',
+      { options: () => ({ dialog: ['hold'] }), go: runs, reached: (h) => h.dialog.reached, release: (h) => h.dialog.release(null), state: 'choosing', answer: { kind: 'closed' } }
+    ],
+    [
+      'a run checking the file (its open held)',
+      { options: () => ({ dialog: ['file'], bundleRules: [{ call: 'open', when: (rel) => rel.endsWith('update.hrupdate'), hold: held }] }), go: runs, state: 'checking', answer: { kind: 'staged' } }
+    ],
+    [
+      'a run copying (a member\u{2019}s open held)',
+      { options: () => ({ dialog: ['file'], bundleRules: [{ call: 'open', when: (rel) => rel.startsWith('updates/staging/.incoming-'), hold: held }] }), go: runs, state: 'copying', answer: { kind: 'staged' } }
+    ],
+    [
+      'a run committing (its listing of updates/staging held)',
+      { options: () => ({ dialog: ['file'], stagingRules: [{ call: 'readdir', when: (rel) => rel === 'updates/staging', hold: held }] }), go: runs, state: 'committing', answer: { kind: 'staged' } }
+    ],
+    [
+      'a discard (its unlink of staged.json held)',
+      {
+        items: [{ staged: '1.1.0', bundle: 'std' }],
+        options: () => ({ stagingRules: [{ call: 'unlink', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', hold: held }] }),
+        go: (h) => h.service.discardStaged({ version: '1.1.0' }),
+        state: 'idle',
+        answer: { kind: 'discarded', version: '1.1.0' }
+      }
+    ]
+  ]
+  it.each(goings)('%s: no poll reads the drive, each carries the reads taken at its start, and the next status after its end reads again', async (_label, going) => {
+    held = gate()
+    const h = harness(WIN32, going.items ?? [], { build: STD_BUILD(), ...going.options() })
+    expect(supportEndOf(await h.service.status())).toEqual({ state: 'absent' })
+    const task = going.go(h)
+    await (going.reached?.(h) ?? held.reached)
+    const taken = driveReads(h)
+    writeFileSync(h.drive.at('config/kit-support.txt'), '2027-06\n')
+    for (let poll = 0; poll < 3; poll++) {
+      h.mono.value += 1_000
+      const status = await h.service.status()
+      expect({ state: status.import.state, supportEnd: supportEndOf(status) }, `poll ${poll}`).toEqual({ state: going.state, supportEnd: { state: 'absent' } })
+    }
+    expect(driveReads(h), 'no drive read while it goes').toEqual(taken)
+    if (going.release) going.release(h)
+    else held.release()
+    expect(await task).toMatchObject(going.answer)
+    const ended = driveReads(h)
+    expect(supportEndOf(await h.service.status()), 'the next status after its end reads the drive again').toEqual({ state: 'month', month: '2027-06' })
+    expect(driveReads(h).kitSupport).toBe(ended.kitSupport + 1)
+  })
+
+  it.each([
+    ['a run whose last reads are 249 ms old takes none at its start', 'run', 249, false, false],
+    ['a run whose last reads are 250 ms old takes them at its start', 'run', 250, false, true],
+    ['a run whose last reads a discard ended takes them at its start, the clock not moved', 'run', 0, true, true],
+    ['a discard whose last reads are 249 ms old takes none at its start', 'discard', 249, false, false],
+    ['a discard whose last reads are 250 ms old takes them at its start', 'discard', 250, false, true]
+  ] as const)('%s', async (_label, kind, age, endedFirst, takes) => {
+    held = gate()
+    const h = harness(
+      WIN32,
+      [{ staged: '1.1.0', bundle: 'std' }],
+      kind === 'run' ? { dialog: ['hold'] } : { stagingRules: [{ call: 'unlink', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', hold: held }] }
+    )
+    expect(supportEndOf(await h.service.status())).toEqual({ state: 'absent' })
+    if (endedFirst) expect(await h.service.discardStaged({ version: '1.0.9' })).toEqual({ kind: 'not-staged' })
+    writeFileSync(h.drive.at('config/kit-support.txt'), '2027-06\n')
+    h.mono.value += age
+    const before = driveReads(h)
+    const task = kind === 'run' ? h.service.importFile() : h.service.discardStaged({ version: '1.1.0' })
+    await (kind === 'run' ? h.dialog.reached : held.reached)
+    const after = driveReads(h)
+    expect({ start: after.start > before.start, kitSupport: after.kitSupport - before.kitSupport }, 'the reads at its start').toEqual({ start: takes, kitSupport: takes ? 1 : 0 })
+    h.mono.value += 1_000
+    expect(supportEndOf(await h.service.status()), 'what every answer while it goes carries').toEqual(takes ? { state: 'month', month: '2027-06' } : { state: 'absent' })
+    if (kind === 'run') h.dialog.release(null)
+    else held.release()
+    expect(await task).toMatchObject(kind === 'run' ? { kind: 'closed' } : { kind: 'discarded', version: '1.1.0' })
+  })
+
+  // The reads a run or a discard takes for status are not the run's own: one that throws (a handed hook; main's own never
+  // throw) leaves the run and the discard answering as they did before they took any.
+  it('a drive read for status that throws (a monotonic clock that throws) never fails the run or the discard that takes it', async () => {
+    const h = harness(WIN32, [], { build: STD_BUILD(), dialog: ['file'] })
+    Object.defineProperty(h.mono, 'value', {
+      get: () => {
+        throw new Error('a monotonic clock that throws')
+      }
+    })
+    expect(await h.service.importFile()).toMatchObject({ kind: 'staged', update: { version: '1.1.0' } })
+    expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'discarded', version: '1.1.0' })
   })
 })
 
