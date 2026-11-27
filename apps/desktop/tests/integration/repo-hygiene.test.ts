@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash, generateKeyPairSync } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import * as ts from 'typescript'
 import { transformWithEsbuild } from 'vite'
@@ -11,6 +12,7 @@ import { UPDATE_ADDRESS } from '../../src/shared/update-address'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
 import { supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import { ENCRYPTED_DOC_SUFFIX } from '../../src/main/services/workspace-vault'
+import { readKeysFile } from '../../src/main/services/updates/bundle-check'
 import { I18N_DIR, catalogOf } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
@@ -1607,6 +1609,194 @@ describe('repo hygiene — every golden fixture matches the sha256 manifest (T2.
     }
     expect(problems).toEqual([])
     expect(ALWAYS_GOLDEN.every((dir) => paths.some((p) => p.startsWith(`${dir}/`)))).toBe(true) // never an empty lock
+  })
+})
+
+// App-update C8 (docs/app-updates.md §2.7 "Test keys", §10.7 "No private key"; T4.1, widened by T4.5 L-1): no file under
+// tests/fixtures/ holds a private key, test keys included. The vector generators make each key pair in memory and write
+// only its public half; this row refuses, in every file there whatever its extension or folder: the start of a PKCS#8
+// Ed25519 private key, v1 (RFC 5208) or v2 (RFC 5958's OneAsymmetricKey, which adds the public key: a SEQUENCE of 0x51
+// bytes with RFC 5958's implicit `[1]`, of 0x53 where an encoder wraps the BIT STRING; Node 24 loads both), as hex in
+// either case or as base64; a PEM `PRIVATE KEY` armor line; and a JWK private key (a `"kty"` key with the value `"OKP"`
+// beside a `"d"` key). What it cannot catch: a raw 32-byte seed (or a seed followed by its public key), which no text
+// tells from a public key or a hash (each generator's review holds that case); a key inside a base64 payload (the
+// base64 start is found only where the key's DER begins the encoded bytes, or a multiple of three bytes into them, and a
+// PEM text encoded again is not decoded); a key in any other encoding; and a file outside tests/fixtures/.
+describe('repo hygiene — no private key under tests/fixtures/ (app-update C8, record §10.7)', () => {
+  const dir = join(DESKTOP_ROOT, 'tests', 'fixtures')
+  const PKCS8_ED25519_HEX = '302e020100300506032b657004220420'
+  const PKCS8_ED25519_BASE64 = 'MC4CAQAw' + 'BQYDK2VwBCIEI' // in two parts, so this file is no match for a secret scanner
+  // v2's two SEQUENCE lengths (0x51, 0x53), also in parts.
+  const PKCS8_V2_ED25519_HEX = ['3051', '3053'].map((start) => start + '020101' + '300506032b657004220420')
+  const PKCS8_V2_ED25519_BASE64 = ['MFEC', 'MFMC'].map((start) => start + 'AQEw' + 'BQYDK2VwBCIEI')
+  const PEM_PRIVATE = /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/
+
+  /** The private-key forms a text holds, by name. */
+  const privateKeyForms = (text: string): string[] => {
+    const found: string[] = []
+    const lower = text.toLowerCase()
+    if (lower.includes(PKCS8_ED25519_HEX)) found.push('PKCS#8 Ed25519 key (hex)')
+    if (text.includes(PKCS8_ED25519_BASE64)) found.push('PKCS#8 Ed25519 key (base64)')
+    if (PKCS8_V2_ED25519_HEX.some((needle) => lower.includes(needle))) found.push('PKCS#8 v2 Ed25519 key (hex)')
+    if (PKCS8_V2_ED25519_BASE64.some((needle) => text.includes(needle))) found.push('PKCS#8 v2 Ed25519 key (base64)')
+    if (PEM_PRIVATE.test(text)) found.push('a PRIVATE KEY line')
+    if (/"kty"\s*:\s*"OKP"/.test(text) && /"d"\s*:/.test(text)) found.push('a JWK private key')
+    return found
+  }
+
+  it('no file there holds the start of a PKCS#8 Ed25519 key, a PRIVATE KEY line or a JWK private key', () => {
+    const files = filesUnder(dir, /./) // throws on zero, so the scan cannot pass on nothing
+    // latin1 reads every byte as one character, so a binary file is scanned too and never throws.
+    const offenders = files.flatMap((p) =>
+      privateKeyForms(readFileSync(p, 'latin1')).map((form) => `${relative(DESKTOP_ROOT, p).split(sep).join('/')}: ${form}`)
+    )
+    expect(offenders).toEqual([])
+  })
+
+  it('the scan finds each form (hex in either case) and passes public keys and prose', () => {
+    const pem = (label: string): string => `-----BEGIN ${label}-----\nAAAA\n-----END ${label}-----\n`
+    expect(privateKeyForms(`{"pkcs8":"${PKCS8_ED25519_HEX}00"}`)).toEqual(['PKCS#8 Ed25519 key (hex)'])
+    expect(privateKeyForms(PKCS8_ED25519_HEX.toUpperCase())).toEqual(['PKCS#8 Ed25519 key (hex)'])
+    expect(privateKeyForms(`${PKCS8_ED25519_BASE64}g`)).toEqual(['PKCS#8 Ed25519 key (base64)'])
+    // v2, both lengths (T4.5 L-1): each built from its DER start, a seed of zeros after it.
+    for (const len of ['51', '53']) {
+      const v2 = Buffer.from(`30${len}020101300506032b657004220420` + '00'.repeat(32), 'hex')
+      expect(privateKeyForms(`{"pkcs8":"${v2.toString('hex')}"}`), len).toEqual(['PKCS#8 v2 Ed25519 key (hex)'])
+      expect(privateKeyForms(v2.toString('hex').toUpperCase()), len).toEqual(['PKCS#8 v2 Ed25519 key (hex)'])
+      expect(privateKeyForms(`"${v2.toString('base64')}"`), len).toEqual(['PKCS#8 v2 Ed25519 key (base64)'])
+    }
+    expect(privateKeyForms(pem('PRIVATE KEY'))).toEqual(['a PRIVATE KEY line'])
+    expect(privateKeyForms(pem('OPENSSH PRIVATE KEY'))).toEqual(['a PRIVATE KEY line'])
+    expect(privateKeyForms('{"kty":"OKP","crv":"Ed25519","x":"AAAA","d":"AAAA"}')).toEqual(['a JWK private key'])
+    expect(privateKeyForms('{\n  "kty" : "OKP",\n  "crv": "Ed25519",\n  "d"\t:\n "AAAA"\n}')).toEqual(['a JWK private key'])
+    // Public halves, other key types and prose about the rule pass.
+    for (const text of [
+      'MCowBQYDK2VwAyEA' + 'A'.repeat(43) + '=', // an Ed25519 SPKI in base64 (record §2.7)
+      '302a300506032b6570032100' + '00'.repeat(32), // the same in hex
+      PKCS8_ED25519_BASE64.toLowerCase(), // base64 is case-sensitive
+      pem('PUBLIC KEY'),
+      '{"kty":"OKP","crv":"Ed25519","x":"AAAA"}', // a JWK public key
+      'No file holds a PRIVATE KEY line, a "kty" of "OKP" or a "d" key.'
+    ]) {
+      expect(privateKeyForms(text), text).toEqual([])
+    }
+  })
+})
+
+// App-update M-1 (T4.5 security review; docs/app-updates.md §2.7 "Test keys", plan C8): no key of the committed keys.json
+// is a test key. Under K1 any one embedded key signs alone for the life of a build, and neither the release guard (it
+// compares the build with this file) nor a key count (it counts this file) tells a test key from a real one, so this
+// row compares the keys themselves, by id (§2.7, "A key's id"). None may be one of RFC 8032 §7.1's five test keys (the
+// RFC prints their private halves; taken from spec/ed25519.json's PUBLIC KEY values), nor a public key a committed
+// vector names: an entry of a `keys` list, of a `keySet` string, or of the `key_set` in a `keysJson` text, at any depth
+// of any .json under tests/fixtures/updates/vectors/. keys.json is read as the file readers read it (`readKeysFile`,
+// through the one parser), so a file that does not read fails here too. Not caught: a test key that no committed file
+// names (a key a test makes at run time, the walk's one-time key, §10.4); the key proof and the owner's key count (§2.8)
+// keep those out. The set is empty until the key ceremony, so the second and third rows prove the check on keys of
+// their own.
+describe('repo hygiene — the committed keys.json holds no RFC 8032 test key and no vector key (app-update M-1, C8)', () => {
+  const KEYS_JSON = join(DESKTOP_ROOT, 'src', 'main', 'services', 'updates', 'keys.json')
+  const VECTORS = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates', 'vectors')
+  const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex') // record §2.7, "Shape"
+  const idOf = (der: Buffer): string => createHash('sha256').update(der).digest('hex')
+  const readJson = (...rel: string[]): unknown => JSON.parse(readFileSync(join(VECTORS, ...rel), 'utf8'))
+
+  /** The ids of RFC 8032 §7.1's five keys, from spec/ed25519.json's `publicKey` (the RFC's printed hex). */
+  const rfc8032Ids = (): Set<string> =>
+    new Set((readJson('spec', 'ed25519.json') as Array<{ publicKey: string }>).map((v) => idOf(Buffer.concat([SPKI_PREFIX, Buffer.from(v.publicKey, 'hex')]))))
+
+  /** The ids of the keys a parsed vector file names in a `keys` list, a `keySet` or a `keysJson` text, at any depth. */
+  const keyIdsIn = (value: unknown, ids: Set<string> = new Set()): Set<string> => {
+    const add = (entry: unknown): void => {
+      if (typeof entry !== 'string') return
+      const der = Buffer.from(entry, 'base64') // lenient on purpose: a vector's malformed entry may still hold a key
+      if (der.length === SPKI_PREFIX.length + 32 && der.subarray(0, SPKI_PREFIX.length).equals(SPKI_PREFIX)) ids.add(idOf(der))
+    }
+    const addSet = (keySet: unknown): void => {
+      if (typeof keySet === 'string') keySet.slice(keySet.indexOf(':') + 1).split(',').forEach(add)
+    }
+    if (Array.isArray(value)) value.forEach((item) => keyIdsIn(item, ids))
+    else if (typeof value === 'object' && value !== null) {
+      for (const [name, field] of Object.entries(value)) {
+        if (name === 'keys' && Array.isArray(field)) field.forEach(add)
+        if (name === 'keySet') addSet(field)
+        if (name === 'keysJson' && typeof field === 'string') {
+          try {
+            addSet((JSON.parse(field.charCodeAt(0) === 0xfeff ? field.slice(1) : field) as { key_set?: unknown } | null)?.key_set)
+          } catch {
+            // a vector's keys.json text that is no JSON names no key here
+          }
+        }
+        keyIdsIn(field, ids)
+      }
+    }
+    return ids
+  }
+
+  let known: { readonly rfc: Set<string>; readonly vectors: Set<string> } | undefined
+  const knownKeys = (): { readonly rfc: Set<string>; readonly vectors: Set<string> } =>
+    (known ??= { rfc: rfc8032Ids(), vectors: filesUnder(VECTORS, /\.json$/).reduce((ids, path) => keyIdsIn(JSON.parse(readFileSync(path, 'utf8')), ids), new Set<string>()) })
+
+  /** The test keys among the keys of the keys.json at `path`: one line per finding, in the set's order. */
+  const testKeysIn = (path: string): string[] => {
+    const read = readKeysFile(readFileSync(path))
+    if (!read.valid) return [`keys.json does not read (${read.fault})`]
+    const { rfc, vectors } = knownKeys()
+    return read.keys.flatMap(({ id }) => [
+      ...(rfc.has(id) ? [`${id}: one of RFC 8032 §7.1's five test keys`] : []),
+      ...(vectors.has(id) ? [`${id}: a public key a committed vector names`] : [])
+    ])
+  }
+
+  it('no key of the committed keys.json is an RFC 8032 test key or a key a committed vector names', () => {
+    expect(testKeysIn(KEYS_JSON)).toEqual([])
+  })
+
+  it('a scratch keys.json: an RFC 8032 key and vector keys are named, a key no file names passes', () => {
+    // RFC 8032 TEST 1's key and id as spec/ed25519.json holds them (the id computed by a second tool, PROVENANCE.md), the
+    // first key of a positive and of a negative envelope vector, and a key made here (its public half only).
+    const rfc = (readJson('spec', 'ed25519.json') as Array<{ spki: string; keyId: string }>)[0]!
+    const vectorKey = (...rel: string[]): string => (readJson(...rel) as Array<{ keys?: string[] }>).find((v) => (v.keys ?? []).length > 0)!.keys![0]!
+    const positive = vectorKey('positive', 'vectors-envelope.json')
+    const negative = vectorKey('negative', 'vectors-envelope.json')
+    const fresh = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')
+    const committed = readKeysFile(readFileSync(KEYS_JSON))
+    const marker = committed.valid ? committed.value.slice(0, committed.value.indexOf(':') + 1) : ''
+    expect(marker).not.toBe('')
+    const named = (key: string): string => `${idOf(Buffer.from(key, 'base64'))}: a public key a committed vector names`
+    const dir = mkdtempSync(join(tmpdir(), 'hr-hygiene-keys-'))
+    try {
+      const write = (name: string, text: string): string => {
+        writeFileSync(join(dir, name), text)
+        return join(dir, name)
+      }
+      const keysJson = (keys: string[]): string => `${JSON.stringify({ key_set: marker + keys.join(',') }, null, 2)}\n`
+      expect(testKeysIn(write('test-keys.json', keysJson([rfc.spki, fresh, positive, negative])))).toEqual([
+        `${rfc.keyId}: one of RFC 8032 §7.1's five test keys`,
+        named(rfc.spki),
+        named(positive),
+        named(negative)
+      ])
+      expect(testKeysIn(write('fresh-key.json', keysJson([fresh])))).toEqual([])
+      expect(testKeysIn(write('no-set.json', '{}\n'))).toEqual(['keys.json does not read (not-a-string)'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    expect(knownKeys().rfc.size).toBe(5)
+  })
+
+  it('the vector reader takes a key from a keys list, a keySet and a keysJson text at any depth, and skips malformed ones', () => {
+    const keys = Array.from({ length: 3 }, () => generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }))
+    const [a, b, c] = keys.map((der) => der.toString('base64'))
+    const bom = String.fromCharCode(0xfeff) // the file readers refuse it; the key in the text is still named
+    const found = keyIdsIn([
+      { keys: [a, 7, 'not base64'] },
+      { nested: [{ deeper: { keySet: `any-marker:${b}` } }] },
+      { other: { keysJson: `${bom}${JSON.stringify({ key_set: `any-marker:${c}` })}` } },
+      { keysJson: '{"key_set":' },
+      { keySet: 7 }
+    ])
+    expect([...found].sort()).toEqual(keys.map(idOf).sort())
   })
 })
 

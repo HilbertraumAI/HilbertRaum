@@ -107,7 +107,7 @@ of P1 in §11.2. §12 defines the ids.
 | G-21 | No online check in release 1 and not in this wave; it is built for the first update after release 1 | §3.1 |
 | G-22 | Release 1 accepts the channel `stable` only; only Kit releases are signed for now | §2.6 |
 | G-23 | Release 1 carries everything the plan lists; nothing is cut | §1.2 |
-| G-24 | An update can carry a minimum OS version per system, Linux included as a glibc floor; release 1 refuses below it before staging, and also when a `linux` floor or this computer's glibc can't be read (fail closed, 2026-11-24); a release that raises a floor is not offered to the Kit channel while a supported Kit stated a lower one at sale | §2.4, §9.3 |
+| G-24 | An update can carry a minimum OS version per system, Linux included as a glibc floor; release 1 refuses below it before staging, and also when a `linux` floor can't be read, or when the update names a `linux` floor and this computer's glibc can't be read (fail closed, 2026-11-24; the condition owner 2026-11-26); a release that raises a floor is not offered to the Kit channel while a supported Kit stated a lower one at sale | §2.4, §9.3 |
 | G-26 | The system requirements printed with a Kit: Windows 11, or a Mac with Apple Silicon on a macOS version Apple still supports, at least 8 GB of memory, and Linux with the distribution floors of `READ ME FIRST.txt`; no Windows 10 | §11.5 |
 | G-27 | Update files stay under GitHub's 2 GiB asset limit; a larger one is hosted on the mirror | §9.4 |
 | G-28 | Code signing of the AI engines for Windows Kits: deferred by the owner | §6.8, §11.1 |
@@ -146,10 +146,10 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 
 | F | Contract, in one line | § | Owning phase | Status |
 |---|---|---|---|---|
-| F-1 | Envelope verification: DSSE PAE, Ed25519, standard and URL-safe base64; a 4 MiB size cap checked before the envelope is parsed and a 64-signature cap counted after the parse, whose excess is "too new", never "not genuine"; the typed unknown-signer answer | §2.3, §4.3 | P4 | planned; values approved |
-| F-2 | Payload forward compatibility: unknown fields ignored, a new `format` major refused, `files[]` lists every member, the optional `group`, `install_as`, `requires`, `summary` and `min_upgrade_from`, `channel: "stable"` only, other HilbertRaum payload types answered "for a newer HilbertRaum" | §2.4, §2.6, §4.3 | P4 | planned; table A's values approved; the `linux` floor settled by spike 4a, fail closed (§2.4) |
-| F-3 | The embedded public keys (`keys.json`) | §2.7 | P4; the owner's key ceremony | planned |
-| F-4 | The version rule | §2.5 | P4 | planned |
+| F-1 | Envelope verification: DSSE PAE, Ed25519, standard and URL-safe base64; a 4 MiB size cap checked before the envelope is parsed and a 64-signature cap counted after the parse, whose excess is "too new", never "not genuine"; the typed unknown-signer answer | §2.3, §4.3 | P4 | as built in P4 (`verifyEnvelope`, `updates/envelope.ts`: T4.1 `d6618f79` and its fix rounds to `f1864cbf`), golden `updates/vectors/` (§10.7); values set (T4.0, owner 2026-11-26); T4.1's Fable review, the adversarial review (T4.4d) and the second Fable review (T4.5) sound with limits, their points applied (the record's in T4.D) |
+| F-2 | Payload forward compatibility: unknown fields ignored, a new `format` major refused, `files[]` lists every member, the optional `group`, `install_as`, `requires`, `summary` and `min_upgrade_from`, `channel: "stable"` only, other HilbertRaum payload types answered "for a newer HilbertRaum" | §2.4, §2.6, §4.3 | P4 | as built in P4 (`checkPayload`, `updates/payload.ts`: T4.2 `10989dd1` and its fix rounds to `fb9f7160`), golden `updates/vectors/` (§10.7); table A's values approved; values set (T4.0, owner 2026-11-26); the `linux` floor settled by spike 4a, fail closed (§2.4); T4.2's Fable review, the adversarial review (T4.4d) and the second Fable review (T4.5) sound with limits, their points applied (the record's in T4.D) |
+| F-3 | The embedded public keys (`keys.json`) | §2.7 | P4; the owner's key ceremony | as built in P4 (`keys.json` with the empty set, `keys.ts`, `parseKeySet` in `updates/envelope.ts`: T4.1 `d6618f79`, the weak-key rule `aeda35af`; the release guard, replaceable, `068ac2c7` and `602677c4`), golden `updates/vectors/spec/key-set.json` (§10.7); the production keys wait for the ceremony (O2); values set (T4.0, owner 2026-11-26); T4.1's and T4.3's Fable reviews, the adversarial review (T4.4d) and the second Fable review (T4.5) sound with limits, their points applied (the record's in T4.D) |
+| F-4 | The version rule | §2.5 | P4 | as built in P4 (`checkVersionRule`, `updates/version.ts`: T4.2 `10989dd1`, `3683ea2c`), golden `updates/vectors/` (§10.7); values set (T4.0, owner 2026-11-26); T4.2's Fable review, the adversarial review (T4.4d) and the second Fable review (T4.5) sound with limits, their points applied (the record's in T4.D) |
 | F-5 | The `updates/` layout and staging: one commit marker, at most one staged update, the start-up sweep, no import while an update is in progress | §4.2, §4.5, §4.6 | P6 | planned; values approved |
 | F-6 | The hand-off from the app to the apply script after a clean lock: `handoff.txt`, the scripts' copies, the `finish-<n>` cap, the spawn and its acknowledgement, the removal of a finished or dead `updates/applying/` | §5.3, §5.4 | P7 | planned; values approved (the Linux spawn measured by spike 4a; the macOS spawn pending spike 3, §5.4) |
 | F-7 | The rules of release 1's start files: resume an interrupted apply (rule 1), the launch counter and its fallback, restore from `updates/previous/` (rule 2), refuse two apps (rule 3), every path ending in one parsed block, and the lines they print | §5.6 | P7 | planned; values approved (`start-hilbertraum.sh`'s rule 1 measured by spike 4a; the `.command`'s rule 1 provisional until spike 3; the Windows in-flight probe can reopen on P11a's Defender row, §5.6) |
@@ -163,7 +163,7 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 | F-15 | Released migration step ids and their source hashes | §7.8 | P10 | planned |
 | F-16 | The update file container: the ustar subset read in process, the reserved `HRUPDATE` prefix | §4.3 | P1 (table), P6 (reader), P5 (writer) | planned; table A approved |
 | F-17 | The online check's request contract | §3.1 | P9, after release 1 | not in release 1 |
-| F-18 | The member-name rule, and the root-artifact globs release 1 reads | §4.4 | P6 | planned; values approved |
+| F-18 | The member-name rule, and the root-artifact globs release 1 reads | §4.4 | P4 (the names), P6 | the member-name rule as built in P4 (`updates/member-name.ts`, T4.2 `10989dd1`; golden rows in `updates-artifact-names.test.ts`, CF-45), T4.2's Fable review and the adversarial review (T4.4d) sound with limits, the second Fable review (T4.5) sound; the root globs (`rootArtifactOf`, P3) and staging's use of the names planned (P6); values approved |
 | F-19 | What release 1 offers at a start when an update is staged or in progress, and the older-than-drive notice | §5.7 | P7 | planned; values approved |
 | F-20 | `updates/last-result.txt`, the outcome codes, the `UPD-*` reference codes and the old version's notices | §5.3, §5.8 | P7 | planned; values approved |
 | F-21 | The refusal on a root that is not a prepared drive, and the two drive-awareness fixes | §3.6 | P6 (the refusal, the macOS notice), P7 (the static AppImage runtime, T7.12) | planned (the Linux `APPIMAGE` lookup is on master and found the root in every start mode, spike 4a) |
@@ -178,7 +178,12 @@ The table lists the contract ids (F-n) that the code and the docs cite.
 
 ## 2. Trust
 
-_Status: planned (P4). The production keys come from the owner's key ceremony (§2.2)._
+_Status: as built in P4 (branch `feat/updates-trust-core`; this record describes the code at `1942d717`):
+the envelope's verification (§2.3), the payload (§2.4), the version rule (§2.5), `keys.json`, its parser
+and the release guard (§2.7) and the verdicts (§2.10), with the contract vectors (§10.7). The exact values
+were set by P4's value table (T4.0, 2026-11-26) before T4.1 started. Still planned: the production keys,
+from the owner's key ceremony (§2.2, O2), and the key proof (§2.8), on release 1's candidate; the import
+that calls these functions is P6's (§3, §4), the release tools that sign are P5's (§9)._
 
 ### 2.1 Three keys, any one signs alone
 
@@ -190,8 +195,8 @@ Release 1 embeds three Ed25519 public keys (K2):
 
 A release-1 Kit accepts a signature from **any one** of its three keys and has **no way to withdraw a
 key** (K1). Each key alone is therefore trusted for the Kit's whole support period. Dropping a stolen
-key in a later release protects only the Kits that install that release; offline custody is the whole
-defense.
+key in a later release protects only the Kits that install that release and stay on it (a "Go back" to a
+version that still embeds the key trusts it again, §6.10, §11.3); offline custody is the whole defense.
 
 ### 2.2 Custody and the runbook
 
@@ -204,6 +209,8 @@ defense.
   supported release embeds its public half. A key an attacker already used can sign a release that
   embeds any keys, so speed and offline custody are the defense, not a second signature for key
   changes.
+- The three keys sign `DSSEv1` PAE bytes only (§2.3), never a file, a commit, a tag or a challenge
+  directly.
 - Agents never generate, hold or use a signing key (§9.8).
 
 ### 2.3 The envelope: DSSE with Ed25519
@@ -225,10 +232,11 @@ Ed25519 and no BLAKE2b, so minisign's default format is out):
   key: install the in-between update first", with the update address and the manual replacement, for
   the case where none of release 1's keys signs any more. It is never "not genuine";
 - **when no signature verifies under an embedded key**: `UnknownSigner` if no signature's `keyid`
-  equals the id of an embedded key, else `UPD-NOT-GENUINE`. P4 confirms this rule and its `keyid` form
-  in F-1's golden vectors before the freeze. Accepted: a forged file whose signatures carry made-up
-  `keyid`s reads "signed with a newer key: install the in-between update first"; it is refused either
-  way, and the copy may send the user looking for an in-between update that does not exist;
+  equals the id of an embedded key, else `UPD-NOT-GENUINE`; confirmed by T4.0 with the `keyid` form
+  (§2.7) and the table below, and held by F-1's golden vectors (§10.7). Accepted: a forged file whose
+  signatures carry made-up `keyid`s, or none, or that has no signature at all, reads "signed with a
+  newer key: install the in-between update first"; it is refused either way, and the copy may send the
+  user looking for an in-between update that does not exist;
 - no trust on first use and no key a user adds.
 
 The verdicts carry these reference codes (§5.8): `UpdateTooNew` is shown as `UPD-TOO-NEW` and
@@ -236,6 +244,36 @@ The verdicts carry these reference codes (§5.8): `UpdateTooNew` is shown as `UP
 
 The release `payloadType` string and the envelope's place in the update file are part of the
 container (§4.3).
+
+**The envelope's values** (T4.0; F-1). One pure function reads member 0's bytes; its only other
+arguments are the key set (§2.7) and the running version (a parameter of some answers, §2.10). Its
+checks run in the order of the table, the first one that fails deciding; a row without an answer
+defines a term the others use. Its answers are §2.10's. As built it is `verifyEnvelope(bytes, keys,
+runningVersion)` in `updates/envelope.ts`, and it never throws: not for any bytes, not with the keys
+`parseKeySet` read (§2.7), and not with a `keys` that is no array (`undefined`, or `parseKeySet`'s whole
+result passed by mistake), which it answers as it answers an empty set, `UPD-NOT-AVAILABLE`. A `keys`
+array that holds anything but `parseKeySet`'s keys is no key set and outside this contract (T4.1 review
+m-2).
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| The key set | an empty key set (§2.7) → `UPD-NOT-AVAILABLE`, before a byte of member 0 is read (an empty set can verify nothing; a fork ships one to turn updates off, §2.9). P6 may refuse with `UPD-NOT-AVAILABLE` before the update file is opened; the container's own checks (§4.3, §4.5) otherwise come first | §2.7, §5.8 | R1 |
+| Size | more than 4,194,304 bytes → `UPD-TOO-NEW`, before the parse (the container refuses a larger member 0 first, §4.3; the release tools call this function on the bare envelope) | F-1, §4.3 | R1 |
+| Text | the bytes are UTF-8 as RFC 3629 defines it (no overlong form, no encoded surrogate, nothing above U+10FFFF) and do not start with a byte-order mark (EF BB BF); else `UPD-FILE-DAMAGED`. A decoder that drops a leading mark by itself is only used after the first three bytes were checked. No writer writes a mark, and member 0 is never edited by hand, so the strict reading costs no genuine file anything | RFC 8259 §8.1 (UTF-8; "MUST NOT add a byte order mark"); owner 2026-11-26 (`UPD-FILE-DAMAGED`) | R1 |
+| JSON | one JSON text as ECMA-262's `JSON.parse` reads it (RFC 8259's grammar) whose top level is an object; else `UPD-FILE-DAMAGED` (member 0 has the envelope's name, so a text that is no envelope is most likely damage, and the advice is the same: download it again). In these tables (§2.3, §2.4, §2.7) **an object** is a JSON object: never an array and never `null` (F-13's reader, `parseDriveReleaseText`, draws the same line). Only own keys count (an own `__proto__` key is an unknown key); with a duplicate key the last one counts; keys are compared code unit for code unit after JSON's escapes are decoded; unknown keys are ignored. The reader reads the named own keys only and never walks the parsed value as a whole. Every exception of the parse, whatever its type, is no JSON, a refusal for the text's depth included (how deep `JSON.parse` goes is the engine's); writers never nest beyond 64 levels. A lone surrogate written as a JSON escape is kept by `JSON.parse` (many other JSON parsers refuse the whole text): release 1 reads such a string as the code units written, in every key and value it reads or ignores, and only the rows that need well-formed text refuse or ignore one (`payloadType` below, `summary` in §2.4); held by the vector `rev2-lone-surrogates-in-ignored-strings-accepted` (T4.5 m-7). Writers write none ("Writers: the form") | DSSE `envelope.md` ("Consumers MUST ignore unrecognized fields"); F-13's reader (§8.5), the precedent; owner 2026-11-26 (`UPD-FILE-DAMAGED`) | R1 |
+| `signatures` | an own array, else `UPD-FILE-DAMAGED`; more than 64 entries, whatever they hold → `UPD-TOO-NEW`, before any signature is verified; 0 entries is legal (it verifies nothing) | F-1, §2.3 above; owner 2026-11-26 (`UPD-FILE-DAMAGED`) | R1 |
+| `payloadType` | an own string without a lone surrogate (so its UTF-8 bytes exist), else `UPD-FILE-DAMAGED`; the empty string is legal. Read here only for the PAE; what it means is decided after a signature verified (the last row) | DSSE `protocol.md` (PAYLOAD_TYPE, UTF8()); owner 2026-11-26 (`UPD-FILE-DAMAGED`) | R1 |
+| `payload` | an own string in the base64 grammar of the next row, else `UPD-FILE-DAMAGED`. Its decoded bytes are the payload: verified, then read by §2.4 as they are, never re-encoded, re-serialised or taken from the envelope a second time. They are handed on in a buffer of their own, the very buffer the signature was checked over, never a slice of Node's shared buffer pool (Electron 43.8.10's pool is 64 KiB, so a decoded payload below 32 KiB would otherwise share memory with unrelated buffers of the process; T4.4d m-6, `f1864cbf`) | DSSE `protocol.md` ("MUST NOT re-parse the envelope after verification"); owner 2026-11-26 (`UPD-FILE-DAMAGED`) | R1 |
+| The base64 grammar (`payload`, `sig`) | RFC 4648 base64 in one alphabet per string: standard (`A`–`Z`, `a`–`z`, `0`–`9`, `+`, `/`) or URL-safe (`-` and `_` in place of `+` and `/`); a string holding one of `+` `/` and one of `-` `_` is in neither and fails. Padding is required: the length is a multiple of 4, and `=` stands only as the last one or two characters. No whitespace, line break or other character. The unused bits of the last character before the padding are zero. The empty string is legal (0 bytes). The grammar is checked by hand (Node's own `base64` decoder accepts all of the above and more); a string that passes it is then decoded as written, in either alphabet, never rewritten into one alphabet first (no answer changes; T4.4d m-4, `f1864cbf`: a URL-safe text at the cap no longer costs ~0.6 s before any signature is checked) | DSSE `protocol.md` ("verifiers MUST accept either"), `envelope.md` (Base64 is RFC 4648); RFC 4648 §3.2 (padding unless the referring specification says otherwise; DSSE does not), §3.3 (characters outside the alphabet are refused), §3.5 (a decoder may refuse non-zero pad bits); DSSE's reference implementation decodes with padding required | R1 |
+| A signature entry | counts when it is an object with an own string `sig` in the base64 grammar that decodes to exactly 64 bytes (an Ed25519 signature). Any other entry (no object, no string `sig`, a `sig` outside the base64 grammar, another length) is skipped: it verifies under no key and is never a refusal on its own, so a later envelope may carry a signature of another scheme beside an Ed25519 one (§4.3's member-0 cap leaves room for ~45 KB signatures) | K5, F-1; §4.3 | R1 |
+| Verification | each counting entry, in envelope order, against each embedded key: Ed25519 as RFC 8032 §5.1.7 (pure Ed25519, no context, no prehash) through `crypto.verify(null, …)`. §5.1.7 allows two group equations; the one that decides is the one both of release 1's libraries check: `S` (the signature's last 32 bytes, little-endian) below L, and `[S]B = R + [k]A` without the factor 8 (the cofactorless equation; B the base point, L its order, A the key, R the signature's first 32 bytes decoded as RFC 8032 §5.1.3 says, and `k` as §5.1.7 computes it). So a signature whose R is no canonical encoding (a `y` not below p) never verifies, and neither does one whose `S` is L or above. The equation multiplied by 8 accepts some signatures that this one refuses; release 1 answers those as any signature that does not verify. Measured by the orchestrator (2026-11-26, T4.5 M-1) on Node 24.13's OpenSSL 3.5.4 and Electron 43.8.10's BoringSSL, and held by the vector `rev2-verify-cofactored-only-order-8-in-r` (`UPD-NOT-GENUINE`) with its control; the non-canonical R and an `S` of L or L + 1 were measured on both libraries at P4's exit (T4.D review m-1, with keys made at run time; `S` + L is also the committed vector `env-verify-signature-s-not-below-l`), each `UPD-NOT-GENUINE`. That a library refuses a non-canonical R by comparing R's 32 bytes with the encoding of `[S]B − [k]A` was shown for OpenSSL only; the answer is the same on both. The two libraries do differ in two cases: under keys of small order, which release 1 never embeds (§2.7, "A weak key"), and on a signature whose R is the neutral point, which only the key's holder can make (a nonce of 0): OpenSSL verifies it, while BoringSSL, and so release 1, refuses it (`UPD-NOT-GENUINE`; measured at P4's exit, T4.4c's re-run S-1; no committed vector holds such a signature). A standard RFC 8032 signer reaches that R with a chance of about 1 in 2^252, so the standard-signer duty ("Writers: the caps and the signer") is what keeps release 1 and the release tools, which run on OpenSSL, in step. The message is PAE(UTF8(`payloadType`), payload) = `DSSEv1`, a space, the type's byte count, a space, the type, a space, the payload's byte count, a space, the payload; a count is ASCII decimal without leading zeros (`0` for none). The counts are byte counts; DSSE's Python reference implementation is no oracle for them. The first entry that one key verifies accepts the envelope; nothing after it is tried. `keyid` never selects or skips a key; a verifier may try the key whose id equals an entry's `keyid` first, which changes no answer. At most 64 × (number of embedded keys, at most 16, §2.7) verifications | DSSE `protocol.md` (PAE; KEYID "MUST NOT be used for security decisions"); RFC 8032; K1 (any one key signs alone); the equation: T4.5's review M-1, measured on both libraries; R's decoding, `S`'s bound and the neutral-point R: T4.D review m-1 and T4.4c's re-run (S-1), measured on both libraries at P4's exit | R1 |
+| `keyid` | an entry names a key when it is an object with an own string `keyid`; a missing, empty or non-string `keyid` names none (DSSE: an unset field is treated as set-but-empty). Compared code unit for code unit with the embedded keys' ids (§2.7), never case-folded | DSSE `envelope.md` (parsing rules) | R1 |
+| No signature verifies | some entry, counting or skipped, names an embedded key's id → `UPD-NOT-GENUINE`; else → `UPD-UNKNOWN-SIGNER`, 0 entries included; the `payloadType` plays no part | §2.3 above; T4.0; owner 2026-11-26 (no signature at all: `UPD-UNKNOWN-SIGNER`) | R1 |
+| A verified envelope's type | decided only after a signature verified (DSSE's order), code unit for code unit (DSSE: case-sensitive): exactly `application/vnd.hilbertraum.release+json` → the payload (§2.4); another string that starts with `application/vnd.hilbertraum.` → `UPD-FOR-NEWER-HILBERTRAUM`; any other → `UPD-NOT-AN-UPDATE`. So a file of another HilbertRaum type that no embedded key verifies is `UPD-UNKNOWN-SIGNER` (or `UPD-NOT-GENUINE` by the row above): no field a signature does not cover decides, beyond the `keyid` hint the rule above already accepts | DSSE `protocol.md` ("Verify SIGNATURE … Reject if PAYLOAD_TYPE is not a supported type"); G-30, W-63; owner 2026-11-26 (another HilbertRaum type, unknown key: `UPD-UNKNOWN-SIGNER`) | R1 |
+| Writers: the form | the release tools write UTF-8 without a byte-order mark, no duplicate key, no lone surrogate in any string (T4.5 m-7), and standard base64 with padding (never Node's `base64url`, which omits the padding). An envelope that is not this DSSE JSON shape travels in an `HRUPDATE` container (§4.3, §4.8), never as member 0 of a ustar file, where release 1 reads it as damaged | T4.0 | R1 (the duty) |
+| Writers: the caps and the signer | every file release 1 should install, or should answer with `UPD-FOR-NEWER-HILBERTRAUM`, has an envelope of at most 4,194,304 bytes in all (base64 adds a third, so its payload stays below 3,145,728 bytes) with at most 64 `signatures` entries of any scheme, among them at least one Ed25519 signature over `DSSEv1` PAE by a key release 1 embeds. Every signature release 1 should accept comes from a standard RFC 8032 signer (§5.1.6, as `crypto.sign(null, …)` signs): its `S` is below L and it meets the equation without the factor 8, so release 1's check ("Verification") and the one multiplied by 8 agree on it (T4.5 M-1). The same duty keeps release 1 (BoringSSL) and the release tools (OpenSSL) in step on the one signature form that the two libraries are known to answer differently under a key that is not weak, a neutral-point R ("Verification"), which a standard signer reaches with a chance of about 1 in 2^252 (T4.4c's re-run, S-1). The `payloadType` of every later HilbertRaum file starts with `application/vnd.hilbertraum.` | F-1, §4.3; G-30; T4.5 M-1; T4.4c's re-run S-1 | R1 (the duty) |
+| Writers: `keyid` | a release-1 key's Ed25519 signature over `DSSEv1` PAE carries that key's id (§2.7) as its `keyid`, for ever, also when later versions give later keys another id form; so a file that does not verify is told apart as `UPD-NOT-GENUINE`. A signature of any other construction (another PAE version, a prehash or context variant of Ed25519, another scheme), also one made with the same key, carries another `keyid` or none: the id hashes the key only, and otherwise a file that is only too new for release 1 reads `UPD-NOT-GENUINE` | T4.0 | R1 (the duty) |
+| Writers: what a later reader acts on | no later reader takes a decision from an envelope field that the signature does not cover (an unknown field, a signature entry's fields beside its `sig`; `keyid` only as the hint of "No signature verifies") or from member 0's bytes or their hash: one genuine envelope has many byte forms (key order, whitespace, escapes, either base64 alphabet, more or fewer signature entries), so everything a reader acts on is inside the payload and its type, which the PAE covers | T4.4d m-7 | R1 (the duty) |
 
 ### 2.4 The payload
 
@@ -255,15 +293,15 @@ The signed payload is forward compatible (F-2):
   member name and carries its root name here. Release 1 ignores the field at the import; it reads it
   only for the support details (§5.9); the apply script (through its name table, §5.5) and the sell
   gate use it;
-- `product`: its value and its refusal code are set by P4 before F-2 freezes and recorded here;
-  `channel` is checked as §2.6 says; `min_upgrade_from` above the running version is a typed refusal
-  (`UPD-NEEDS-IN-BETWEEN`), never "not genuine";
+- `product`: `"hilbertraum"`; any other value from a known key is `UPD-NOT-AN-UPDATE` (T4.0, the
+  table below); `channel` is checked as §2.6 says; `min_upgrade_from` above the running version is a
+  typed refusal (`UPD-NEEDS-IN-BETWEEN`), never "not genuine";
 - the engine fields (the engine version a release names, U6, and `engine_min`, §6.6): release 1
   ignores them; their names and shape are set by P5 (the writer) with P8 (the reader) and recorded
   here;
-- `issued`: advisory clock checks only. A date in the future gives a warning; a file whose `issued` is
-  more than 12 months before this computer's date needs one explicit confirmation that a newer one may
-  exist;
+- `issued`: advisory clock checks only. A date more than 24 hours ahead of this computer's clock gives a
+  warning; a file whose `issued` is more than 365 days before this computer's clock needs one explicit
+  confirmation that a newer one may exist (the exact units: the table's `issued` rows);
 - `requires` (optional): a minimum OS version per system (G-24). `win32` and `darwin` hold a dotted
   version compared component by component with `process.getSystemVersion()`. `linux` holds a minimum
   glibc version as a string of dot-separated decimal integers (`"2.34"`), compared component by
@@ -272,29 +310,64 @@ The signed payload is forward compatible (F-2):
   costs 2–49 ms, so it is read once per import; spike 4a). `glibcVersionCompiler` (`"2.26"`, the glibc
   Electron's Node was built against) and the text of `ldd --version` or `getconf GNU_LIBC_VERSION` are
   never used. **Fail closed** (owner 2026-11-24, Δ-39): a `linux` value that is not such a string
-  refuses the import before staging on every system, and so does, on Linux, a runtime glibc version
-  that is absent or is not such a string; the answer is `UPD-CANT-CHECK-LINUX-FLOOR` ("this update's
+  refuses the import before staging on every system, and so does, on Linux when the update names a
+  `linux` floor, a runtime glibc version that is absent or is not such a string (without a `linux` floor
+  there is nothing to check; owner 2026-11-26); the answer is `UPD-CANT-CHECK-LINUX-FLOOR` ("this update's
   Linux requirement can't be checked", §5.8), and the release tools never sign such a value (§9.3).
   Unknown keys and systems are ignored. Release 1 refuses **before staging** when this computer is
   below its own system's floor, and shows the drive's other systems' floors as a one-line warning it
   cannot test;
 - `summary` (optional): a map from a UI language code to one or two plain sentences of at most 400
-  characters, shown at the import in the UI language, else in `en`, else not at all. A wrong type, an
-  unknown language or a longer value is ignored, never an error;
+  Unicode code points (the table's `summary` row), shown at the import in the UI language, else in `en`,
+  else not at all. A wrong type, an unknown language or a longer value is ignored, never an error;
 - a well-formed envelope from a known key whose `payloadType` is any other
-  `application/vnd.hilbertraum.*` type, or whose payload `kind` is not the release kind, gets the typed
-  answer "This file is for a newer HilbertRaum. Install the update first" (G-30), never "not a
-  HilbertRaum update". A later definitions-only or model-pack file then needs no in-between update.
-
-The exact types and units of `format`, `version`, `issued`, `min_upgrade_from` and `summary` (whether
-"400 characters" counts code points, whether "12 months" are calendar months, whether `issued` is a
-date or a date-time) are fixed by P4's payload table before F-2 freezes. The order in which the
-payload's checks run is §4.5's.
+  `application/vnd.hilbertraum.*` type, or whose payload `kind` is not the release kind (its `format`
+  and `product` being release 1's, as every HilbertRaum payload keeps them: the table's "Later
+  writers" rows), gets the typed answer "This file is for a newer HilbertRaum. Install the update
+  first" (G-30), never "not a HilbertRaum update". A later definitions-only or model-pack file then
+  needs no in-between update.
 
 Every answer that refuses a well-formed update file (`UpdateTooNew`, `min_upgrade_from`,
-`UnknownSigner`, the OS floor, a `linux` floor that can't be checked) shows the running version and the
+`UnknownSigner`, the OS floor, a `linux` floor that can't be checked, and "for a newer HilbertRaum":
+the six codes of the address set, §2.10) shows the running version and the
 address
 `<G17-ADDRESS>/from/<running version>`, also as plain text (§3.3).
+
+**The payload's values** (T4.0; F-2). The exact types and units below replace the sketch above where
+it leaves one open; where the two read differently, the table decides (T4.5 B-1). As built the check
+is `checkPayload(verified, input)` in `updates/payload.ts`, pure and never throwing. The checks run in
+§4.5's order, the first one that fails deciding; the rows that never refuse (`issued`, `summary`,
+`install_as`, `role`) set what an accepted payload shows.
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Reading | the envelope's reader (§2.3, rows "Text" and "JSON": UTF-8, no byte-order mark, `JSON.parse`, a top-level object, own keys only, the last of a duplicate key, unknown keys ignored, the parsed value never walked as a whole, every exception of the parse no JSON), over the verified payload bytes. A payload that fails it → `UPD-TOO-NEW`: a known key signed it, so it is a later writer's file, never damage. No size cap of its own (the envelope's 4 MiB bounds it). The engine fields (§6.5, §6.6) and every other field not in this table are ignored. Release 1 reads the payload's values only: key order, whitespace and number spelling carry no meaning; the byte identity of §9.3 is the release tools' own rule (P5) | F-2; Δ-75 row 7; owner 2026-11-26 (`UPD-TOO-NEW`) | R1 |
+| `format` | the value `JSON.parse` gives is `=== 1` (so `1.0`, `1e0` and any number text that the parse rounds to 1 pass); anything else, missing included (2 or more, 0, 1.5, `"1"`, `null`) → `UPD-TOO-NEW` with the in-between hint. A later writer keeps 1 for every change release 1 can read (new fields, which it ignores) and writes 2 only for one release 1 must refuse; minor revisions have no number | F-2; `staged.json` and `drive-release.json` use an integer `format`; owner 2026-11-26 (missing or garbled: `UPD-TOO-NEW`) | R1 |
+| `product` | exactly the string `hilbertraum`; anything else, missing included → `UPD-NOT-AN-UPDATE`: a file of another product is no HilbertRaum update, and G-30's "for a newer HilbertRaum" would send the user to an update that does not help. Every payload under the release `payloadType`, of whatever `kind`, keeps this value, even after a rename of the product (the "Later writers" rows) | W-2; T4.0; owner 2026-11-26 | R1 |
+| `kind` | exactly the string `release`; anything else, missing included → `UPD-FOR-NEWER-HILBERTRAUM` (checked after `format` and `product`, which a file of another kind keeps as release 1's) | §4.3; G-30, W-63 | R1 |
+| `channel` | exactly the string `stable`, code unit for code unit (`Stable` is another channel); anything else, missing included → `UPD-WRONG-CHANNEL` | G-22, §2.6 | R1 |
+| `version` | a string that is SemVer 2.0.0 (§8.1's grammar, `parseSemver`) of at most 64 bytes (`isReleaseVersion`, §8.5); anything else, missing included → `UPD-TOO-NEW` (it becomes a folder name and the drive's `app_version`, CF-36) | §4.3, §5.1; CF-36; owner 2026-11-26 (missing or garbled: `UPD-TOO-NEW`) | R1 |
+| `min_upgrade_from` | absent: no constraint. Else a version as `version` is, or `UPD-TOO-NEW` (`null` included: a writer omits the field); above the running version in SemVer 2.0.0 order (`compareSemver`: a pre-release below its release, build metadata no part) → `UPD-NEEDS-IN-BETWEEN`; equal passes | W-2; F-2; owner 2026-11-26 (garbled: `UPD-TOO-NEW`) | R1 |
+| `requires` | absent: no floor. Anything but an object (an array and `null` included) → `UPD-TOO-NEW`. Inside it only the own keys `win32`, `darwin` and `linux` are read (Node's `process.platform` spelling, code unit for code unit); every other key and its value are ignored | G-24; owner 2026-11-26 (no object: `UPD-TOO-NEW`) | R1 |
+| A floor's grammar | a string of one or more components joined by single dots, each 1 to 9 ASCII digits (a leading zero means nothing: `07` is 7; nine digits keep every integer exact), at most 64 bytes; no space, sign, letter or empty component. The host's value is read with the same grammar | Δ-39 ("dot-separated decimal integers"); T4.0 (the bounds) | R1 |
+| A floor that breaks it | `linux`: `UPD-CANT-CHECK-LINUX-FLOOR` on every system (Δ-39); `win32` or `darwin`: `UPD-TOO-NEW` on every system (fail closed as for `linux`: an import on one system replaces the drive's other systems' apps too, §5, and their floors are only shown). Checked in this order, before this system's floor: `linux`, `win32`, `darwin`. The release tools never sign one (§9.3) | Δ-39; T4.0; owner 2026-11-26 (`win32`, `darwin`: `UPD-TOO-NEW` on every system) | R1 |
+| Comparing | component by component as integers, a missing component counting 0 (`10.0` = `10.0.0`), the first difference deciding; the host meets a floor it equals or exceeds. The host's values are arguments: `process.getSystemVersion()` on Windows and macOS (`10.0.26300`, `15.1.0`), `process.report.getReport().header.glibcVersionRuntime` on Linux (read once per import). A recorded limit: a Windows program started in a compatibility mode, or a Mac process with `SYSTEM_VERSION_COMPAT=1`, may be given a lower system version by the OS; release 1 then refuses with `UPD-OS-TOO-OLD` and the address (fail closed) | G-24, the `requires` bullet above; spike 4a | R1 |
+| This system's floor | absent: passes. On Linux, when the payload names a `linux` floor, a host glibc that is absent or breaks the grammar → `UPD-CANT-CHECK-LINUX-FLOOR` (without a `linux` floor there is nothing to check). On Windows and macOS a host value that breaks the grammar meets no floor, so a named floor gives `UPD-OS-TOO-OLD` (fail closed as on Linux; Electron always gives a value in the grammar, so this answer is not expected). Below the floor → `UPD-OS-TOO-OLD` | G-24; Δ-39; owner 2026-11-26 (an unreadable host glibc refuses only with a `linux` floor named; an unreadable Windows or macOS version: `UPD-OS-TOO-OLD`) | R1 |
+| The other systems' floors | the floors of the known systems other than this one that have an app at the root (the root apps' `system`; every one the payload names when the root could not be listed) → the warning `UPD-OTHER-SYSTEM-FLOOR`, with an accepted payload only; never a refusal | G-24, the `requires` bullet above | R1 |
+| `issued` | exactly `YYYY-MM-DDTHH:MM:SSZ` (20 ASCII bytes: UTC, an upper-case `T` and `Z`, no fraction, no offset) naming a real time: year 2000 to 9999 (no HilbertRaum release is older), month 01 to 12, a day that exists in that month of the Gregorian calendar, hour 00 to 23, minute and second 00 to 59. The release tools write the release commit's committer date in UTC, as the build-date file does (§5.10), so CI's payload and the signing tool's rebuild stay byte-identical (§9.3). Absent, or anything else: no date is shown and neither clock check runs (an advisory field never refuses); the tools refuse to sign such a payload | §2.4's `issued` bullet, §5.10; T4.0; owner 2026-11-26 (no readable date: no notice) | R1 |
+| `issued` in the future | compared in milliseconds, `issued` as milliseconds since 1970-01-01T00:00:00Z (`Date.UTC` of its fields) and `now` as this computer's clock (`Date.now()` at the import, an argument): `issued` − `now` > 86,400,000 (24 hours) → the warning `UPD-ISSUED-IN-FUTURE`. The day absorbs a clock kept in the wrong time zone (at most 14 hours off) | T4.0; owner 2026-11-26 | R1 |
+| `issued` old | in the same milliseconds: `now` − `issued` > 31,536,000,000 (365 days) → the confirmation `UPD-OLD-FILE`; exactly 365 days is not old. A day count, not calendar months: no time zone and no month arithmetic, and never more than a day from a calendar year | T4.0; owner 2026-11-26 | R1 |
+| `summary` | absent or not an object: no summary. Its own keys are UI language codes as release 1 spells them (`en`, `de`, `es`, `fr`, `it`, `nl`, `pl`, `tr`, `ru`, `uk`: a lower-case primary subtag, `shared/i18n/languages.ts`), code unit for code unit; any other key is ignored. A value counts when it is a string of 1 to 400 Unicode code points without a lone surrogate; any other value is ignored as if absent. Shown: the UI language's value when it counts, else `en`'s when it counts, else none; always as plain text (P6). Code points count the same in every writer's language, unlike UTF-16 units (an emoji counts two) or bytes (Cyrillic two, CJK three); grapheme counts change with the Unicode version | W-75; T4.0; owner 2026-11-26 (code points) | R1 |
+| `files` | an own array of 0 to 4,096 entries, each an object with `name`, `size` and `sha256` as §4.3's `files[]` row says (the name by §4.4's rule); else `UPD-TOO-NEW`. Every failure inside `files` is `UPD-TOO-NEW`, so their order there is free | §4.3, §4.4; owner 2026-11-26 (`UPD-TOO-NEW`) | R1 |
+| `group` | absent: a required member. A string of at least one character: the member's group, compared code unit for code unit and never interpreted. Anything else (`null`, `""`, a number, an object, an array, a boolean) → `UPD-TOO-NEW`, so a label release 1 cannot compare never turns a member of a group into a required one | the `group` bullet above; F-2; owner 2026-11-26 (`UPD-TOO-NEW`) | R1 |
+| `install_as` | never read at the import: any value, or none, never a refusal. Read only for the support details (§5.9), from the applied envelope's `files[]` (verified as §2.3 says, then the payload's reading and its `files` and `group` rows only, with §4.3's and §4.4's entry rules that the `files` row names, without any other check of §2.4; `readPayloadFiles`, T4.5 m-11; _Was:_ "its `files` row only", T4.D review m-8): an entry's root name is its `install_as` when that is a string, else its `name` | the `install_as` bullet above, §5.9 | R1 |
+| `role` | never read by release 1: any value, or none (§5.2: the scripts are found by name, whatever their role) | §5.2 | R1 |
+| Later writers: the fixed values | every payload signed with the project's keys under the release `payloadType`, of whatever `kind`, keeps `format` 1 (unless release 1 must refuse it as too new: the `format` row) and `product` `hilbertraum`, so that release 1 answers a file of another kind with `UPD-FOR-NEWER-HILBERTRAUM` (G-30), never with `UPD-NOT-AN-UPDATE`; every file release 1 must install also keeps `kind` `release` and `channel` `stable`. The envelope's duties are §2.3's "Writers" rows (the form, the caps, the signer, the `keyid`) | T4.0; G-30, W-63 | R1 (the duty) |
+| Later writers: types for ever | a field this table reads keeps its type and its grammar for ever: `requires` an object, each named floor in the floor grammar, `files` an array of at most 4,096 objects, `group` a string. A richer meaning takes a new field name (in `requires`: a new key), which release 1 ignores | T4.0 | R1 (the duty) |
+| Later writers: `version` | SemVer 2.0.0 of at most 64 bytes, without build metadata (a `+` cannot stand in a member name, §4.4, so no root artifact could carry such a version, §2.5); no two releases differ only in the case of a pre-release identifier (SemVer orders `RC1` below `rc1`, while the drive holds both as one folder, §4.5 "Folder names"); every numeric identifier (the major, minor and patch, and each pre-release identifier of digits only) has at most 9 digits, as a floor's components do (release 1 compares longer ones exactly and accepts them, the vector `edge-writer-duty-60-digit-major-accepted`, but a reader or tool that holds them as numbers would not). Release 1 accepts a version that breaks any of these three duties (the three `edge-writer-duty-…` vectors), so P5's `check-draft` and the signer refuse one before it is signed (CF-52) | T4.0; §4.4, §4.5; T4.4d m-9 | R1 (the duty) |
+| Later writers: `issued` and `summary` | always writes `issued` in exactly the grammar above: the committer date converted to UTC, no fraction (neither `toISOString()`'s form nor git's `%cI`); the tools refuse any other. Every `summary` value is 1 to 400 code points (counted as `[...text].length`) of plain text without line breaks or control characters, under one of release 1's ten codes, for each language release 1 should show, `en` always included; the tools refuse a longer or an empty value | T4.0; owner 2026-11-26 (code points) | R1 (the duty) |
+| Later writers: floors | a `win32` or `darwin` floor has at most three components and a `linux` floor at most two: release 1's host values have no more (`10.0.26300`, `15.1.0`, `2.39`), so a further component above 0 is never met by any computer on that build | T4.0; spike 4a | R1 (the duty) |
+| Later writers: the rest | omits `group` (never `null`) for a required member and `min_upgrade_from` when there is none, and keeps §2.5's "A drive ahead of the running app" duty; writes no duplicate key, no byte-order mark, no lone surrogate in any string (§2.3 "JSON"; T4.5 m-7) and no nesting beyond 64 levels. The pre-publish check runs release 1's import-reader snapshot over every Kit update file (§10.1) | T4.0; §10.1 | R1 (the duty) |
 
 ### 2.5 The version rule
 
@@ -304,13 +377,30 @@ An update installs when (G-19 (b), F-4):
 
 `app_version` counts only when some root artifact carries that version (its name is exactly
 `HilbertRaum-<app_version>-portable.exe`, `HilbertRaum-<app_version>-mac-arm64.app.zip` or
-`HilbertRaum-<app_version>.AppImage`, §4.4) or a root `*.app` exists (whose version is unknown). Otherwise it is stale, logged and treated as absent. The "not below" lets a
+`HilbertRaum-<app_version>.AppImage`, §4.4), when a root `*.app` exists (whose version is unknown), or
+when the root could not be listed (without the evidence the floor stays). Otherwise it is stale, logged
+and treated as absent (T4.5 B-2; _Was:_ "counts only when some root artifact carries that version … or a
+root `*.app` exists"). The "not below" lets a
 lagging system install the version the drive already has and makes a re-install after "Go back"
 work; a downgrade below the drive is still refused. Release 1 does not act on `highest_version_seen`
 (a reserved field, §8.5): a hard floor there would refuse every security fix of the fix line to a
 user who went back. A looser rule can be tightened by any later version; a tighter one could never
 be loosened. The accepted risk: an old but genuine update file can move a Kit up to an outdated
 version, never down.
+
+**The version rule's values** (T4.0; F-4). The exact values below replace the sketch above where it
+leaves one open; where the two read differently, the table decides (T4.5 B-2). As built the rule is
+`checkVersionRule` in `updates/version.ts`, pure and never throwing; `checkPayload` calls it in §4.5's
+order (§2.4).
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Inputs | one pure function of the payload's `version` (already well-formed, §2.4), the running version (the app's own `package.json` version), the drive's `app_version` (`driveAppVersion(readDriveRelease(root))`: the valid value, else null, §8.5) and the root apps as data (`rootApps(root)`, or null when the root could not be listed); P6's import does the two reads and catches `rootApps`'s throw | Δ-75 row 3; CF-44 | R1 |
+| Order | SemVer 2.0.0 precedence (`compareSemver`, §8.1): pre-releases ordered (`0.2.0-rc.1` is below `0.2.0`), build metadata no part (`1.1.0+a` equals `1.1.0+b`) | F-8, F-4 | R1 |
+| Which `app_version` counts | null: none. Otherwise it counts when a root app's carried version equals it byte for byte, when a root `*.app` folder exists (a root app of kind `folder`), or when the root could not be listed (without the evidence the floor stays: the stale rule only ever loosens it). Otherwise it is stale: treated as absent, with the flag `staleDriveVersion` (P6 logs it with its import event, CF-44). A root file of no known version (`HilbertRaum-junk-portable.exe`) keeps no constraint | §4.4; Δ-75 rows 3, 6 | R1 |
+| The answer | accepted when `version` is above the running version and, where an `app_version` counts, not below it (equal passes); else `UPD-SAME-OR-OLDER`, both halves alike | G-19 (b) | R1 |
+| Not read | `highest_version_seen` (§8.5) | G-19 (b) | R1 |
+| A drive ahead of the running app | a recorded limit: when the counting `app_version` is above the running version and the update of that version names a `min_upgrade_from` above the running version, that file is `UPD-NEEDS-IN-BETWEEN` and a file of the in-between version is `UPD-SAME-OR-OLDER` (below the drive), so no file installs. Release 1's own flows are not known to produce that state (its apply refuses an incomplete file, `UPD-INCOMPLETE`, and "Go back" sets `app_version` to its target, §8.5); a later version's per-system apply, or apps copied by hand, could. The duty: a later version that leaves one system's app behind never names a `min_upgrade_from` above that app's version | T4.0's review (lens 1) | R1 (the limit); every later writer (the duty) |
 
 ### 2.6 The channel
 
@@ -331,25 +421,77 @@ version, never down.
   then the production key set is empty. A build with an empty set says that updates are not available
   in this build; of the project's own builds only walk and dispatch builds before the ceremony can
   have one (a fork may ship one to turn updates off, §2.9), and no Kit is ever
-  built with it (the sell gate and the pre-publish check refuse an empty set).
-- **The release guard**, on every build leg of `release.yml` (Windows, macOS, Linux) and on its
-  dispatch pre-flight: the public keys embedded in the packed `app.asar` (their SPKI bytes, not only
-  their ids) equal the committed key set, and the embedded build date equals the release commit's
+  built with it: P5's sell-gate envelope check (T5.10, §9.5) and its pre-publish check (`check-draft`,
+  T5.3) are to refuse an empty set; neither is built yet, and nothing built in P4 refuses one (the
+  release guard passes an empty set that matches, below).
+- **The release guard** (W-3, as built by T4.3): its own step on each build leg of `release.yml`
+  (`build-win`, `build-mac`, `build-linux`), on a tag push and on a `workflow_dispatch` run alike, runs
+  the packed row of `tests/unit/updates-bundle-check.test.ts` (through `npx --no-install`, so a vitest
+  missing from the tree fails the step and none is installed, though npx may first ask the registry
+  once; `8da2d9e0`, T4.5 security review L-2) over the `app.asar` that leg packed: the key set
+  embedded in its main bundle (the SPKI bytes, not only the ids) equals the committed `keys.json`
+  ("The release guard's reading", below). A red step fails its leg, and the tag-only
+  `release` job, which needs all three legs, then makes no release ([`packaging.md`](packaging.md)).
+  Planned (T6.4a): the same guard also checks that the embedded build date equals the release commit's
   committer date (the build-date file, §5.10, §8.4).
 - **No test entrance in the product** (G-4 (d)): tests that need a test-signed update build throw-away
   copies with a one-time test key written into their `keys.json` (§10.4). Test key pairs are generated
   at test time; committed test vectors hold public keys, envelopes and verdicts only, never a private
   key.
 
+**`keys.json` and the embedded key set** (T4.0; F-3). Each build reads only its own `keys.json`; the
+release tools read the one of every supported tag, and the walk writes its one-time key into a scratch
+copy's (CF-46).
+
+| Value | Exact value | Source | Frozen since |
+|---|---|---|---|
+| Path | `apps/desktop/src/main/services/updates/keys.json`. `keys.ts` is the one module that imports it; the release tools, the release guard and the walk read it as a file | W-1; Δ-75 rows 4, 9 | R1 (its own copy) |
+| Shape | UTF-8 JSON without a byte-order mark: one object whose own field `key_set` is a string, the marker `hilbertraum-key-set-1:` followed by zero or more public keys joined by `,` (no space, no other character). Each key is the 44-byte DER SubjectPublicKeyInfo of an Ed25519 key (the fixed 12-byte prefix `302a300506032b6570032100`, then the 32 key bytes) in standard base64 with padding: 60 characters that start `MCowBQYDK2VwAyEA`. The `1` in the marker is the format: a later version that changes the set's shape or adds a key type takes a new marker number, and the release tools keep a parser for every marker a supported tag carries. Every other field is ignored (a fork may add one) | T4.0; RFC 8410 (the Ed25519 SPKI) | R1 (its own copy; the tools read it from every supported tag) |
+| The empty set | committed until the owner's ceremony (O2): the object with the one field `"key_set": "hilbertraum-key-set-1:"`, two-space indent, LF line ends, an LF at the end | C8, C15; §2.7 above | R1 (until O2) |
+| A key's id | the lower-case hex of SHA-256 over the key's 44 SPKI bytes: 64 characters (the form RFC 6962 uses for a log's id). The id commits to the key's type, so a later key of another type never shares one. The release tools write it as the `keyid` of each Ed25519 signature over `DSSEv1` PAE that the key makes (§2.3, "Writers: `keyid`") | T4.0; RFC 6962 §3.2 | R1 |
+| No role or label | which key is active, standby or succession is the runbook's (K3), never the file's: release 1 treats every embedded key alike (K1) | K1, K3 | R1 |
+| A set that does not read | a missing or non-string `key_set`; another marker; an entry that is not canonical standard base64 (§2.3's grammar, the standard alphabet only); an entry whose bytes are not the 12-byte prefix followed by 32 bytes (any 32 bytes; 44 in all); an entry that `crypto.createPublicKey` throws on when it loads it (no input is known to make OpenSSL or BoringSSL throw; T4.4c runs the key-set vectors in the packaged app); a repeated entry; more than 16 keys (release 1 embeds three); **a weak key** (below): the whole set is invalid, and the verifier is given an empty set (`UPD-NOT-AVAILABLE`: fail closed, and visible). A unit row over the committed file fails first, and the key proof (§2.8) shows that the real binary's keys verify. Release 1 knows no other key type | T4.0; weak keys: owner 2026-11-26 (T4.4c) | R1 |
+| A weak key | read the 32 key bytes as a little-endian number and clear its top bit (bit 255): that is the key's `y`. The key is **weak**, and the whole set invalid, when `y` is not below p = 2^255 − 19 (a non-canonical encoding), or when `y` is one of the five values that the eight small-order points of Ed25519 have: 0, 1, p − 1, and the two numbers whose 32-byte little-endian forms (top bit clear) are `26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05` and `c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a`, either sign bit. This covers every small-order and every non-canonical encoding; a key made by an Ed25519 key generator is never weak. The reason: under a small-order key a signature made without any private key can verify, and whether it does depends on the crypto library (Node 24.13's OpenSSL accepts such signatures; Electron 43.8.10's BoringSSL refuses them, measured by T4.4c), so release 1 refuses the key itself rather than rely on a library. A key that is not weak is not thereby the owner's: a point whose scalar is public (the base point is one) reads as valid and verifies in both libraries; what keeps such a key out is the key proof with each real private key and the key count (§2.8), not this row (T4.4d m-1). _Was (T4.0 fix 1):_ "The parser does not check that a key is a sound curve point; the key proof (§2.8) and the review of the pull request that adds the keys do (…), so no list of such encodings is frozen." | owner 2026-11-26 (T4.4c, Δ-78); RFC 8032 §5.1.3 (point decoding), the small-order points | R1 |
+| The file readers | the release tools, the release guard and the walk read `keys.json` as a file: one that starts with a byte-order mark, is no JSON or whose top level is no object is refused loudly, never read as an empty set (the app's own bundler import drops a leading mark silently, so only these readers can see one). As built the release guard reads it with §2.3's reader (`readKeysFile` in `updates/bundle-check.ts`, through `readJsonObject`: rows "Text" and "JSON", own keys only), and so does the repository row over the committed file ("Test keys" below); the release tools (P5) and the walk, not built yet, are to call the same function. So when `key_set` stands twice, the last one counts (T4.5 m-9). _Was:_ "As built they read it with §2.3's reader" (T4.D review m-5) | T4.0 | — (the tools' and the guard's) |
+| One parser | the `key_set` string is read by one pure function in a module the release tools load (never `keys.ts`, Δ-75 row 4); `keys.ts`, `bundle-check.ts`, the tools and the walk use it | Δ-75 rows 4, 9 | — |
+| The embedded form | the `key_set` string as it stands in `keys.json`: every one of its characters needs no escape in a JavaScript string in any quote style, so a minifier keeps it as it is, and an empty set is still the marker. As built the bundler's JSON import writes it as one plain string literal, opened and closed by the same quote (T4.3's build: `const key_set = "…";` in the main bundle), the one form the guard passes. The bundler's other output form for a JSON import, `JSON.parse("…")`, puts escaped quotes around the value and fails the guard loudly (`marker-not-quoted`); Vite 6 writes it only for a JSON text longer than 10,000 characters, and a `keys.json` of 16 keys is about 1,000. `keys.ts` reads the set once; the start-up line `Update keys` (`main/index.ts`: the key count and whether the set read, never a key or an id) is the use that keeps it in the main bundle. No source file in the main bundle spells the marker with its colon or builds it: the parser compares the part before the first `:` with `hilbertraum-key-set-1`. A helper that joins the marker and `:` could be folded by a minifier into a second copy of the marker (the guard's `marker-repeated` catches one), and so would a second bundle under `out/main` that imports `keys.ts`: a worker that verifies off the main thread (P6, CF-47) receives the key set as data. _Was:_ "so the bundler's JSON import (either of its output forms) and a minifier keep it as it is" (T4.3 re-check N-2) | T4.0; Δ-75 rows 5, 22; T4.3 fix round 1 | — (each build's own) |
+| The release guard's reading | as built, `checkBundleKeys` in `updates/bundle-check.ts` (T4.3, its fix round `602677c4`; main never imports it): over every file under `out/main` in the packed `app.asar`, chunks and any `.map` file included (never all of `out/`: P5's gate tool is to bundle its own copy of `keys.json` under `out/tools`, T5.10, CF-48), and the bytes of the `keys.json` of the tree the build was made from. It is a byte search, not a parse: the marker is ASCII, no byte of a multibyte UTF-8 character is below 0x80, and nothing is decoded. Its checks, in this order, the first failure deciding, each with its reason: (1) `keys.json` reads as "The file readers" read it, else `committed-unreadable` (with the parser's fault), whatever the bundle holds; (2) the marker with its colon, taken from `keys.json`'s own value, is found exactly once in all those files together, else `marker-not-found` (never) or `marker-repeated` (more than once, two in one file included; a `.map` holding the source text makes two); (3) that occurrence is in a file whose name ends `.js`, `.mjs` or `.cjs` in any letter case, else `marker-not-in-code` (a source map, a JSON file or any other file that is not code); (4) the byte directly before the marker is a quote (`"`, `'` or a backtick) and the byte directly after the value is the same quote, else `marker-not-quoted`, the value being the longest run of `A`–`Z`, `a`–`z`, `0`–`9`, `+`, `/`, `=` and `,` that follows the marker (so the string the app reads is exactly the run compared, and no escape, line continuation or other character carries it on; T4.3 review R-1); (5) the marker and that run read through the one parser, else `embedded-unreadable` (a weak key fails here); (6) the run equals `key_set`'s value after the marker byte for byte, so in order too, two empty sets included, else `keys-differ` (with both lists of ids; no key bytes). It passes with the committed key count. Refusing an empty set is left to P5's sell-gate envelope check (T5.10, W-33) and `check-draft` (T5.3), neither built yet. **Its bounded claim** (owner 2026-11-26, Δ-77): it proves that the key-set literal in the built main bundle equals `keys.json`, not what the code makes of that literal: a build whose source was changed to build or extend the set from it passes, and catching such a change is the code review's and the key proof's (the key count, §2.8). It compares and does not judge, so a passing bundle may embed no key: an empty committed set passes, and a quoted literal inside a comment or inside another string is not told apart from one in code, so a bundle that holds the set only there passes while its app embeds no key (fail closed: every file then answers `UPD-NOT-AVAILABLE`). What it catches: a stale build, a wrong or second `keys.json`, a bundler or minifier change, an altered literal. _Was:_ "the marker with its colon found exactly once … It passes when that value equals `key_set`'s value …" without the code-file and quote checks (T4.3 fix round 1; T4.5 m-1) | W-3; Δ-75 rows 5, 9; T4.3 review R-1, R-4, re-check N-1–N-3; Δ-77 | — (replaceable: T4.3; T6.4a adds the build date) |
+| Test keys | a test or vector key pair is made at run time and only its public half is written, never into the committed `keys.json` (the walk writes its own into a scratch copy, §10.4). Two rows of `repo-hygiene.test.ts` hold it (T4.1, widened by the security fixes `8da2d9e0`): no file under `tests/fixtures/` holds a private key in the forms §10.7 "No private key" names; and no key of the committed `keys.json`, read as "The file readers" read it, is one of RFC 8032 §7.1's five test keys (the RFC prints their private halves) or a public key that a committed vector names (in a `keys` list, a `keySet` string or a `keysJson` text, anywhere under `tests/fixtures/updates/vectors/`), compared by id (T4.5 security review M-1). Neither row catches a test key that no committed file names (one a test makes at run time, the walk's one-time key): the key proof and the owner's key count keep those out (§2.8) | C8; T4.5 security review M-1, L-1 | — |
+
 ### 2.8 The key proof before release 1 is published
 
 After release 1's build and before it is published, the owner signs one throw-away update file per
-embedded key, each for a version below every build that embeds the production keys
+key the owner holds (three, K2), each for a version below every build that embeds the production keys
 (`0.0.0-keyproof.<n>`). The exact release-1 candidate binary must refuse each with the "same or older"
 answer, which it reaches only after the signature verified. The proof runs on each sold system's draft
 asset whose sha256 equals the signed payload's entry (the signed `.exe` for a Windows Kit). The
 throw-away files are never uploaded, and immutable releases are on before the publish click, so the
-published asset is the one tested.
+published asset is the one tested. _Was:_ "one throw-away update file per embedded key" (T4.D review
+m-7: a key the build embeds that the owner does not hold gets no file, and the key count below stops
+that release).
+
+_Status: planned (the owner, at the key ceremony O2 and before each release that embeds the keys; the
+runbook K3 and its checklist are P5's). P4 added the steps below (Δ-77; T4.1 review m-1; T4.4d m-8;
+the security review's M-1)._
+- **One proof file per real key.** The owner proves each key they hold (three, K2) with a throw-away
+  file of its own, and each reaches "same or older" on the candidate. Together the files prove that
+  every key the owner proved is embedded; they cannot show that no other key is.
+- **The key count.** The candidate's start-up line `Update keys` (`main/index.ts`: the key `count` and
+  whether the set read, `valid`; never a key or an id) must show `valid` true and a `count` equal to
+  **the number of keys the owner proved**, three, never the committed file's own count: an extra key
+  in `keys.json` would match its own count. With the proof files this proves equality: the build
+  trusts exactly the owner's keys. A committed key without a ceremony private key, so without a proof
+  file of its own, stops the release. The comparison with the committed set's count (Δ-77) stays as a
+  second one. The release guard proves only that the build carries the committed literal (§2.7, "Its
+  bounded claim"), so this count is where a key set changed in code surfaces.
+- **A second message, as a belt.** Each key's proof signature must also be refused for a second,
+  unrelated message under that same signature (T4.1 review m-1). Weak keys are refused by the parser
+  (§2.7, "A weak key"), not by this step: under such a key, whether a signature made without the
+  private half verifies depends on the crypto library (measured by T4.4c: Node 24.13's OpenSSL accepts
+  such signatures, Electron 43.8.10's BoringSSL refuses them), and a second message does not catch
+  every weak key. The step stays as a belt.
+- Before any of this, a CI row refuses a committed `keys.json` that holds one of RFC 8032's test keys
+  or a key a committed vector names (§2.7, "Test keys").
 
 ### 2.9 The fork rule
 
@@ -364,6 +506,65 @@ published asset is the one tested.
 - A fork that replaced the keys and imports one of the project's update files sees the
   "signed with a newer key" answer, which is misleading for it; the fork's own documentation should
   say so.
+- A fork with its own keys keeps the protocol's tokens (`product` `hilbertraum`, the `payloadType`
+  `application/vnd.hilbertraum.release+json`, member 0's name `hilbertraum-release.dsse.json`, the
+  key-set marker `hilbertraum-key-set-1:`) or changes its reader with them: they are format constants,
+  not brand use, and the keys alone tell a fork's file from the project's.
+- A fork never spells the key-set marker with its colon anywhere else in the main bundle: not in another
+  field of `keys.json` (a fork may add one, §2.7), not in any other source file. The release guard finds
+  the marker exactly once, and a second copy fails it (`marker-repeated`, §2.7; T4.3 review R-5).
+
+### 2.10 The verdicts of the envelope and the payload
+
+_Status: as built in P4 (T4.1, T4.2: the types in `shared/updates/types.ts`); the shape set by T4.0._
+
+Each of P4's functions returns a typed verdict: a code token of §5.8 and its parameters, never copy and
+never an address. The address is joined to the running version where the copy lives (P6), and P4 adds
+no catalog key (Δ-75 row 17). The first failing check in §4.5's order decides.
+
+| Code | From | Kind | Parameters |
+|---|---|---|---|
+| `UPD-NOT-AVAILABLE` | the envelope | refusal | — |
+| `UPD-TOO-NEW` | the envelope, the payload | refusal; address set | `runningVersion` |
+| `UPD-FILE-DAMAGED` | the envelope | refusal | — |
+| `UPD-NOT-GENUINE` | the envelope | refusal | — |
+| `UPD-UNKNOWN-SIGNER` | the envelope | refusal; address set | `runningVersion` |
+| `UPD-FOR-NEWER-HILBERTRAUM` | the envelope (`payloadType`), the payload (`kind`) | refusal; address set | `runningVersion` |
+| `UPD-NOT-AN-UPDATE` | the envelope (`payloadType`), the payload (`product`) | refusal | — |
+| `UPD-WRONG-CHANNEL` | the payload | refusal | — |
+| `UPD-NEEDS-IN-BETWEEN` | the payload | refusal; address set | `runningVersion`, `minUpgradeFrom` |
+| `UPD-SAME-OR-OLDER` | the version rule | refusal | `version`, `runningVersion`, `driveVersion` (the `app_version` that counted, or null when none counted, a stale one included) |
+| `UPD-ABOVE-MAX-VERSION` | the payload | refusal | `version`, `maxVersion` (the cap's text) |
+| `UPD-CANT-CHECK-LINUX-FLOOR` | the payload | refusal; address set | `runningVersion` |
+| `UPD-OS-TOO-OLD` | the payload | refusal; address set | `runningVersion`, `system`, `floor`, `hostVersion` (as the host gave it) |
+| `UPD-OTHER-SYSTEM-FLOOR` | an accepted payload | warning | `floors`: one `system` and `floor` per system, in the order `win32`, `darwin`, `linux` |
+| `UPD-ISSUED-IN-FUTURE` | an accepted payload | warning | `issued` |
+| `UPD-OLD-FILE` | an accepted payload | confirmation (one explicit answer before staging) | `issued` |
+| `staleDriveVersion` (no code) | the version rule | a flag for `update.log` (P6, CF-44) | — |
+
+- **The address set** is the six codes Δ-75 row 7 names: `UPD-TOO-NEW`, `UPD-NEEDS-IN-BETWEEN`,
+  `UPD-UNKNOWN-SIGNER`, `UPD-OS-TOO-OLD`, `UPD-CANT-CHECK-LINUX-FLOOR`, `UPD-FOR-NEWER-HILBERTRAUM`.
+  Each carries the running version, so P6 builds `<G17-ADDRESS>/from/<running version>` (§2.4).
+- **A verified envelope** hands its payload bytes to the payload check as they are; it is no verdict of
+  its own.
+- **An accepted payload** carries its `version`, `issued` (or null), the `summary` text shown (or
+  null), its `files[]` entries in payload order (`name`, `size` (a `-0` carried as 0, §4.3), `sha256`
+  lower-cased, `group` or null, `installAs` or null) and the four flags.
+- **The flags** are four fields: `otherSystemFloors` (a list, empty for none), `issuedInFuture`,
+  `oldFile` and `staleDriveVersion` (booleans). The three user-visible ones (`UPD-OTHER-SYSTEM-FLOOR`,
+  `UPD-ISSUED-IN-FUTURE`, `UPD-OLD-FILE`) are set with an accepted payload only. `staleDriveVersion` is
+  set with every verdict from the version rule on, accepted or refused, so P6 can log it with
+  `import-refused` too.
+- **The parameters** hold versions, floors, a system token and a time, each as the text exactly as
+  the payload, the host or the policy wrote it, never normalised (a floor `07.1` stays `07.1`;
+  `maxVersion` is the parsed cap's `text`), and `hostVersion` as Electron gave it, or `""` when the host
+  gave no string at all (a `null` system version on Windows or macOS: an input outside the payload
+  check's type, which P6 never passes; T4.5 m-8); `driveVersion` is null when no `app_version`
+  counted, a stale one included; no path and no user text. P6 logs only what F-11's token rules
+  allow.
+- The policy's `managed` and `invalid` refuse before the file is read (§3.6); only the cap,
+  `updates.max_version`, reaches the payload check, as its `maxVersion` argument: `readUpdatePolicy`'s
+  `maxVersion`, a parsed version or null (Δ-75 row 16). A version above it → `UPD-ABOVE-MAX-VERSION`.
 
 ---
 
@@ -493,8 +694,10 @@ members as §4 says, in the order of §4.5.
 ### 3.7 What the import shows
 
 Before "Restart and update" the import shows what the update is: its version, its date (`issued`) and,
-if present, its signed `summary` in the UI language (§2.4). The confirmation for an update file older
-than 12 months and the warning about the other systems' OS floors come at the import, before staging.
+if present, its signed `summary` in the UI language (§2.4). The confirmation for an update file issued
+more than 365 days before this computer's clock, the warning for one issued more than 24 hours ahead of
+it (§2.4's `issued` rows) and the warning about the other systems' OS floors come at the import, before
+staging.
 
 ---
 
@@ -548,10 +751,10 @@ not for today's file (each one's reason is in its row).
 | Ignored fields | mode, uid, gid, mtime, uname, gname, devmajor, devminor and bytes 500–511; the writer writes `0000644` NUL, `0000000` NUL, `0000000` NUL, `00000000000` NUL, zeros, zeros, `0000000` NUL, `0000000` NUL and zeros | spike 9 DD2 | R1 (the reader ignores them) |
 | Member 0 | the signed envelope, member name **`hilbertraum-release.dsse.json`** (the release asset's name, §9.3), at most **4 MiB** (4,194,304 bytes; a larger header size is `UPD-TOO-NEW` before a byte of it is read); read whole into memory and verified as §2.3 says before anything else is read. Any other first member is `UPD-NOT-AN-UPDATE`. The cap is F-1's and §2.3's (T1.11 S9-1), the one thing it protects being the bytes parsed before the signature is checked: it holds a 4,096-entry payload as base64 (1.1 MB, light run below) plus 64 signatures of up to ~45 KB each (room for a later hash-based signature scheme) | F-1, F-16, §2.3; T1.11 S9-1 | R1 |
 | Where the payload lives | **inside the envelope**, as DSSE's base64 `payload` field; the update file has no separate payload member (spike 9's prototype used one only as a stand-in for P4). `files[]` lists every member after member 0 (§2.4) | F-2, F-16; T1.11 S9-1 | R1 |
-| DSSE `payloadType` | `application/vnd.hilbertraum.release+json`; any other `application/vnd.hilbertraum.*` type from a known key → `UPD-FOR-NEWER-HILBERTRAUM` (G-30); any other type → `UPD-NOT-AN-UPDATE` | F-2, G-30 | R1 |
-| The payload's `kind` | `"release"`; any other value from a known key → `UPD-FOR-NEWER-HILBERTRAUM` (§2.4) | F-2 | R1 |
+| DSSE `payloadType` | `application/vnd.hilbertraum.release+json`; decided only after a signature verified (§2.3, DSSE's order): any other type that starts with `application/vnd.hilbertraum.` → `UPD-FOR-NEWER-HILBERTRAUM` (G-30); any other type → `UPD-NOT-AN-UPDATE`; a file that no embedded key verifies is `UPD-UNKNOWN-SIGNER` or `UPD-NOT-GENUINE`, whatever its type (T4.0: _Was:_ "any other `application/vnd.hilbertraum.*` type from a known key → `UPD-FOR-NEWER-HILBERTRAUM` (G-30); any other type → `UPD-NOT-AN-UPDATE`") | F-2, G-30; owner 2026-11-26 (an unknown signer, whatever the type) | R1 |
+| The payload's `kind` | `"release"`; any other value from a known key, in a payload whose `format` and `product` are release 1's, → `UPD-FOR-NEWER-HILBERTRAUM` (§2.4; T4.0 re-check, `product` comes before `kind` in §4.5's order) | F-2 | R1 |
 | Signatures | at most 64 per envelope, counted after the envelope's JSON parse and before any signature is verified (§2.3; the 4 MiB size cap comes before the parse) | F-1; L1-30 | R1 |
-| `files[]` entries | `files` is an array; each entry has a string `name` (§4.4), an integer `size` from 0 to 8,589,934,591, and a `sha256` of 64 hex characters (either case; compared lower-cased); no two names equal after folding; the payload's `version` is SemVer and at most 64 bytes (it becomes a folder name). Anything else from a known key → `UPD-TOO-NEW` (a later writer's file) | F-2; L1-6 | R1 |
+| `files[]` entries | `files` is an array; each entry is an object with a string `name` (§4.4), an integer `size` from 0 to 8,589,934,591 (the value `JSON.parse` gives is a safe integer in that range: `1.0`, `1e3` and any number text that the parse rounds to such an integer pass; `-0` is 0, and the accepted payload carries it as 0, T4.5 m-6, `fb9f7160`), and a `sha256` of 64 hex characters (either case; compared lower-cased); `group` absent or a string of at least one character; `install_as` and `role` never read at the import (§2.4's table); no two names equal after folding; the payload's `version` is SemVer and at most 64 bytes (it becomes a folder name). Anything else from a known key → `UPD-TOO-NEW` (a later writer's file) (T4.0: _Was:_ "each entry has a string `name` (§4.4), an integer `size` from 0 to 8,589,934,591, and a `sha256` …; no two names equal after folding", without `group`'s type) | F-2; L1-6 | R1 |
 | Members after member 0 | every one listed in the payload's `files[]`, in any order, each at most once (case-folded, §4.4), its header size equal to the listed `size`; every listed member without a `group` present; each `group` present whole or absent whole (§2.4) | F-2, W-5 | R1 |
 | Member count | `files[]` holds at most **4,096** entries, checked before staging; more → `UPD-TOO-NEW`. The reason is what a later file may carry (T1.11 S9-1, C-12): the apps of more systems and architectures, the scripts and start files, the engine archives of §6.5's escape hatch (families × systems), and, if M2's content ever travels one file at a time, the drive content: 35 model manifests today, the skills, the drive docs and notices in ten languages; a few hundred members in all, so 4,096 leaves more than ten times that. The cost is time only: a light run of spike 9's prototype (plain Node 24.13, NTFS, 4,096 members of 1 KiB and an 830 KB payload with ten 400-character `summary` texts; 3 runs) staged them in 8.3–9.3 s, 1.6 ms per member (median; max 32 ms), memory +11.3 MB; on a stick spike 9 measured 9–10 ms per member (median, ≤ 81 ms), so ~41 s at the median. P8's sheet confirms the M2 file stays under the cap (C-12). Spike 9 proposed 256 (judgement value) | spike 9 DD3; T1.11 S9-1, C-12 | R1 |
 | Total size | no cap of its own beyond the member bound (< 8 GiB each) and the free-space check (§4.5). Spike 9: 450 MB stage in 15–16 s on USB 2, linear (not measured beyond) | spike 9 DD3 | R1 |
@@ -560,6 +763,12 @@ not for today's file (each one's reason is in its row).
 | Then the data pass | one sequential pass over the members (§4.5); each header is read again and must equal the walk's, else `UPD-FILE-DAMAGED` (the file changed meanwhile) | spike 9 DD1; L1-9 | R1 |
 
 ### 4.4 The member-name rule (table A.3; F-18)
+
+_The rows "Characters" to "Uniqueness" are as built in P4 (T4.2, `updates/member-name.ts`:
+`isMemberName`, `foldMemberName`, `hasFoldedDuplicate`; CF-45): the payload check applies them to every
+`files[]` name (§2.4: a name that breaks the rule there is `UPD-TOO-NEW`), and P5's writer and P6's
+staging import the module, never copy it. The header half of "A name that breaks the rule", "Names
+release 1 looks for" and the root globs' use are planned (P6)._
 
 | Value | Exact value | Source | Frozen since |
 |---|---|---|---|
@@ -578,7 +787,7 @@ not for today's file (each one's reason is in its row).
 
 | Value | Exact value | Source | Frozen since |
 |---|---|---|---|
-| Order of an import | the refusals before the file is read (§3.6: not a prepared drive, the policy, `updates/applying/` present → `UPD-IN-PROGRESS`, the writability probe and the 64 MiB margin of §5.4) → the `HRUPDATE` prefix → member 0 and its verification (§2.3) → the payload, the first failing check deciding, in this order: `format` major → `kind` → `product` → `channel` → `version` well-formed → `min_upgrade_from` → the version rule (§2.5) → `updates.max_version` → `requires` (the `linux` value's form on every system, then this system's floor) → `issued` → `files[]` (the order written by the T1.12 review, R-5; P4 confirms or corrects it before F-2 freezes) → the header walk (§4.3) → this system's apply script present (§4.4) → on Windows the path check (below) → the free-space formula (below) → the data pass → the commit. **A refusal before the data pass removes nothing** (a good update of the same version staged earlier stays) | W-5, §3.6; L1-7, L1-8 | R1 |
+| Order of an import | the refusals before the file is read (§3.6: not a prepared drive, the policy, `updates/applying/` present → `UPD-IN-PROGRESS`, the writability probe and the 64 MiB margin of §5.4) → the `HRUPDATE` prefix → member 0 and its verification (§2.3, in its table's order: an empty key set first, the `payloadType` last; P6 may refuse an empty key set before the file is opened, §2.3) → the payload, the first failing check deciding, in this order: `format` major → `product` → `kind` → `channel` → `version` well-formed → `min_upgrade_from` → the version rule (§2.5) → `updates.max_version` (the policy's cap, an argument of the payload check, Δ-75 row 16) → `requires` (the `linux` value's form on every system, then the `win32` and `darwin` values' forms, then this system's floor) → `issued` (it never refuses: the warning for more than 24 hours ahead and the confirmation for more than 365 days old come with an accepted payload only, §2.4, §2.10) → `files[]` (the order written by the T1.12 review, R-5, confirmed by T4.0 with one change: `product` before `kind`, since a file of another product is no HilbertRaum file and G-30's "for a newer HilbertRaum" must not answer it (every HilbertRaum payload, of whatever `kind`, keeps `format` 1, unless release 1 must refuse it as too new, and `product` `hilbertraum`, §2.4 "Later writers: the fixed values"); _Was:_ "`format` major → `kind` → `product` → …", "`requires` (the `linux` value's form on every system, then this system's floor)" and "P4 confirms or corrects it before F-2 freezes") → the header walk (§4.3) → this system's apply script present (§4.4) → on Windows the path check (below) → the free-space formula (below) → the data pass → the commit. **A refusal before the data pass removes nothing** (a good update of the same version staged earlier stays) | W-5, §3.6; L1-7, L1-8 | R1 |
 | Path length (Windows) | before the data pass: the length of `<root>updates\staging\<v>\files\` (the root with its trailing `\`) plus the longest listed member name is at most 259 characters (`MAX_PATH` 260 with its NUL; the cmd twin moves from there, and cmd is bound by `MAX_PATH`); else `UPD-PATH-TOO-LONG`. Argued from the path forms, not measured; a P7 row measures the real limit | L2-18 | R1 |
 | Free space | before the data pass, with `c` = the drive's cluster size from `fs.statfs` `bsize` (1 MiB when it reports 0) and `w` = the write size, and free bytes = `bavail × bsize`, counting the bytes that `updates/staging/<v>/` and `updates/staging/.incoming-<v>/` hold now as free (the data pass removes them first): free bytes ≥ Σ over the members present of ⌈size ÷ `c`⌉ × `c` + `c` (the staging folders' own entries) + max(64 MiB, 64 × `w`); else `UPD-DRIVE-FULL`. The last term covers exFAT's allocation ahead of the data in an open file, about 32 × the write size (≤ 33.7 MB measured at 1 MiB writes), with 2× room; at P6's 1 MiB writes it is 64 MiB (67,108,864 bytes). Spike 9's flat 1 MiB per file is replaced by the real cluster size (T1.11 S9-3); P11a's legs add a peak-free-bytes row on macOS and Linux exFAT and on the Kit SSD. The update file itself is already on its volume when the check runs. When `statfs` fails, the check passes and `ENOSPC` is the typed answer. Another version's `updates/staging/<w>/` stays until the commit, so the drive needs room for both | spike 9 DD5; T1.11 S9-3; L1-8, L1-23, L2-23 | R1 |
 | Reads (P6's constant) | an implementation constant, not a format value: any read size reads any update file (T1.11 S9-4). Release 1 reads 1 MiB (1,048,576 bytes) at a time into one reused buffer (`FileHandle.read` into a single `Buffer.allocUnsafe(1048576)`), hashing (SHA-256) and writing each slice before the next read; the re-hash before the hand-off (W-6) reads the same way. Spike 9, in the packaged app's main process: a read stream stalls the event loop by 66–155 ms and adds 73–89 MB; one reused buffer stays ≤ 43 ms and +6.4–9.8 MB at the same speed; 64 KiB reads are 1.5–2.4× slower on sticks; 4 MiB gain nothing and quadruple exFAT's run-ahead. Plain Node shows no stall, so P6's performance row runs in the packaged app | spike 9 DD1; T1.11 S9-4 | P6 (constant) |
@@ -630,6 +839,7 @@ The first failing check in file order decides (L1-9).
 | any other file shorter than 512 bytes; a first block that has no ustar magic and is not `HRUPDATE`; member 0 not named `hilbertraum-release.dsse.json`; a first header whose magic and checksum are right and whose type, name or size field fails (an ordinary archive: a pax header, a folder; V-1, Δ-41) | `UPD-NOT-AN-UPDATE` |
 | a first header whose magic is right and whose checksum fails (L2-17; V-1) | `UPD-FILE-DAMAGED` |
 | the first 8 bytes are `HRUPDATE`; member 0 over 4 MiB; over 64 signatures; `files[]` over 4,096 entries, or an entry or a `version` that breaks §4.3's `files[]` row (a name against §4.4, a size of 8 GiB or more, a `sha256` that is not 64 hex characters, two names equal after folding) | `UPD-TOO-NEW` |
+| member 0's envelope and its payload: an empty key set, the envelope's text, JSON and fields, its signatures and `payloadType`, the payload's fields, the version rule, the policy's cap and the OS floors, decided by §2.3's, §2.4's and §2.5's tables in §4.5's order (an envelope that cannot be read is `UPD-FILE-DAMAGED`, never `UPD-NOT-AN-UPDATE`) | the codes of §2.10 |
 | a header that fails §4.3's checks after member 0; one zero block not followed by a second zero block, with every required member seen; an unlisted, repeated or case-colliding member; a header size ≠ the listed size; a missing member without a group, or a partial group, after a complete end; bytes after the end (`TrailingData`); non-zero padding; a member's hash ≠ its listed `sha256` | `UPD-FILE-DAMAGED` (its copy says the file is damaged or not completely downloaded, and to download it again: the action is the same) |
 | the end of the file before a header, inside a member or before the two zero blocks | `UPD-DOWNLOAD-INCOMPLETE` |
 | a zero block where a header should be while a listed member without a group, or part of a group, is still missing: a preallocated, zero-filled partial download (a browser's) of the full length (T1.11 S9-6) | `UPD-DOWNLOAD-INCOMPLETE`, found by the header walk (a tail that starts inside any member but the last puts zeros where the next header belongs); a zero-filled tail inside the last member's data passes the walk and ends as a hash mismatch, `UPD-FILE-DAMAGED` |
@@ -1298,29 +1508,29 @@ working papers). The start files' three codes have no copy key: their text is §
 | `UPD-POLICY-MANAGED` | updates are managed by your organization (`readUpdatePolicy`'s `install: managed`, §8.1) | `updates.policy.managed` |
 | `UPD-POLICY-INVALID` | the update policy on this drive has an invalid value (`install: invalid`) | `updates.policy.invalid` |
 | `UPD-POLICY-UNREADABLE` | the policy file is unreadable (the import stays allowed; `file: unreadable`: missing on a prepared drive, or damaged; a root with neither `policy.json` nor `drive.json` reads `none` and shows nothing) | `updates.policy.unreadable` |
-| `UPD-NOT-AN-UPDATE` | not an update file | `updates.import.notAnUpdate` |
-| `UPD-NOT-GENUINE` | the signature doesn't verify | `updates.import.notGenuine` |
-| `UPD-TOO-NEW` | `UpdateTooNew`: a newer format or container, over a cap, the `HRUPDATE` prefix (§2.3, §4) | `updates.import.tooNew` |
+| `UPD-NOT-AN-UPDATE` | not an update file, or a file signed for another product (§2.3's `payloadType`, §2.4's `product`; owner 2026-11-26: _Was:_ "not an update file") | `updates.import.notAnUpdate` |
+| `UPD-NOT-GENUINE` | the signature doesn't verify: no signature verifies under an embedded key, and some entry's `keyid` names one (the exact rule: §2.3, "No signature verifies") | `updates.import.notGenuine` |
+| `UPD-TOO-NEW` | `UpdateTooNew`: a newer format or container, over a cap, the `HRUPDATE` prefix, or a signed payload release 1 cannot read (the exact rules: §2.3, §2.4, §4.3) | `updates.import.tooNew` |
 | `UPD-UNKNOWN-SIGNER` | signed with a newer key: install the in-between update first | `updates.import.unknownSigner` |
 | `UPD-NEEDS-IN-BETWEEN` | `min_upgrade_from` above the running version | `updates.import.needsInBetween` |
 | `UPD-SAME-OR-OLDER` | the same or an older version than this one, or below the drive's version (F-4) | `updates.import.sameOrOlder` |
 | `UPD-ABOVE-MAX-VERSION` | above `updates.max_version` (`updateInstallVerdict`'s `above-max`) | `updates.import.aboveMaxVersion` |
 | `UPD-OS-TOO-OLD` | this computer is below the update's OS floor (G-24) | `updates.import.osTooOld` |
-| `UPD-CANT-CHECK-LINUX-FLOOR` | this update's Linux requirement can't be checked: its `linux` floor doesn't parse, or, on Linux, this computer's glibc version can't be read (G-24, fail closed, §2.4) | `updates.import.cantCheckLinuxFloor` |
+| `UPD-CANT-CHECK-LINUX-FLOOR` | this update's Linux requirement can't be checked: its `linux` floor doesn't parse, or, on Linux when the update names a `linux` floor, this computer's glibc version can't be read (G-24, fail closed; the exact rule: §2.4, "A floor that breaks it", "This system's floor") | `updates.import.cantCheckLinuxFloor` |
 | `UPD-WRONG-CHANNEL` | not a release for this drive (G-22) | `updates.import.wrongChannel` |
 | `UPD-FOR-NEWER-HILBERTRAUM` | a signed HilbertRaum file of another kind (G-30) | `updates.import.forNewerHilbertRaum` |
 | `UPD-DOWNLOAD-INCOMPLETE` | the file ends before a listed member (F-16) | `updates.import.downloadIncomplete` |
-| `UPD-FILE-DAMAGED` | the file's container or a member's hash doesn't match its signed list (§4.7) | `updates.import.damaged` |
+| `UPD-FILE-DAMAGED` | the file's container or a member's hash doesn't match its signed list (§4.7), or the update file's signed part can't be read (member 0's envelope, §2.3; owner 2026-11-26: _Was:_ "the file's container or a member's hash doesn't match its signed list (§4.7)") | `updates.import.damaged` |
 | `UPD-FILE-TOO-BIG-FOR-DRIVE` | the drive can't hold a file this large (`EFBIG`: FAT32 and a member of 4 GiB or more) | `updates.import.fileTooBigForDrive` |
 | `UPD-CANT-READ-FILE` | the update file couldn't be read (its stick or share went away, a read error; L1-5) | `updates.import.cantReadFile` |
 | `UPD-CANT-WRITE-DRIVE` | the drive couldn't be written while the update was copied (any write, move or remove error but a full drive and a too-large file; L1-5) | `updates.import.cantWriteDrive` |
 | `UPD-PATH-TOO-LONG` | on Windows the drive's folder is too deep for the update: move the HilbertRaum folder closer to the top of the drive (L2-18) | `updates.import.pathTooLong` |
 | `UPD-NO-HELPER` | no apply script for this system in the file | `updates.import.noHelper` |
-| `UPD-NOT-AVAILABLE` | updates are not available in this build (an empty key set) | `updates.import.notAvailable` |
+| `UPD-NOT-AVAILABLE` | updates are not available in this build: an empty key set, or a `keys.json` whose set does not read, which embeds none (the exact rule: §2.3, "The key set"; §2.7) | `updates.import.notAvailable` |
 | `UPD-NOT-A-DRIVE` | this copy isn't running from a prepared drive (F-21) | `updates.import.notADrive` |
 | `UPD-MAC-CACHE-COPY` | the macOS copy started from its cache: start HilbertRaum on the drive (F-21) | `updates.import.macCacheCopy` |
-| `UPD-OLD-FILE` | the 12-month confirmation (`issued`) | `updates.import.oldFile` |
-| `UPD-ISSUED-IN-FUTURE` | the warning for an `issued` date in the future | `updates.import.issuedInFuture` |
+| `UPD-OLD-FILE` | the confirmation for a file whose `issued` is more than 365 days before this computer's clock (§2.4, "`issued` old") | `updates.import.oldFile` |
+| `UPD-ISSUED-IN-FUTURE` | the warning for an `issued` more than 24 hours ahead of this computer's clock (§2.4, "`issued` in the future") | `updates.import.issuedInFuture` |
 | `UPD-OTHER-SYSTEM-FLOOR` | the warning about the drive's other systems' OS floors | `updates.import.otherSystemFloor` |
 | `UPD-AGE-REMINDER` | the age reminder (G-29) | `updates.reminder.age` |
 | `UPD-SUPPORT-ENDED` | the end-of-support notice | `updates.reminder.supportEnded` |
@@ -1330,7 +1540,9 @@ working papers). The start files' three codes have no copy key: their text is §
 | `UPD-LAUNCH-CANT-START` | start file: the counter found a confirmation (§5.6) | — |
 
 The import verdicts come from table A (§4.7). A later revision of the record may add codes, never
-rename or reuse one.
+rename or reuse one. For the verdicts of the envelope, the payload and the version rule, each meaning
+above is a one-line summary: the exact rule is the row of §2.3, §2.4 or §2.5 that gives it (§2.10
+names the stage each comes from; T4.5 m-10).
 
 ### 5.9 "Copy details for support" (table B.10; F-14, W-16)
 
@@ -1344,7 +1556,7 @@ through the log redaction, and a row asserts it comes back unchanged (W-16).
 | `App version` | the running version |
 | `System` | `<os> <process.getSystemVersion()> <process.arch>` |
 | `Apps on the drive` | `<os>=<version>` for each root artifact (R1's globs, §5.7), joined by `, `; a root `*.app` is `darwin=unknown`; none: `none` |
-| `Start files` | `Start HilbertRaum.cmd=<s>, Start HilbertRaum.command=<s>, start-hilbertraum.sh=<s>, READ ME FIRST.txt=<s>`, `<s>` = `same`, `different` or `missing` against the payload of `updates/applied/<running version>.dsse.json`, or `not checked` when that file is absent or does not verify (§2.3). Release 1 reads `install_as` here only (§2.4); on release 1 itself, before any update, the value is always `not checked` (L1-28) |
+| `Start files` | `Start HilbertRaum.cmd=<s>, Start HilbertRaum.command=<s>, start-hilbertraum.sh=<s>, READ ME FIRST.txt=<s>`, `<s>` = `same`, `different` or `missing` against the payload of `updates/applied/<running version>.dsse.json`, or `not checked` when that file is absent or does not verify (§2.3), and also when its payload or any one of its `files[]` entries does not read as §2.4 reads them: `readPayloadFiles` then gives no list, so the whole line is `not checked` (T4.2 review m-5). Release 1 reads `install_as` here only (§2.4); on release 1 itself, before any update, the value is always `not checked` (L1-28) |
 | `Drive release record` | `drive-release.json`'s `app_version`, `absent` or `unreadable` (from `readDriveRelease`'s four kinds, §8.5; P6 builds the copy) |
 | `Support end` | `config/kit-support.txt`'s `YYYY-MM`, `absent` or `unreadable` (from `readKitSupport`: `unreadable` for a failed read and for a damaged stamp, §8.4) |
 | `Update policy` | `allowed`, `managed`, `max <version>`, `invalid value` or `unreadable` (from `readUpdatePolicy`'s `install`, `maxVersion` and `file`, §8.1; P6 builds the copy) |
@@ -1417,7 +1629,8 @@ Decided by the owner on 2026-11-24 after the two reviews, each as recommended:
 
 Decided by the owner and the orchestrator on 2026-11-24 after spike 4a (ledger Δ-39):
 7. **G-24's `linux` floor fails closed** (§2.4): a floor that doesn't parse, or a glibc version that
-   can't be read, refuses the import before staging with `UPD-CANT-CHECK-LINUX-FLOOR` (§5.8).
+   can't be read when the update names a `linux` floor (the condition: owner 2026-11-26, Δ-76), refuses
+   the import before staging with `UPD-CANT-CHECK-LINUX-FLOOR` (§5.8).
 8. **Spike 4a's three fixes are adopted as measured**: the wait's zombie test and the bash final step
    (§5.5), and `start-hilbertraum.sh`'s rule 1 with `trap '' HUP` and `setsid` (§5.6); the `.command`'s
    rule 1 gets the `trap '' HUP` line, provisional until P11a's spike 3.
@@ -1790,6 +2003,8 @@ to the version kept in `updates/previous/`.
 - After a "Go back" that stays, the new version's engine folders remain until a later update's prune;
   release 1 ignores them. The version left is not offered again (its `went-back` line, §5.8) until its
   update file is imported again, which appends `cleared` (§5.7).
+- The target trusts the keys it embeds: a key that a later release dropped is trusted again after a
+  "Go back" to a version that still embeds it (an accepted residual, §11.3; T4.4d m-2).
 
 ### 6.11 What release 1 reads that later versions change (F-23, F-24, F-25)
 
@@ -3844,11 +4059,13 @@ its patch numbers belong to its fix line (§9.6); the next release from `master`
 2. The owner smoke-tests the draft's artifacts, then runs the signing tool **offline** ("sign what you
    tested"): it rebuilds the payload from the smoke-tested files plus the tag checkout and signs only if
    it is byte-identical to CI's; it checks the engine entries against `runtime-sources.yaml` at the tag;
-   it refuses a payload whose `requires.linux` is not a string of dot-separated decimal integers, which
-   every release-1 Kit would refuse (§2.4; the pre-publish check refuses it too); it prints the version,
-   the channel and `min_upgrade_from` and waits for a typed confirmation. It can add a signature to an
-   existing envelope in a second offline session (rotation). Routine releases are signed by the active
-   key alone.
+   it refuses a payload in which `requires` is present and no object, or a `win32`, `darwin` or `linux`
+   value breaks the floor grammar of §2.4 (its digit and length bounds included), which every
+   release-1 Kit would refuse on every system (§2.4; the pre-publish check refuses it too; T4.0's
+   review: _Was:_ "a payload whose `requires.linux` is not a string of dot-separated decimal integers,
+   which every release-1 Kit would refuse"); it prints the version, the channel and `min_upgrade_from`
+   and waits for a typed confirmation. It can add a signature to an existing envelope in a second
+   offline session (rotation). Routine releases are signed by the active key alone.
 3. The update file builder (in process, the container of §4) writes the full update file and one per
    system set; they are uploaded to the draft with the envelope `hilbertraum-release.dsse.json`. The
    update file's name is outside the `HilbertRaum-*` prefix that the sell gate and the start files scan.
@@ -4151,6 +4368,37 @@ covered later, by the walk (§10.4) and the owner's legs (§10.5).
 | 10 (T1.4) | Does a detached `cmd.exe` spawned by packaged Electron 43.8.10 outlive the app and its stub, with the exact argument list, environment and working folder, under 12 awkward drive roots and a `subst` letter on NTFS and exFAT; the start file's resume line; the apply lock; a working folder at the path-length limit; a parent inside a job? | Holds: 72 of 72 hand-offs; spawning the `.cmd` itself gives `EINVAL`; rule 1 resumes and counts under 11 of 12 roots (never under a root holding `%PATH%`, a limit of every `.cmd` start file); the handle lock excludes and releases; a working folder of 259 characters or more gives `ENOENT` 2 ms after `spawn()`; inside a kill-on-close job the apply dies with the job (S-P1-11) | the Windows spawn, its environment and the failed-spawn classes (§5.4); rule 1's text (§5.6, with spike 10b's prefix); the cmd lock and the cmd rules (§5.5) | the spike's working folder was the exe's folder, now the resolved drive root (S10-1, §5.4); batch-file locking (S10-2, closed by spike 10b); other system locales (S10-3); `LongPathsEnabled=1` only (S10-6); more root characters, other start forms, UNC roots (S10-7); known hashes (S10-5) | the Japanese-locale VM and a deep root with `LongPathsEnabled=0` (PC D): P11a (T11.3a); Windows 11 on ARM: P11a (T11.1); the extra root characters: P7 (T7.4a); UNC roots: a known limitation (P7, T7.D); the read-only marker failure: P11a (the read-only leg); an exFAT unplug: P11a, P11b (spike 5); the bash half: measured by spike 4a (row 4a); macOS: P11a (spike 3) |
 | 10b (T1.4b) | With `LockBatchFilesWhenInUse` = 1, and then at 0 again: does the apply still remove its own `applying\`, can a running start file be replaced, does rule 1's resume still resume and finish? | At 1 the planned self-delete fails (0 of 18: the new exe's stub inherits the running script's handle); removing first and starting last holds (34 of 34 at 1; the final text v7, 12 of 12 at 0); a resume could never replace its own start file at 1 (0 of 17) until rule 1's `(goto) 2>nul & ` prefix (4 of 4 at 1; at 0, 0 of 136 starts differ from spike 10); at 0 a start file replaced by rename reads on in the new file (12 of 12) | the apply's final line and the CE-1 order (§5.5); rule 1's prefix (§5.6); the start-file replacement's retry and deferral (§5.5); every path ending in one parsed block (§5.6); the cmd rules on locked scripts, `(goto)` and the Restart Manager, and the reason for the 10 s acknowledgement (§5.4, §5.5) | the final line measured at 1 by its parts only (pass 3); the value-1 spawn that ran no line is likely, not proven, the harness's query (P3-2); a lone `apply.cmd` held at the `rmdir` (P3-5, now §5.5 "Nothing to resume"); the prefix ends a calling batch file and a `cmd /k` console (P3-6, §11.3); one cmd build (P3-8) | the final line at 1, 40 value-1 spawns, the lone-`apply.cmd` resume: P7 (T7.2); the value and one self-delete run on each walk host and the Smart App Control PC: P11a (T11.8); `DelayedExpansion=1` with the lock on, start files on a network share: unowned |
 
+### 10.7 P4 contract vectors (F-1–F-4)
+
+_Status: as built in P4 (the negative and spec sets T4.4b's, from `d2784a2b`; the positive set T4.4's,
+`217ebd07`; the later files and vectors to `1942d717`, each named below); the schema set by T4.0. At
+`1942d717` the sets hold 1,047 vectors: `spec/` 97, `negative/` 873, `positive/` 77. All 1,047, as
+committed at `8ea9d58c`, gave the same answer under Electron 43.8.10's BoringSSL as on Node's OpenSSL,
+measured at P4's exit ("Where they run")._
+
+The goldens of F-1–F-4 (§10.2): public keys, envelopes and the verdicts release 1 gives them for ever,
+as data fixtures whose expected values do not come from the code under test.
+
+| Item | Rule |
+|---|---|
+| Folder | `apps/desktop/tests/fixtures/updates/vectors/`, with three sets: `spec/` (the DSSE specification's PAE example and RFC 8032 §7.1's Ed25519 vectors: public key, message and signature, taken from copies of the two sources kept with the wave's working papers; and the key-set vectors of §2.7), `positive/` (T4.4) and `negative/` (T4.4b). Each set holds `PROVENANCE.md`, its vectors as `vectors.json` or as several `vectors-<part>.json` (a test reads every `vectors*.json` of its set; `spec/` has `pae.json`, `ed25519.json` and `key-set.json` instead) and, for a generated set, its generator `generate.mjs`. As committed: `spec/` holds `pae.json` (5 vectors), `ed25519.json` (5) and `key-set.json` (87); `negative/` holds `vectors-envelope.json` (237), `vectors-payload.json` (480), `vectors-order.json` (66), `vectors-version-rule.json` (57) and `vectors-caps.json` (9) from the first writing (`d2784a2b`, its fix round included), `vectors-edges.json` (20; the adversarial review's golden holes, `f1864cbf`) and `vectors-review2.json` (4; the second review's M-1, m-6 and m-7, `1942d717`); `positive/` holds `vectors-envelope.json` (25), `vectors-payload.json` (38), `vectors-drive.json` (8), `vectors-release.json` (5) and `vectors-largest.json` (1); each set also has its `generate.mjs` and `PROVENANCE.md` |
+| Names and the manifest | file names only `[A-Za-z0-9_.@+-]`; every file under `tests/fixtures/updates/` has its line in `tests/fixtures/golden-fixtures.sha256` (a listed path makes its whole top folder golden, §10.2); one task at a time edits the manifest |
+| No private key | no file holds a private key, test keys included (C8). A generator makes each pair in memory (`generateKeyPairSync('ed25519')`), signs, writes the public half only (its SPKI, §2.7) and never writes the private half anywhere; RFC 8032's `SECRET KEY` lines are never copied (verification needs none). A repo-hygiene row refuses, in every file under `tests/fixtures/`, whatever its folder or extension, read byte for byte: the start of a PKCS#8 Ed25519 private key, v1 (RFC 5208; DER `302e020100300506032b657004220420`) or v2 (RFC 5958's form, which adds the public key: its DER starts `3051` or `3053`, then version 1 and the same algorithm fields), each as hex in either case or as base64 (v1 `MC4CAQAwBQYDK2VwBCIEI`); a PEM `PRIVATE KEY` armor line; and a JWK private key (a text holding both a `"kty"` key with the value `"OKP"` and a `"d"` key, with any whitespace between the tokens). _Was:_ "in every file under `tests/fixtures/updates/`", v1 only (the security fixes `8da2d9e0`, T4.5 security review L-1). What it cannot catch: a raw 32-byte seed (or a seed followed by its public key), which no text tells from a public key or a hash (the rule that no generator writes one, and the review of each generator, hold that case; the security review found no committed 32-byte value that is the seed of a committed public key, at `f1864cbf`); a key inside a base64 payload (its base64 start is found only where the key's DER begins the encoded bytes, or a multiple of three bytes into them); a key in any other encoding; and a file outside `tests/fixtures/`. A second row refuses a committed `keys.json` that holds one of RFC 8032 §7.1's test keys or any key a committed vector names, compared by id (§2.7, "Test keys"). A test public key is never written into `keys.json`, a build or a doc as a real key |
+| A vector | one JSON object with `id` (unique in its set, `[a-z0-9-]`), `why` (one line: what it proves and its source, a record row, a specification line or an RFC section), `keys`, `envelope`, `host` and `expect`. A vector of the version rule alone (§2.5) holds `version` (the candidate) in place of `keys` and `envelope`; its `host` holds only `runningVersion`, `driveAppVersion` and `rootApps`, and its `expect` holds `stage` (`version-rule`), `code`, `params` and `flags` (only `staleDriveVersion` can be true) and nothing else, also for `accepted` |
+| `spec/`'s files | `pae.json`: per vector `id`, `why`, `payloadType` (text), `body` and `pae` (base64), from DSSE `protocol.md`'s test vector; `ed25519.json`: per vector `id` (RFC 8032 §7.1's five: `rfc8032-test-1`, `rfc8032-test-2`, `rfc8032-test-3`, `rfc8032-test-1024`, `rfc8032-test-sha-abc`), `why`, `publicKey` (the raw 32 bytes as 64 hex characters), `spki` (§2.7's prefix followed by them, in standard base64 with padding), `keyId` (its id, §2.7), `message` (hex) and `signature` (128 hex characters), from RFC 8032 §7.1, with `spki` and `keyId` computed once by a tool that is neither the key-set parser nor the positive generator, its command recorded in `PROVENANCE.md`; `key-set.json`: the next row |
+| `spec/key-set.json` | per vector `id`, `why`, either `keySet` (a `key_set` string, exactly) or `keysJson` (a whole `keys.json` text, standing for its UTF-8 bytes and read as the file readers read them, §2.7; a byte-order mark is written as the JSON escape for U+FEFF (a backslash, then `uFEFF`) at the text's start), and `expect`: `{"valid": true, "ids": [...]}` (the keys' ids, §2.7, in the string's order) or `{"valid": false}`. It holds at least the empty set; one, two and three keys; RFC 8032 TEST 1's key, its id computed by a second tool (neither the parser nor the positive generator) and recorded in `PROVENANCE.md`; and one invalid vector per clause of §2.7's "A set that does not read" that an input can reach (no input is known for a `createPublicKey` throw), one for "The file readers" (a byte-order mark), and, for "A weak key", one one-key set per weak encoding it names (the five `y` values with each sign bit; `y` = p, p + 1 and 2^255 − 1, and one value strictly between: `y` = p + 2 and 2^255 − 2, each sign bit, so "not below p" is never read as a list; T4.4d M-1), a weak key among good ones, and valid controls beside each boundary (owner 2026-11-26, Δ-78; Electron 43.8.10 loads every one of these keys as OpenSSL does, so a control's answer is the parser's, not the library's) |
+| `keys` | the key set the verifier is given, as a list of Ed25519 SPKI DER in standard base64 with padding (§2.7), no repeat, at most 16; `[]` is the empty set. In these vectors a key's id is computed from it (§2.7), never stored beside it; the id form itself is held by `spec/key-set.json` and `spec/ed25519.json` |
+| `envelope` | member 0's exact bytes, as one base64 string or as `{"parts": [...]}` joined in order, each part `{"base64": …}`, `{"text": …}` (UTF-8) or `{"repeat": <text>, "times": <n>}`, as the reader goldens hold long or unprintable bytes (`readers/f8-policy/vectors.json`); a 4 MiB cap vector stays small that way |
+| `host` | `runningVersion` (a version, §5.1); `driveAppVersion` (a version, or null: `driveAppVersion`'s answer); `rootApps` (one `{name, kind, system, version}` per app, as `rootApps` lists them, or null for a root that could not be listed); `maxVersion` (a version, or null: the policy's cap); `os` (`win32`, `darwin` or `linux`); `osVersion` (`process.getSystemVersion()`'s string on `win32` and `darwin`, null on `linux`); `glibc` (`glibcVersionRuntime`'s string or null when absent on `linux`, null elsewhere); `now` (`YYYY-MM-DDTHH:MM:SSZ`, this computer's clock); `uiLanguage` (one of release 1's ten codes, §2.4) |
+| `expect` | `stage` (`envelope`, `payload` or `version-rule`: the check that decides; `accepted` has `payload`, or `version-rule` in a vector of the version rule alone; a vector with an `envelope` whose answer is `UPD-SAME-OR-OLDER` has `version-rule`, one whose answer is `UPD-ABOVE-MAX-VERSION` has `payload`); `code` (a code of §2.10, or `accepted`); `params` (every parameter §2.10 lists for that code, exactly, each as §2.10's "The parameters" says: the text as written, never normalised; `{}` for a code without parameters and for `accepted`); `flags` (always all four: `{"staleDriveVersion": …, "issuedInFuture": …, "oldFile": …, "otherSystemFloors": [...]}`, false or empty where the check did not run or found nothing); and for `accepted` also `version`, `issued`, `summary` and `files` as §2.10 says an accepted payload carries them |
+| Two failing checks | a check-order vector fails exactly two checks that give different codes; `expect` holds the earlier one's (§4.5) |
+| Depth | no vector nests deeper than 10,000 levels inside an ignored key, 10,001 counting the envelope's own object, and none expects a depth refusal (how deep `JSON.parse` goes is the engine's, §2.3). One positive vector, `pos-env-depth-10000-in-ignored-key`, holds 10,000 levels of nesting inside an ignored key of the envelope (10,001 in all): the reader never walks the parsed value as a whole (§2.3). _Was:_ "no vector nests deeper than 10,000 levels" (T4.4 S-b, T4.5 m-3) |
+| Independence | the positive set's generator never imports `envelope.ts` (its own PAE over `node:crypto`), so a positive envelope is not the verifier's own output (C14); the negative set is written from the DSSE specification, RFC 8032, this record (§2, §4.3, §4.5, §4.7, §5.8) and the code P3 froze (`version.ts`, `drive-release.ts`), without reading the verifier, its tests or their briefs (Δ-75 row 13) |
+| `PROVENANCE.md` | as `tests/fixtures/readers/*/PROVENANCE.md`: who wrote the set, on which date, at which commit and before which code existed; every source with its version (DSSE at commit `75a79b6ed61c63dabf291657e076d120d95a39a1`, RFC 8032, this record's sections at their commit); how each key pair was made and that its private half was never written; the generator's command line and the Node version it ran on; for the negative set, every file its writer opened; each file of the set and which test reads it; and that the set is frozen with F-1–F-4 (a new case is a new vector; a changed vector after release 1 is an owner call, §1.5) |
+| The generators | each set's `generate.mjs` (plain Node, no import from the repository) documents how its files were made; **the committed files are the golden**: every key pair is made at run time and its private half never leaves the process, so a new run gives other keys and signatures (only `spec/`'s `pae.json` and `ed25519.json` come out byte for byte the same, from the two sources it reads with `--rfc` and `--dsse`, which are not in the repository). `negative/generate.mjs --out <an empty folder>` writes all seven of its files; its two modes `--only=vectors-edges.json` and `--only=vectors-review2.json` each build every vector as a full run does (so a new id never repeats an earlier one) and write the one file added after the files before it were committed. Every generator refuses a folder that already holds vectors (the positive one wants a folder that does not exist yet), so no run replaces a committed file |
+| Where they run | `tests/unit/updates-envelope.test.ts` runs `spec/`'s three files (the PAE, the verification and the key-set parser; their vectors have no envelope) and the envelope stage of every vector with an envelope in `negative/` and `positive/`; `tests/unit/updates-payload.test.ts` runs the whole pipeline over `negative/` and `positive/`: each vector with an envelope through the envelope check and then the payload check, and each vector of the version rule alone (a `version`, no `envelope`) through `checkVersionRule`. `updates-version.test.ts` reads no vector file (_Was:_ "and, for the version rule's vectors, `updates-version.test.ts`"; Δ-75 row 24, T4.5 m-2). Both runners read the sets through one shared reader, `tests/helpers/update-vectors.ts` (Δ-75 row 26): it lists a set's files by name, reads each as a bare array, guards each vector's form and builds member 0's bytes, imports nothing from `src/`, and throws (so the runner fails, never passes on nothing) when a listed set is missing or holds no vector. All of it runs on every CI leg (Node's OpenSSL). Under Electron 43.8.10's BoringSSL: **all 1,047 vectors as committed at `8ea9d58c`** ran once as sets in the main process of P1's packaged probe app (Electron 43.8.10, its Node 24.22.1), routed as these runners route them, and each gave the same answer as on Node 24.13.0's OpenSSL 3.5.4 and the answer its `expect` holds, on both (measured at P4's exit, T4.4c's re-run, twice with the same results; the run's records are evidence kept outside the repository). Before that, every set as it stood at `217ebd07` (990 vectors) had run there the same way (T4.4c), and the adversarial review's own runner had agreed with all 1,019 vectors at `aeda35af` on both libraries (T4.4d). _Was:_ "the 28 vectors added after that (`f1864cbf`, `1942d717`) have not run as sets under Electron; their crypto cases were checked there one by one (…)" (T4.D review M-1). A vector's verdict is the same in both, or the run reports it |
+| File shape and routing | every `vectors*.json` (and each `spec/` file) is a bare JSON array, one vector per element. A test reads every `vectors*.json` of the sets it lists and **routes by form**: a vector with an `envelope` runs the envelope check and then the payload check (the version rule inside it), whatever its `expect.stage`; a vector with `version` and no `envelope` runs the version rule alone; `expect.stage` is then compared as part of the answer (routing by stage alone would leave eleven envelope-form `version-rule` vectors unrun). Each listed set must exist and hold at least one vector (T4.4b's Q1, Q4 and its Opus review M2; the orchestrator, 2026-11-26) |
+
 ---
 
 ## 11. Open items and non-goals
@@ -4178,8 +4426,9 @@ None of §11.1's calls is decided yet. Decided in P1 by the owner (and, where ma
   the notice for at most 60 s (§5.12).
 - The protocol tables of §4 and §5, every value; P11a's Defender row can reopen its own row (spike 4a's
   rows are settled, below).
-- G-24's `linux` floor fails closed: a floor that doesn't parse, or a glibc that can't be read, refuses
-  the import with `UPD-CANT-CHECK-LINUX-FLOOR` (§2.4, §5.12).
+- G-24's `linux` floor fails closed: a floor that doesn't parse, or a glibc that can't be read when the
+  update names a `linux` floor (the condition: owner 2026-11-26, Δ-76), refuses the import with
+  `UPD-CANT-CHECK-LINUX-FLOOR` (§2.4, §5.12).
 - Spike 4a's fixes (with the orchestrator): the wait's zombie test, the bash final step and
   `start-hilbertraum.sh`'s rule 1 as measured; the `.command`'s `trap '' HUP` line provisional until
   P11a's spike 3 (§5.5, §5.6).
@@ -4214,6 +4463,19 @@ Decided in P3 by the owner, 2026-11-25 and 2026-11-26, one line each:
   a junk update policy key; a deliberate `false` passes (§9.5).
 - The cost of the pre-spawn check was measured on a local stand-in copy of the same size (§6.7).
 
+Decided in P4 by the owner, 2026-11-26, one line each:
+- T4.0's nine user-visible values, each as recommended, every answer an existing code: another product
+  → `UPD-NOT-AN-UPDATE`; an envelope that does not read → `UPD-FILE-DAMAGED`; a signed payload release 1
+  can't read, a garbled Windows or macOS floor included → `UPD-TOO-NEW`; another HilbertRaum type from an
+  unknown key, and no signature at all → `UPD-UNKNOWN-SIGNER`; `issued` warns above 24 hours ahead,
+  asks above 365 days old, and nothing without a readable date; an unreadable Windows or macOS version
+  with a floor named → `UPD-OS-TOO-OLD`; `summary` counted in code points; an unreadable glibc refuses
+  only a file that names a `linux` floor (§2.3, §2.4, Δ-76).
+- The release guard's limit is accepted and documented (it proves the literal, not the expression), and
+  the key proof gains the key count (§2.7, §2.8, Δ-77).
+- Weak keys are refused by the key-set parser, not left to a crypto library; the key proof's
+  second-message step stays as a belt (§2.7, §2.8, Δ-78).
+
 Decided later, each in its own phase: G-10 (where the walk runs, P7), G-11 (the channel mechanics, P5:
 `prerelease: true` kept, the pre-publish check refuses a Kit release still flagged pre-release), G-25
 (how a fix line follows Electron's support window, P5, with counsel), M-D3 and M-D4 (P10), U5 (with the
@@ -4238,7 +4500,9 @@ online check after release 1).
 - Offline Kits get AI engine updates only from a file (G-31 (b)); every release offered to release-1
   Kits keeps working on release 1's engine where a system has not installed the new one (G-35 (a)).
 - An old but genuine update file can move a Kit up to an outdated version, never down (G-19 (b)).
-- A stolen key stays trusted on every Kit that never installs the release that drops it (K1, §2.1).
+- A stolen key stays trusted on every Kit that never installs the release that drops it, and again on a
+  Kit that goes back to a version that still embeds it (§6.10) (K1, §2.1; T4.4d m-2). The compromise
+  runbook (K3, P5) is to name both.
 - A root exe with the read-only attribute (or on a root the user may not write to) makes §5.6's
   in-flight probe read "in flight" at every start, so R1's counter never counts and a broken new
   version never falls back; the start file logs `counter-skip reason=in-flight`, and the sell gate and
@@ -4317,6 +4581,7 @@ subsection at the end of its section, never by renumbering.
 |---|---|
 | §1 | scope, the owner's decisions and the plan's gates, the frozen-forever rule, the frozen contracts F-1–F-27 |
 | §2 | trust: the keys and their custody, the envelope, the payload, the version rule, the channel, the release guard, the key proof, the fork rule |
+| §2.10 | the typed verdicts of the envelope and the payload: codes, parameters, flags, the address set |
 | §3 | finding and importing an update: no online check, the addresses, the entry points, the locked channels, the refusals before reading |
 | §4 | staging and the update file container (protocol table A) |
 | §4.1 | how to read table A, and why its caps are set for a 2035 file |
@@ -4345,6 +4610,7 @@ subsection at the end of its section, never by renumbering.
 | §8 | the policy keys, `update.log`, the support details, the support end and age, `drive-release.json`, the audit events, the pins |
 | §9 | the release side and its ritual, the fix line, the sell gate |
 | §10 | the test record, the protocol model, the walk, real media, the spike verdicts and their one-box limit |
+| §10.7 | the P4 contract vectors: their folder, the vector schema, `PROVENANCE.md`, the no-private-key rule |
 | §11 | open items, the calls decided in P1, residuals and non-goals |
 | §12 | these legends |
 | §12.5 | the model, surprise and method-review ids that §4, §5, §10.6 and §11.3 cite, each with what it found |
@@ -4372,7 +4638,7 @@ branch are resolved by §12.3, and the model, surprise and method-review ids of 
 | `P2-<n>` | a finding of spike 10b's own second part (the runs at `LockBatchFilesWhenInUse` = 0; P2-5: the harness's Restart Manager query) | §12.5 |
 | `CF-<n>` | a carried fact in the wave's ledger: a fact one phase hands to a later one | — |
 | `R-<n>`, `V-<n>` (as "the T1.12 review R-5") | findings and value remarks of this record's independent review (T1.12) | the citing row |
-| an id after a task id, such as `R1-2`, `R1 m-1`, `M-2`, `N-4`, `S-1`, `Q2` or `D-1` (as "T3.12's review R1 m-1", "T3.11's S-1") | a finding of that task's reviews (`R1`, `R2`: the first and second reviewer; `M` major, `m` minor, `N` from a re-check), or a surprise (`S`), question (`Q`) or decision (`D`) of its report, in the wave's working papers; provenance, each closed or recorded by the row that cites it | the citing row |
+| an id after a task id, such as `R1-2`, `R1 m-1`, `M-2`, `N-4`, `S-1`, `Q2` or `D-1` (as "T3.12's review R1 m-1", "T3.11's S-1") | a finding of that task's reviews (`R1`, `R2`: the first and second reviewer; `B` blocker, `M` major, `m` minor, `N` from a re-check), or a surprise (`S`), question (`Q`) or decision (`D`) of its report, in the wave's working papers; provenance, each closed or recorded by the row that cites it | the citing row |
 | a letter in brackets after a gate or call id (`G-19 (b)`, `G-21 (b')`, `U1 (b)`, `G-5 (c)`) | the option chosen in the plan; the decision is as §1.3 and §1.4 word it | §1.3, §1.4 |
 | "the orchestrator" | the session that ran the wave for the owner; its calls are marked as its own | §11.2 |
 | v5, v6, v7 | successive texts of the cmd apply's final line measured in spike 10b (v7 is §5.5's) | §5.5 |

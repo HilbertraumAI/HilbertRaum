@@ -56,6 +56,13 @@ from its first public `1.0.0` release onward.
   remembers which build of the AI engine was running when it switched to the processor. When the drive's engine is
   another build (after an engine update, or when the drive moves between a Mac and a Windows or Linux computer), it
   tries the graphics card once more on its own, and switches back by itself if the trouble returns.
+- **Groundwork for updates from a file; nothing changes for you yet.** This version contains the check an update
+  file will have to pass: it accepts only a file signed with one of the public keys built into the app, checks it
+  entirely offline, and refuses anything else with a reason. Nothing in the app can import an update file yet, and
+  this version carries no update key, so it would accept none. Each start now notes in the app's diagnostics log
+  how many update keys the app carries (a number only, never a key), and the project's release builds for
+  Windows, macOS and Linux check that the key list inside each package matches the one in the source code's key
+  file.
 - **For Kit builders:** `build-commercial-drive` needs the Kit's support end, `-SupportEnd YYYY-MM`
   (`--support-end`), on every run but `-VerifyOnly`, writes it once to `config/kit-support.txt`, and writes the
   drive's release record as its last write before the final check; that check also refuses a Kit without these,

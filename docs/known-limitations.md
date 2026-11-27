@@ -1103,17 +1103,24 @@ password recovery — are documented in
     forever with no in-app remedy (F-13, full-audit 2026-07-16). The downloader now verifies a
     complete `.part` in place instead: a matching hash renames it into place, a mismatch discards it
     and restarts clean (the same treatment as a wrong-offset 206).
-- **Drive updates are manual — signed offline update bundles (spec §12.3) are not built yet;
-  there is no update mechanism.** The `updates/` and `workspace/backups/` directories
-  are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)
-  ("Updating a drive"). The in-field update is being built on the integration branch
-  `feat/app-updates` (BUILD_STATE §5 item 3); its design record [`app-updates.md`](app-updates.md)
-  settles the key-management questions this entry once listed as the blocker: who holds the
-  signing keys and where they live, which public keys a build trusts, rotation and continuity,
-  and rollback protection (§1.3's K1–K5, §2). Until release 1 ships, drives are updated by hand.
-  One constraint already understood from that discussion: a trust anchor cannot be
-  retroactively strengthened, so whatever key signs during development must never anchor
-  commercial drives — the production key would be a different, offline-generated key.
+- **Drive updates are manual — signed offline update files (spec §12.3) cannot be imported yet;
+  there is no update mechanism.** Nothing in this version imports an update file, so drives are
+  updated by hand, as [`drive-layout.md`](drive-layout.md) ("Updating a drive") describes. The
+  in-field update is being built on the integration branch `feat/app-updates` (BUILD_STATE §5
+  item 3); its design record [`app-updates.md`](app-updates.md) settles the key-management
+  questions this entry once listed as the blocker: who holds the signing keys and where they live,
+  which public keys a build trusts, rotation and continuity, and rollback protection (§1.3's
+  K1–K5, §2). What exists so far: the drive's support log `updates/update.log` (so a prepared
+  drive now has an `updates/` folder), the drive-release record and the update policy keys ("App
+  updates: support log, policy keys and drive record" below), and the check that decides whether
+  an update file is genuine and applicable, against public keys built into the app, with nothing
+  yet that hands it a file ("App updates: the trust core" below). This build's key set is empty
+  until the owner's key ceremony. `workspace/backups/` is not created. One constraint already
+  understood from that discussion: a trust anchor cannot be retroactively strengthened, so no
+  development or test key may ever anchor a build. Test keys are made at test time and never
+  enter the committed `keys.json` (a repository rule refuses RFC 8032's test keys and every key a
+  committed test vector names there), and the production keys are separate keys, generated
+  offline at the owner's ceremony.
 
 ## Engineering trade-offs (noted, intentionally unchanged)
 
@@ -3566,7 +3573,7 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The in-app reinstall needs a download (#532).** "Install the AI engine again" fetches the
   pinned build. On a drive whose policy forbids downloads (an offline Kit) the button stays
   disabled and the troubleshooting entry is the path; an offline repair would come with the
-  signed update bundles (Phase 22). It re-fetches what the operating system refused: the main
+  signed update bundles ([`app-updates.md`](app-updates.md) §6.5). It re-fetches what the operating system refused: the main
   build, the `cpu/` safety net, or both (#678). A `cpu/` net the drive's pinned sources have no
   build for (a main folder replaced by hand with the processor build) cannot be replaced in the app.
 - **No reinstall while the engine's `cpu/` build answers.** When the main engine folder is
@@ -3578,7 +3585,7 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   and document tasks, but a quick translation on the Translate screen that is in flight at the
   moment the models pause is cut off and has to be asked again. The pause lasts a few seconds. An engine without a version record is never offered an update, and the
   knowledge-pack tools are only reported. On an offline Kit the update waits for the signed
-  update bundles (Phase 22); until then the scripts update the drive.
+  update bundles ([`app-updates.md`](app-updates.md) §6.5); until then the scripts update the drive.
 - **A second refusal of a fresh copy is not a damaged copy.** If the copy the app just installed
   is refused as damaged too, the banner says its files are probably not the cause (on Windows,
   usually an outdated Visual C++ Redistributable) and offers no second reinstall. That marker
@@ -4818,3 +4825,65 @@ reviews accepted as built is below, grouped by part.
 - **"Read-only" means the write bits or the Windows read-only attribute**: an ACL that denies writing a
   root app is not checked.
 - **The gate follows a link at `updates/`** (the app refuses one); exFAT holds no links.
+
+## App updates: the trust core ([`app-updates.md`](app-updates.md) §2)
+
+The update wave's fourth phase (P4) built the check an update file must pass before anything in it is
+used: its signed envelope, its payload and the version rule, the public keys each build embeds, and the
+release guard that checks those keys in every release build ([`security-model.md`](security-model.md)
+"Update trust"). Nothing in this version hands it a file yet (the import is P6's), so these limits apply
+from then on. What P4's reviews accepted as built:
+
+**The verifier and the payload check**
+- **A hostile file at the caps holds the check for about a second.** The check is synchronous, and an
+  update file whose signed envelope is at the 4 MiB cap and whose 64 signatures verify under no key
+  costs 64 signature checks per embedded key. Measured in a packaged build (Electron 43.8.10,
+  BoringSSL): about 0.9 s with release 1's three keys and 4.8 to 4.9 s with sixteen, the most a key
+  set may hold; a genuine file takes 14 to 23 ms. Whether the import runs the check off the app's main
+  thread is P6's decision; until then this is the bound.
+- **A forged file can read "signed with a newer key".** When no signature verifies and none names a key
+  the app embeds, the answer is "signed with a newer key: install the in-between update first", also for
+  a forgery or a file with no signature at all. It is refused either way, but the message may send
+  someone looking for an in-between update that does not exist ([`app-updates.md`](app-updates.md) §2.3).
+- **Three versions no release may use are accepted.** A version with build metadata (`1.0.1+b`), one that
+  differs from the running version only in the letter case of a pre-release part (`1.0.0-rc1` over a
+  running `1.0.0-RC1`, which the drive would hold as one folder) and one with a number of more than nine
+  digits pass release 1's reader, as SemVer allows. No release may be signed with one; the release
+  side's pre-publish check (P5, not built yet) is where all three are refused
+  ([`app-updates.md`](app-updates.md) §2.4, "Later writers: `version`").
+- **A key whose private half is public reads as valid.** The parser refuses weak keys (the small-order
+  encodings, under which a signature can verify without any private key, and with them the
+  non-canonical ones), but it cannot tell a real key from one whose private half is known. The key
+  proof with each real private key and the key count keep such a key out of a release
+  ([`app-updates.md`](app-updates.md) §2.7, §2.8).
+- **A lower system version from the operating system refuses a floor.** A Windows program started in a
+  compatibility mode, or a Mac process with `SYSTEM_VERSION_COMPAT=1`, may be given a lower system
+  version; an update that names a floor above it is then refused as needing a newer system (fail closed;
+  [`app-updates.md`](app-updates.md) §2.4).
+- **A drive whose recorded version is ahead of the running app can be left with no file that
+  installs**, when the update of that version names a minimum the running app is below
+  ([`app-updates.md`](app-updates.md) §2.5). Release 1's own flows are not known to produce that state.
+- **A stolen key stays trusted** on every Kit that never installs the release that drops it, and is
+  trusted again on a Kit that goes back to a version that still embeds it
+  ([`app-updates.md`](app-updates.md) §6.10, §11.3).
+
+**The keys and the release guard**
+- **The release guard proves the key-set literal, not the expression around it** (owner, 2026-11-26). It
+  checks that the key-set string in the built main bundle equals the committed `keys.json`; a source
+  change that adds a key elsewhere in the code passes it, so the code review, the key proof and the key
+  count are what catch that. It reads bytes and does not parse the code, so a quoted copy of the set in
+  a comment or inside another string is not told apart from the real one. It passes a build that embeds
+  no key: refusing an empty set is the sell gate's and the pre-publish check's (P5, not built yet).
+- **The repository rules have blind spots.** The row that keeps private keys out of
+  `apps/desktop/tests/fixtures/` finds the PKCS#8 forms, a PEM private-key line and a JWK private key,
+  but not a raw 32-byte seed (no text tells it from a public key or a hash), a key inside a base64
+  payload (unless the key's bytes start a multiple of three bytes into it), another encoding, or a file
+  outside that folder. The row over the committed `keys.json` finds RFC 8032's test keys and every key a
+  committed vector names, not a test key that no committed file names (one a test makes at run time, or
+  the update walk's one-time key).
+- **The key-check steps still ask the registry once when vitest is missing.** `release.yml`'s three
+  key-check steps run `npx --no-install vitest`, which never installs vitest; with no local vitest it
+  still sends one registry request for vitest's metadata before it fails, and it would run a vitest
+  already in npm's own npx cache. CI always has its local vitest after `npm ci`. The older #769
+  packaged-app step still runs plain `npx vitest`, which would install a missing vitest (a follow-up;
+  [`packaging.md`](packaging.md) "The release workflow").

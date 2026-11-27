@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
+import { Readable } from 'node:stream'
+import { finished } from 'node:stream/promises'
 
 /**
  * The `node_modules` layout that electron-builder 26 writes into `app.asar` (#548).
@@ -22,8 +24,10 @@ import { dirname, join, resolve } from 'node:path'
  *
  * Checked against a real Windows `app.asar` (`70eab0fe`, 2026-11-03): the model names its 224 package
  * directories exactly. Since #769 release.yml's build-win runs that check on every build it packages
- * (`packedArtifact` below). Platform-specific optional packages are all modelled (only the negated
- * `@napi-rs/canvas-*` variants exist today, so every build host packs the same layout).
+ * (`packedArtifact` below); build-mac and build-linux name their `app.asar` only for the release guard's key row
+ * (`asarFilesUnder` below), never for this model, which has met no macOS or Linux archive. Platform-specific optional
+ * packages are all modelled (only the negated `@napi-rs/canvas-*` variants exist today, so every build host packs the
+ * same layout).
  */
 
 /** A `package-lock.json` v3 `packages` entry — the fields the packaging gates read. */
@@ -160,9 +164,24 @@ export function packedNodeModules(packages: LockPackages, appPath = 'apps/deskto
   return packed
 }
 
+/** An entry of an archive's header (`@electron/asar`'s `getRawHeader`): a folder, a link, or a file (packed or unpacked). */
+type AsarHeaderEntry = { files: Record<string, AsarHeaderEntry>; unpacked?: boolean } | { link: string; unpacked?: boolean } | { size: number; unpacked?: boolean }
+
+/** What `createPackageFromStreams` takes for one entry (`@electron/asar`'s `AsarStreamType`, the fields it reads). */
+interface AsarStream {
+  type: 'file' | 'link'
+  path: string
+  unpacked: boolean
+  symlink?: string
+  stat: { mode: number; size: number }
+  streamGenerator: () => NodeJS.ReadableStream
+}
+
 interface AsarModule {
   listPackage: (archive: string, options: { isPack: boolean }) => string[]
   extractFile: (archive: string, filename: string) => Buffer
+  getRawHeader: (archive: string) => { header: AsarHeaderEntry }
+  createPackageFromStreams: (dest: string, streams: AsarStream[]) => Promise<NodeJS.WritableStream>
 }
 
 /** The package directories in a real `app.asar` (`node_modules/a`, `node_modules/a/node_modules/@s/b`). */
@@ -191,7 +210,58 @@ export function asarPackageIds(asarPath: string): string[] {
   return [...new Set(ids)].sort()
 }
 
-/** The variables that name a packaged build; release.yml's build-win sets all three (packaging.test.ts reads its step). */
+/**
+ * The files under `dir` (`out/main`) of a real `app.asar`, read from its header: each with its path below `dir`,
+ * `/`-separated, and its bytes, sorted by path (files only, no folders). Throws when `dir` is no folder in the archive,
+ * and on a link or an unpacked file below it (an unpacked file lives in `app.asar.unpacked`, outside the archive and its
+ * integrity hash), so a build that moved or unpacked its main bundle fails the row that reads it instead of passing on
+ * other bytes. The release guard's packed row reads the main bundle through this (app-update W-3,
+ * updates-bundle-check.test.ts).
+ */
+export function asarFilesUnder(asarPath: string, dir: string): Array<{ path: string; bytes: Buffer }> {
+  const { getRawHeader, extractFile } = builderRequire()('@electron/asar') as AsarModule
+  let node: AsarHeaderEntry | undefined = getRawHeader(asarPath).header
+  for (const name of dir.split('/')) node = node !== undefined && 'files' in node && Object.hasOwn(node.files, name) ? node.files[name] : undefined
+  if (node === undefined || !('files' in node)) throw new Error(`no folder ${dir} in ${asarPath}`)
+  const found: Array<{ path: string; bytes: Buffer }> = []
+  const walk = (folder: { files: Record<string, AsarHeaderEntry>; unpacked?: boolean }, prefix: string): void => {
+    for (const [name, entry] of Object.entries(folder.files)) {
+      const rel = prefix + name
+      if ('link' in entry) throw new Error(`${dir}/${rel} is a link in ${asarPath}`)
+      if (entry.unpacked === true) throw new Error(`${dir}/${rel} is unpacked (outside ${asarPath})`)
+      if ('files' in entry) walk(entry, `${rel}/`)
+      // extractFile splits the name on the host's separator, so on Windows a `/` path is not found.
+      else found.push({ path: rel, bytes: extractFile(asarPath, join(...dir.split('/'), ...rel.split('/'))) })
+    }
+  }
+  walk(node, '')
+  return found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+}
+
+/** One entry of a scratch `app.asar` for `writeAsar`: a file with its bytes (packed, or unpacked beside the archive), or a link. */
+export type ScratchAsarEntry = { path: string; bytes: Uint8Array; unpacked?: boolean } | { path: string; link: string }
+
+/**
+ * Write a scratch `app.asar` at `dest` (a test temp folder) with the `@electron/asar` writer electron-builder packs with
+ * (`createPackageFromStreams`, app-builder-lib's `out/asar/asarUtil.js`), entry paths `/`-separated. Resolves once the
+ * archive is on disk.
+ */
+export async function writeAsar(dest: string, entries: readonly ScratchAsarEntry[]): Promise<void> {
+  const { createPackageFromStreams } = builderRequire()('@electron/asar') as AsarModule
+  const streams = entries.map((e): AsarStream => {
+    const path = join(...e.path.split('/'))
+    if ('link' in e) return { type: 'link', path, symlink: e.link, unpacked: false, stat: { mode: 0o644, size: 0 }, streamGenerator: () => Readable.from([]) }
+    const bytes = Buffer.from(e.bytes)
+    return { type: 'file', path, unpacked: e.unpacked ?? false, stat: { mode: 0o644, size: bytes.length }, streamGenerator: () => Readable.from([bytes]) }
+  })
+  await finished(await createPackageFromStreams(dest, streams))
+}
+
+/**
+ * The variables that name a packaged build. release.yml's build-win sets all three for the real-archive rows
+ * (packaging.test.ts reads its step); each of its three build legs also sets the asar alone for the release guard's packed
+ * row (updates-bundle-check.test.ts, app-update W-3).
+ */
 export const PACKED_ENV = {
   asar: 'HILBERTRAUM_PACKED_ASAR',
   exe: 'HILBERTRAUM_PACKED_EXE',
@@ -202,7 +272,8 @@ export const PACKED_ENV = {
  * The packaged build the real-archive rows read (#548, #769): `HILBERTRAUM_PACKED_ASAR` names its `app.asar` and
  * `HILBERTRAUM_PACKED_EXE` its executable, each relative to apps/desktop. Unset, those rows skip. release.yml's build-win
  * also sets `HILBERTRAUM_PACKED_REQUIRED=1`, under which packaging.test.ts fails unless both name existing files, so a
- * build that moved cannot turn the rows into silent skips.
+ * build that moved cannot turn the rows into silent skips. The release guard's packed row needs no such switch: it runs
+ * only where the asar is named, on all three build legs, and fails when the named file is missing.
  */
 export function packedArtifact(): { asar?: string; exe?: string; required: boolean } {
   const at = (value: string | undefined): string | undefined =>

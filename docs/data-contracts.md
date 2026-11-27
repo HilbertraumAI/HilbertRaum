@@ -2313,6 +2313,100 @@ nothing, one LF or one CR LF. Anything else is `damaged` (`not-a-file`, `empty`,
 otherwise `month`. It checks the form only: whether the month is past is the support computation's
 (P6). `formatKitSupport(month)` gives the builder's bytes, the only ones the sell gate accepts.
 
+### The update trust core: envelope, payload, version rule, embedded keys (app-update P4; `docs/app-updates.md` §2)
+✅ **`services/updates/{envelope,payload,version,member-name,keys,bundle-check}.ts`** — what decides
+whether an update file is genuine, current and applicable (W-1, W-2, W-3, W-63, W-75; F-1–F-4 and F-18's
+member names, frozen: release 1 applies them to every update file for ever). The record's §2 is the
+exact rule; this entry is the shape P5 and P6 build on. Verdicts are typed (`shared/updates/types.ts`): a
+reference code of record §5.8 with its parameters, never copy and never an address; record §2.10 lists
+every code, the stage that gives it, its parameters and the four flags. Goldens:
+`tests/fixtures/updates/vectors/` (`spec/`, `negative/`, `positive/`; record §10.7). In this build main
+only reads the embedded set, for the startup line (`log.info('Update keys', { count, valid })` in
+`index.ts`: a count and a flag, never a key or an id); nothing calls the verifier yet, P6's import is its
+first caller.
+
+- **The payload** (record §2.4), read from the verified bytes with the envelope's JSON rules (strict
+  UTF-8, no byte-order mark, one object, own keys only, the last of a duplicate key, unknown keys
+  ignored). A payload that does not read is `UPD-TOO-NEW` (a known key signed it).
+
+  | Field | What release 1 reads | Absent or anything else |
+  |---|---|---|
+  | `format` | the number 1 (`=== 1` after `JSON.parse`, so `1.0` passes) | `UPD-TOO-NEW` |
+  | `product` | exactly `"hilbertraum"` | `UPD-NOT-AN-UPDATE` |
+  | `kind` | exactly `"release"` | `UPD-FOR-NEWER-HILBERTRAUM` |
+  | `channel` | exactly `"stable"` | `UPD-WRONG-CHANNEL` |
+  | `version` | SemVer 2.0.0 of at most 64 bytes (`isReleaseVersion`, F-13's bound) | `UPD-TOO-NEW` |
+  | `min_upgrade_from` | optional; a version as `version` is; above the running version → `UPD-NEEDS-IN-BETWEEN` | present but no such version (`null` included): `UPD-TOO-NEW` |
+  | `requires` | optional object; only its own keys `win32`, `darwin`, `linux`, each a floor: components of 1–9 ASCII digits joined by single dots, at most 64 bytes | no object: `UPD-TOO-NEW`; a `linux` floor outside the grammar `UPD-CANT-CHECK-LINUX-FLOOR`, a `win32` or `darwin` one `UPD-TOO-NEW`, on every system; this system below its floor `UPD-OS-TOO-OLD` (on Linux, an unreadable glibc with a `linux` floor named: `UPD-CANT-CHECK-LINUX-FLOOR`) |
+  | `issued` | optional; exactly `YYYY-MM-DDTHH:MM:SSZ`, a real UTC time from 2000 to 9999 | never a refusal: no date shown and no clock notice |
+  | `summary` | optional object: a UI language code → 1 to 400 code points without a lone surrogate | ignored |
+  | `files` | an array of 0 to 4,096 objects | `UPD-TOO-NEW` |
+  | `files[].name` | the member-name rule (`isMemberName`, record §4.4); no two names equal after folding `A`–`Z` | `UPD-TOO-NEW` |
+  | `files[].size` | a safe integer from 0 to 8,589,934,591 (`-0` is carried as 0) | `UPD-TOO-NEW` |
+  | `files[].sha256` | 64 hex characters in either case, carried lower-cased | `UPD-TOO-NEW` |
+  | `files[].group` | optional; a string of at least one character | `UPD-TOO-NEW` (`null` and `""` included) |
+  | `files[].install_as` | anything; carried as `installAs` when it is a string, else null | never a refusal |
+  | `files[].role` | never read | — |
+  | every other field (the engine fields included) | ignored | — |
+
+- **The check order** (record §4.5), the first failure deciding: the reading, `format`, `product`, `kind`,
+  `channel`, `version`, `min_upgrade_from`, the version rule (`UPD-SAME-OR-OLDER`), the policy's cap
+  (`UPD-ABOVE-MAX-VERSION`), `requires` (the `linux`, `win32` and `darwin` forms in that order, then this
+  system's floor), `issued`, `files`. An accepted payload carries `version`, `issued`, the `summary`
+  shown, `files` in payload order and the flags `otherSystemFloors`, `issuedInFuture`, `oldFile` and
+  `staleDriveVersion`; every refusal carries `staleDriveVersion` too, false for one before the version
+  rule, and P6 logs it (record §2.10).
+- **`keys.json` and the embedded form** (record §2.7): `apps/desktop/src/main/services/updates/keys.json`
+  is one object whose `key_set` string is the marker `hilbertraum-key-set-1:` followed by zero or more
+  Ed25519 public keys joined by `,`, each its 44-byte DER SubjectPublicKeyInfo in standard base64 with
+  padding (60 characters); other fields are ignored. A key's id is the lower-case hex SHA-256 of its 44
+  bytes, the `keyid` the release tools write. The committed set is the empty one until the owner's key
+  ceremony. The app embeds `key_set` through the bundler's JSON import, as one plain string literal in
+  the main bundle, where the release guard finds it; no other file under `src/` spells the marker with
+  its colon. Only `keys.ts` imports `keys.json`; the release guard and the repository rule read it as a
+  file (`readKeysFile`), and the release tools (P5) and the walk are to call the same function.
+- **The functions P5 and P6 call** (pure; none throws):
+  - `verifyEnvelope(bytes, keys, runningVersion)` (`envelope.ts`) → `{ verified: true, payload }` (the
+    payload bytes as signed, a `Buffer` of their own) or `{ verified: false, refusal }` (record §2.3).
+    `keys` is `parseKeySet`'s `.keys` (in main, `embeddedKeySet.keys` from `keys.ts`), never the whole
+    read result: a `keys` that is no array refuses as `UPD-NOT-AVAILABLE`.
+  - `parseKeySet(keySet)` (`envelope.ts`) → `{ valid: true, keys }` (each `{ id, key }`, `key` a
+    `KeyObject`) or `{ valid: false, fault }` (`not-a-string`, `marker`, `too-many`, `not-base64`,
+    `not-ed25519-spki`, `weak-key`, `unloadable`, `repeated`); the one place a key's id is computed, so
+    P5's signer writes that id as `keyid`.
+  - `checkPayload(verified, input)` (`payload.ts`) → `{ accepted: true, payload }` or
+    `{ accepted: false, refusal, staleDriveVersion }`. `input` (`PayloadInput`): `runningVersion` (a
+    parsed version), `driveAppVersion`, `rootApps` (or null when the root could not be listed),
+    `maxVersion` (`readUpdatePolicy`'s), `now` (milliseconds), `uiLanguage` (one of the ten codes), and
+    by system `os` with `osVersion` (`process.getSystemVersion()` on Windows and macOS, null on Linux)
+    and `glibc` (`glibcVersionRuntime` on Linux, or null; null elsewhere). That `verified` came from
+    `verifyEnvelope` is the caller's duty.
+  - `readPayloadFiles(verified)` (`payload.ts`) → the `files[]` read as `checkPayload` reads them, with
+    no other check, or null when the payload or any entry does not read (the support details then say
+    `not checked`, record §5.9).
+  - `checkVersionRule(version, running, driveAppVersion, rootApps)` (`version.ts`) → accepted or
+    `UPD-SAME-OR-OLDER`, both with `staleDriveVersion` (record §2.5); `checkPayload` calls it in its
+    order.
+  - `isMemberName(name)` (`member-name.ts`) → whether a name keeps table A.3's rule (record §4.4), with
+    `foldMemberName` and `hasFoldedDuplicate` for the `A`–`Z` fold and uniqueness; P5's writer and P6's
+    staging import them, never copy them.
+  - `checkBundleKeys(files, committedKeysJson)` (`bundle-check.ts`) → `{ ok: true, path, keyCount }` or
+    `{ ok: false, failure }` with its `reason` (`committed-unreadable`, `marker-not-found`,
+    `marker-repeated`, `marker-not-in-code`, `marker-not-quoted`, `embedded-unreadable`, `keys-differ`
+    with both id lists); `files` are the main bundle's files under `out/main`, each its path and bytes.
+  - `readKeysFile(bytes)` (`bundle-check.ts`) → `{ valid: true, value, keys }` or `{ valid: false, fault }`
+    (`not-json-object` or a `parseKeySet` fault): `keys.json` as the file readers read it, never an empty
+    set for a file that does not read.
+- **Type stripping** (the release tools, `.mjs`): `envelope.ts`, `payload.ts`, `version.ts`,
+  `member-name.ts`, `bundle-check.ts` and `drive-release.ts` load in plain Node through its own type
+  stripping, with `scripts/lib/ts-sibling-imports.mjs`'s `registerTsSiblingImports()` (P3's precedent,
+  `scripts/lib/write-drive-release.mjs`). So they use extension-less relative value imports of their
+  siblings and `import type` freely; no `@shared` alias, no JSON import, no `electron` import, only
+  TypeScript that stripping can erase (no `enum`, no `namespace`, no parameter property); `envelope.ts`
+  takes the key set as an argument and never imports `keys.ts`; host values are arguments, never read
+  inside them. `member-name.ts` imports nothing and `version.ts` no value, so both also load without the
+  hook. Each module has a load row in its test file.
+
 ### Provisioning / asset loader (Phase 12 live)
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
   when present; real `download.sha256` must equal a real top-level `sha256`). Optional

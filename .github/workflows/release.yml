@@ -101,6 +101,15 @@ jobs:
           HILBERTRAUM_PACKED_EXE: release/win-unpacked/HilbertRaum.exe
           HILBERTRAUM_PACKED_REQUIRED: '1'
         run: npx vitest run tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts
+      # App-update W-3 (F-3; docs/app-updates.md 2.7, "The release guard's reading"): the public keys embedded in the
+      # packed app.asar's main bundle equal this checkout's keys.json, byte for byte (an empty set included). Its own
+      # step on each build leg; packaging.test.ts reads all three on every PR. Blocking: the release job needs this job.
+      # `--no-install`: a vitest missing from the tree fails the step; npx never installs one from the registry here.
+      - name: Check the packaged app's embedded update keys (app-update W-3)
+        working-directory: apps/desktop
+        env:
+          HILBERTRAUM_PACKED_ASAR: release/win-unpacked/resources/app.asar
+        run: npx --no-install vitest run tests/unit/updates-bundle-check.test.ts
       # App-update W-15 (spike 8; docs/app-updates.md 8.7): every version and every Kit on one computer shares the
       # profile %APPDATA%\@hilbertraum\desktop, and the single-instance lock is keyed on it. packaging.test.ts pins
       # the names that path derives from; this step reads the path itself, on the exe just built: it starts the
@@ -196,6 +205,16 @@ jobs:
           codesign --verify --verbose=2 "$APP"
           VERSION=$(node -p "require('./apps/desktop/package.json').version")
           ditto -c -k --keepParent "$APP" "HilbertRaum-${VERSION}-mac-arm64.app.zip"
+      # App-update W-3: the same key check as build-win's, on the signed app the zip holds. Blocking: the release job
+      # needs this job.
+      - name: Check the packaged app's embedded update keys (app-update W-3)
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          # The dir target lands in release/mac-<arch>/ (mac-arm64 on this runner): exactly one app.asar.
+          set -- release/mac*/HilbertRaum.app/Contents/Resources/app.asar
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then echo "expected one packaged mac app.asar, found: $*" >&2; exit 1; fi
+          HILBERTRAUM_PACKED_ASAR="$1" npx --no-install vitest run tests/unit/updates-bundle-check.test.ts
       - name: Fetch mac llama.cpp runtime (Metal), zip symlink-dereferenced
         # Convenience re-host of the pinned Metal build (MIT). Zip WITHOUT -y so
         # symlinks are dereferenced → safe to extract onto exFAT.
@@ -226,6 +245,13 @@ jobs:
           name: linux-appimage
           path: apps/desktop/release/*.AppImage
           if-no-files-found: error
+      # App-update W-3: the same key check as build-win's, on the app.asar the AppImage was made from (the AppImage
+      # target leaves release/linux-unpacked in place). Blocking: the release job needs this job.
+      - name: Check the packaged app's embedded update keys (app-update W-3)
+        working-directory: apps/desktop
+        env:
+          HILBERTRAUM_PACKED_ASAR: release/linux-unpacked/resources/app.asar
+        run: npx --no-install vitest run tests/unit/updates-bundle-check.test.ts
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

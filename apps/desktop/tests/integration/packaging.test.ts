@@ -708,3 +708,119 @@ describe("the user-data folder's name never moves (app-update W-15, spike 8)", (
     expect([workflow.jobs.release.needs].flat()).toContain('build-win')
   })
 })
+
+// App-update W-3 (F-3; docs/app-updates.md §2.7, "The release guard's reading"; T4.3): each build leg checks that the
+// app.asar it just packaged embeds this checkout's keys.json, by running updates-bundle-check.test.ts with
+// HILBERTRAUM_PACKED_ASAR naming that asar (its packed row fails when the named file is missing). A workflow change first
+// runs at a dispatch or a tag, so the three steps' wiring is read here on every PR: the command (the file path; `-t`
+// alone would collect and import every test file), the asar path electron-builder writes on each runner (its output
+// directory and productName), the order after the package step, and nothing that lets a red step pass: no `if:`, no
+// `continue-on-error:` and no `shell:` on the step (a shell template decides the step's exit code), none on its job, no
+// default shell for the job or the workflow, and a release job gated on the tag alone (review R-3). The steps never set
+// HILBERTRAUM_PACKED_REQUIRED, which demands the executable too (the #769 rows above). The mac leg resolves its
+// `release/mac-<arch>/` folder in the step, with a Bash 3.2 script that refuses anything but one match. The command
+// runs vitest with `npx --no-install` (T4.5 L-2): with no local vitest, plain npx would install the newest one from the
+// registry and run it, unpinned; `--no-install` makes that a failed step. It still asks the registry for vitest's
+// metadata first, and it would run a vitest already in npm's own npx cache (T4.5 security-fix, npx-probe).
+describe("release.yml's three build legs check the packed app's embedded update keys (app-update W-3)", () => {
+  interface Step {
+    name?: string
+    run?: string
+    uses?: string
+    with?: Record<string, unknown>
+    env?: Record<string, string>
+    if?: unknown
+    shell?: unknown
+    'continue-on-error'?: unknown
+    'working-directory'?: string
+  }
+  interface Job {
+    steps: Step[]
+    needs?: string | string[]
+    if?: unknown
+    defaults?: unknown
+    'continue-on-error'?: unknown
+  }
+  const TEST_FILE = 'tests/unit/updates-bundle-check.test.ts'
+  const COMMAND = `npx --no-install vitest run ${TEST_FILE}`
+  const cfg = builderConfig()
+  const output = (cfg.directories as { output: string }).output
+  const workflow = parseYaml(repoText('.github', 'workflows', 'release.yml')) as { jobs: Record<string, Job>; defaults?: unknown }
+  const jobs = workflow.jobs
+
+  // `keys`: the step's own keys as written, sorted (the mac step sets no env).
+  const LEGS: ReadonlyArray<{ job: string; packageRun: string; anchor: string; isAnchor: (s: Step) => boolean; keys: string[] }> = [
+    {
+      job: 'build-win',
+      packageRun: 'npm run package:win',
+      anchor: 'the #769 packaged-app check',
+      isAnchor: (s) => s.env?.[PACKED_ENV.required] !== undefined,
+      keys: ['env', 'name', 'run', 'working-directory']
+    },
+    {
+      job: 'build-mac',
+      packageRun: 'npm run package',
+      anchor: 'the ad-hoc sign and zip',
+      isAnchor: (s) => (s.run ?? '').split('\n').some((l) => l.trim().startsWith('codesign --force ')),
+      keys: ['name', 'run', 'working-directory']
+    },
+    {
+      job: 'build-linux',
+      packageRun: 'npm run package',
+      anchor: 'the AppImage upload',
+      isAnchor: (s) => s.with?.name === 'linux-appimage',
+      keys: ['env', 'name', 'run', 'working-directory']
+    }
+  ]
+
+  it.each(LEGS)('$job runs the key check once, after its package step and after $anchor, and nothing lets it pass red', ({ job, packageRun, isAnchor, keys }) => {
+    expect(existsSync(join(DESKTOP_ROOT, TEST_FILE)), TEST_FILE).toBe(true)
+    const steps = jobs[job]!.steps
+    const found = steps.filter((s) => (s.run ?? '').includes(TEST_FILE))
+    expect(found, `${job} has one step that runs ${TEST_FILE}`).toHaveLength(1)
+    const step = found[0]!
+    expect(step['working-directory']).toBe('apps/desktop')
+    const packageAt = steps.findIndex((s) => s.run === packageRun)
+    expect(packageAt, `${job} runs ${packageRun}`).toBeGreaterThan(-1)
+    const anchorAt = steps.findIndex(isAnchor)
+    expect(anchorAt, `${job} has the step the check follows`).toBeGreaterThan(packageAt)
+    expect(steps.indexOf(step), 'the check reads the build that step packaged').toBeGreaterThan(anchorAt)
+    expect(step.if, 'the step has no if:').toBeUndefined()
+    expect(step['continue-on-error'], 'the step has no continue-on-error').toBeUndefined()
+    expect(jobs[job]!['continue-on-error'], `${job} has no continue-on-error`).toBeUndefined()
+    // Review R-3: the step's keys as written pin the absence of shell: (and of any other key); the job has no if: and
+    // no defaults: (a job-wide default shell would decide the step's exit code as a shell: on the step does).
+    expect(Object.keys(step).sort(), `${job}'s key check step: its keys as written, no shell:`).toEqual(keys)
+    expect({ if: jobs[job]!.if, defaults: jobs[job]!.defaults }, `${job} has no if: and no defaults:`).toEqual({ if: undefined, defaults: undefined })
+    expect([jobs.release!.needs].flat(), `the release job waits for ${job}`).toContain(job)
+    expect(`${JSON.stringify(step.env ?? {})} ${step.run}`).not.toContain(PACKED_ENV.required)
+  })
+
+  // Review R-3: a red leg blocks the release only while the release job's if: is the tag test alone (an always() or a
+  // !cancelled() beside it would run it after a failed leg), and no workflow-wide default shell sits under the steps.
+  it('the release job runs on a version tag alone, and the workflow sets no default shell', () => {
+    expect({ if: jobs.release!.if, defaults: workflow.defaults }).toEqual({ if: "startsWith(github.ref, 'refs/tags/v')", defaults: undefined })
+  })
+
+  it('build-win and build-linux name the unpacked app.asar electron-builder leaves in place', () => {
+    for (const [job, unpacked] of [['build-win', 'win-unpacked'], ['build-linux', 'linux-unpacked']] as const) {
+      const step = jobs[job]!.steps.find((s) => (s.run ?? '').includes(TEST_FILE))
+      expect({ env: step?.env, run: step?.run }, job).toEqual({ env: { [PACKED_ENV.asar]: `${output}/${unpacked}/resources/app.asar` }, run: COMMAND })
+    }
+  })
+
+  it("build-mac resolves release/mac*/ to exactly one app.asar in the step, in Bash 3.2's syntax", () => {
+    const step = jobs['build-mac']!.steps.find((s) => (s.run ?? '').includes(TEST_FILE))
+    expect(step?.env).toEqual(undefined)
+    const code = (step?.run ?? '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'))
+    expect(code).toEqual([
+      'set -euo pipefail',
+      `set -- ${output}/mac*/${cfg.productName}.app/Contents/Resources/app.asar`,
+      expect.stringMatching(/^if \[ "\$#" -ne 1 \] \|\| \[ ! -f "\$1" \]; then echo .+ >&2; exit 1; fi$/),
+      `${PACKED_ENV.asar}="$1" ${COMMAND}`
+    ])
+  })
+})
