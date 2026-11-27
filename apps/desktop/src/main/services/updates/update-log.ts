@@ -823,23 +823,28 @@ function appendLine(rootPath: string, line: string): void {
  * once registered in {@link UPDATE_LOG_EVENTS}, T3.10's unlock line and P6's and P7's events), its fields typed by the
  * event's schema ({@link formatRegisteredLine}). An event nobody registered is no line, counted and reported in app.log
  * on any root. Only on a prepared drive; a refusal or a failure is counted and reported in app.log. Never throws.
+ * Answers true only when the append returned, so the line is in the file; false for every line not written (the update
+ * service's repeated-refusal rule counts only a line written, record §4.5 N-7). A failure after the bytes went (the
+ * close) answers false too: for that rule, one line more. The other callers ignore the answer.
  */
-export function appendUpdateLogLine(paths: UpdateLogPaths, event: UpdateLogEvent, fields: readonly UpdateLogField[]): void {
+export function appendUpdateLogLine(paths: UpdateLogPaths, event: UpdateLogEvent, fields: readonly UpdateLogField[]): boolean {
   try {
     if (!isRegistered(event)) {
       reportSkip(event, 'unregistered-event')
-      return
+      return false
     }
-    if (!paths.isPreparedDrive) return
+    if (!paths.isPreparedDrive) return false
     const line = formatRegisteredLine(event, fields, { platform: process.platform, now: new Date() })
     if (line === null) {
       reportSkip(event, 'invalid-line')
-      return
+      return false
     }
     appendLine(paths.rootPath, line)
+    return true
   } catch (err) {
     if (err instanceof Skip) reportSkip(event, err.reason, err.failure)
     else reportSkip(event, 'write-failed', err)
+    return false
   }
 }
 

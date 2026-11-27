@@ -12,9 +12,12 @@
 // (nothing read or written under it, F-21); the policy, read from disk once for the run (managed, invalid; its cap is
 // the payload check's); the drive's checks before the dialog (staging.ts); the dialog (main's own, handed in); the
 // reader's checks (bundle.ts); the checks before the data pass (staging.ts); the old-file stop (a new token, nothing
-// removed); the data pass; the commit. A run checks for a cancel when the dialog returns and between two checks; the
-// reader asks the same hook at its own points. A refusal before the dialog writes its line only when the last import
-// line of this process was not the same code from a check before the dialog (N-7).
+// removed); the data pass; the commit. A run checks for a cancel when the dialog returns, between two checks, and once
+// after the data pass, right before the commit; the reader asks the same hook at its own points. A refusal before the
+// dialog writes its line only when the last import line this process wrote was not the same code from a check before the
+// dialog (N-7). `staged` is null from the moment a run or a discard may have removed the staged update (§3.5): the data
+// pass of its version (or of one equal after the folder-name fold), a commit that ends refused, a discard of it answered
+// `not-staged` or refused UPD-CANT-WRITE-DRIVE.
 //
 // The start step (record §4.5 "The start step", CF-54): on a prepared drive only, never throwing. Its synchronous part
 // lists the root and lstats `updates/` (the links row: a real folder by lstat and workspace-vault.ts's
@@ -57,6 +60,7 @@ import {
   logVersion,
   planSweep,
   removeStagingFolders,
+  requestedVersion,
   startDataPass,
   sweptLogFields,
   type RemovalFailure,
@@ -168,8 +172,8 @@ export interface UpdateServiceDeps {
   /** Main's file dialog for the window that called (one file, the update file filters): a path, or null when closed. A
    *  dialog that cannot open counts as closed. */
   readonly chooseFile: (caller: unknown) => Promise<string | null>
-  /** update-log.ts's appendUpdateLogLine. */
-  readonly appendLog: (paths: UpdateLogPaths, event: UpdateLogEvent, fields: readonly UpdateLogField[]) => void
+  /** update-log.ts's appendUpdateLogLine: true when the line was written. */
+  readonly appendLog: (paths: UpdateLogPaths, event: UpdateLogEvent, fields: readonly UpdateLogField[]) => boolean
   readonly fs: { readonly bundle: BundleFileSystem; readonly staging: StagingFileSystem; readonly start: StartFileSystem }
   /** P7's place in the start step (CF-54): runs once `updates/` is found a real folder, before step (2) and the sweep,
    *  so before any channel answers. Empty in PR-6a. */
@@ -446,6 +450,8 @@ class Service implements UpdateService {
       return await this.runImport(run, redeem, caller)
     } finally {
       this.run = null
+      // The reads made while it went show the run's own policy: the next answer reads again (§3.5's 250 ms rule).
+      this.driveReads = null
     }
   }
 
@@ -526,6 +532,9 @@ class Service implements UpdateService {
       return { kind: 'confirm', token: token.value, update, notice: { code: 'UPD-OLD-FILE', params: { issued: payload.issued } }, notices }
     }
     run.status = Object.freeze({ state: 'copying', done: 0, total: file.totalBytes, update, notices })
+    // The data pass starts by removing <v>/ (§4.5 "The data pass starts"), found by the folder-name fold of staging's
+    // listing rule (member-name.ts's foldMemberName): the staged update may be gone from here, whatever the run answers.
+    if (this.staged !== null && foldMemberName(this.staged.version) === foldMemberName(version)) this.stagedMayBeGone()
     const start = await startDataPass(ctx, drive, post.targets, version)
     if (start.kind === 'refused') return this.refuseRead(start.refusal, { version, stale, cause: start.cause, link: start.link })
     const end = await file.stage({
@@ -547,9 +556,17 @@ class Service implements UpdateService {
       if (end.kind === 'cancelled') return this.cancelled(version)
       return this.refuseRead(end.refusal, { version, stale, cause: end.cause })
     }
+    // The last check point (§3.5 updates:cancel): a cancel answered `stopping` while the last member was closed and moved.
+    // No await between this check and `committing`, so a cancel never answers `stopping` after it.
+    if (run.cancel) {
+      this.reportLeft('the data pass', await removeStagingFolders(ctx, start.folders))
+      return this.cancelled(version)
+    }
     run.status = Object.freeze({ state: 'committing', update, notices })
     const commit = await commitStaged(ctx, start.folders, { envelope: file.envelope, files: end.files })
     if (commit.kind === 'refused') {
+      // Its removal of the other versions may have run (§4.5 "The commit").
+      this.stagedMayBeGone()
       this.reportLeft('the commit', await removeStagingFolders(ctx, start.folders))
       return this.refuseRead(commit.refusal, { version, stale, cause: commit.cause, link: commit.link })
     }
@@ -683,14 +700,24 @@ class Service implements UpdateService {
     // P7's place: a start that answers UPD-OLDER-THAN-DRIVE refuses here and writes no line (no such check in PR-6a).
     this.discarding = true
     try {
-      const end = await discardOnDrive(this.context(drive), this.staged, argument)
+      // The request's own string version, read once: the drive half and the answer below see the same one.
+      const asked = requestedVersion(argument)
+      const staged = this.staged
+      const end = await discardOnDrive(this.context(drive), staged, asked === null ? null : { version: asked })
       this.driveReads = null
       if (end.kind === 'discarded') {
         this.staged = null
         this.appendLine('staging-discarded', discardedLogFields(end.version))
         return { kind: 'discarded', version: end.version }
       }
-      if (end.kind === 'not-staged') return { kind: 'not-staged' }
+      if (end.kind === 'not-staged') {
+        // The staged version was asked for and the drive does not hold it (§3.5 `staged`).
+        if (staged !== null && asked === staged.version) this.staged = null
+        return { kind: 'not-staged' }
+      }
+      // Staging answers UPD-CANT-WRITE-DRIVE only once the staged version was asked for: its removal failed after taking
+      // its staged.json first, or a name on its way proves nothing. It may be gone. UPD-IN-PROGRESS removes nothing.
+      if (end.refusal.code === 'UPD-CANT-WRITE-DRIVE') this.staged = null
       if (end.cause !== null) reportCause('a discard failed', end.cause)
       return { kind: 'refused', refusal: end.refusal }
     } finally {
@@ -737,24 +764,33 @@ class Service implements UpdateService {
     return { kind: 'cancelled' }
   }
 
-  /** One import line, unless it is a refusal before the dialog of the same code as the last import line, which was one
-   *  too (N-7: a page that repeats a refused call adds one line, not one per call). Only on a prepared drive. */
+  /** One import line, unless it is a refusal before the dialog of the same code as the last import line this process
+   *  wrote, which was one too (N-7: a page that repeats a refused call adds one line, not one per call). Remembered only
+   *  when the appender wrote it. Only on a prepared drive. */
   private importLine(event: 'import-refused' | 'import-staged' | 'import-cancelled', fields: readonly UpdateLogField[], code: string | null, beforeDialog: boolean): void {
     if (this.drive === null) return
     const last = this.lastImportLine
     if (beforeDialog && last !== null && last.beforeDialog && last.code === code) return
-    this.appendLine(event, fields)
-    this.lastImportLine = { code, beforeDialog }
+    if (this.appendLine(event, fields)) this.lastImportLine = { code, beforeDialog }
   }
 
-  private appendLine(event: UpdateLogEvent, fields: readonly UpdateLogField[]): void {
+  /** Hands a line to the appender: true when it wrote it (an appender that throws wrote nothing). */
+  private appendLine(event: UpdateLogEvent, fields: readonly UpdateLogField[]): boolean {
     const drive = this.drive
-    if (drive === null) return
+    if (drive === null) return false
     try {
-      this.deps.appendLog(drive, event, fields)
+      return this.deps.appendLog(drive, event, fields) === true
     } catch (error) {
       report('an update.log line could not be handed on', error)
+      return false
     }
+  }
+
+  /** A run or a discard may have removed the staged update: none is claimed from here (null while the drive still holds
+   *  it is the safe direction; the next start reads again), and the drive is read again at the next answer (§3.5). */
+  private stagedMayBeGone(): void {
+    this.staged = null
+    this.driveReads = null
   }
 
   private reportLeft(step: string, failure: RemovalFailure | null): void {

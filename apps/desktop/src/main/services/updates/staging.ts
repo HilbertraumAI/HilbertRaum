@@ -8,8 +8,9 @@
 //   `updates/staging/<v>/` and `.incoming-<v>/` real folders where they exist, and the free-space formula;
 // - startDataPass: removes those two folders, then makes `updates/staging/` when it is missing, `.incoming-<v>/`, `<v>/`
 //   and `<v>/files/` (each one plain mkdir, then tested), the folders the reader's data pass writes into;
-// - commitStaged: every other `<w>/` and `.incoming-<w>/` removed, the cleared line (last-result.ts), the envelope as
-//   `hilbertraum-release.dsse.json`, `staged.txt`, then `staged.json` last (F-5's bytes), `.incoming-<v>/` removed;
+// - commitStaged: `<v>/` tested again, every other `<w>/` and `.incoming-<w>/` that is a real folder removed, the
+//   cleared line (last-result.ts), the envelope as `hilbertraum-release.dsse.json`, `staged.txt`, then `staged.json`
+//   last (F-5's bytes), `.incoming-<v>/` removed;
 //   removeStagingFolders: the removal after a refusal or a cancel from the data pass on;
 // - planSweep and carryOutSweep: the start-up sweep's reads and decisions, then its removals (the start step's
 //   asynchronous part); sweptLogFields: its `staging-swept` lines;
@@ -332,14 +333,22 @@ async function testFolder(ctx: StagingContext, path: string, memo: Memo): Promis
 
 // ---- the removal walk (§4.5 "Every removal")
 
-/** A removal that did not end: the top is not a real folder (left as it is), or a call failed. */
+/** A removal that did not end: the top is not a real folder or its test proved nothing (either way left as it is), or a
+ *  call failed. */
 export interface RemovalFailure {
+  /** The top is not a real folder (a link, a folder found elsewhere, anything else at the name). */
   readonly link: boolean
+  /** The top's own test proved nothing (its lstat or its real-folder test failed other than with ENOENT). */
+  readonly unproven: boolean
   readonly cause: ImportIoCause | null
 }
 
+/** A sub-folder whose real-folder test proved nothing: the walk ends there, with that test's cause. */
 class Unproven {
-  constructor(readonly cause: ImportIoCause | null) {}
+  readonly cause: ImportIoCause | null
+  constructor(cause: ImportIoCause | null) {
+    this.cause = cause
+  }
 }
 
 /** Every entry of the real folder `dir` by lstat, then `dir` itself; a link removed by its name and never entered. */
@@ -370,7 +379,8 @@ async function walkRemove(ctx: StagingContext, dir: string, retry: boolean, memo
 /**
  * Removes the folder at `path`, a `<w>/` or an `.incoming-<w>/` release 1 made under `updates/staging/`: its
  * `staged.json` first when there is one (a cut removal never leaves a valid one), then the walk. Null when it is gone (or
- * was never there); a failure when the name is not a real folder (left as it is) or a call failed. `retry`: on Windows,
+ * was never there); a failure when the name is not a real folder or its test proves nothing (both left as they are), or
+ * a call failed. `retry`: on Windows,
  * removeRetry's budget per call (the data pass, the commit, the discard); the start step's removals take none.
  */
 async function removeFolderTree(ctx: StagingContext, path: string, retry: boolean, memo: Memo): Promise<RemovalFailure | null> {
@@ -378,11 +388,11 @@ async function removeFolderTree(ctx: StagingContext, path: string, retry: boolea
     await ctx.fs.lstat(path)
   } catch (error) {
     if (codeOf(error) === 'ENOENT') return null
-    return { link: false, cause: causeOf(error) }
+    return { link: false, unproven: true, cause: causeOf(error) }
   }
   const test = await testFolder(ctx, path, memo)
-  if (test.kind === 'not-real') return { link: true, cause: null }
-  if (test.kind === 'unknown') return { link: false, cause: test.cause }
+  if (test.kind === 'not-real') return { link: true, unproven: false, cause: null }
+  if (test.kind === 'unknown') return { link: false, unproven: true, cause: test.cause }
   try {
     const marker = join(path, STAGED_JSON)
     let info: StagingStats | null
@@ -396,7 +406,7 @@ async function removeFolderTree(ctx: StagingContext, path: string, retry: boolea
     await walkRemove(ctx, path, retry, memo)
     return null
   } catch (error) {
-    return { link: false, cause: error instanceof Unproven ? error.cause : causeOf(error) }
+    return { link: false, unproven: false, cause: error instanceof Unproven ? error.cause : causeOf(error) }
   }
 }
 
@@ -732,6 +742,11 @@ const stagedJsonBytes = (version: string, files: readonly AcceptedFile[]): Buffe
 /** A write that moved fewer bytes, which threw nothing. */
 const SHORT_WRITE = Symbol('short write')
 
+/** A folder opened for its fsync (macOS, Linux): read-only, with O_DIRECTORY (the open fails on anything that is no
+ *  folder), O_NOFOLLOW (on a symbolic link at the name) and O_NONBLOCK (it never waits on a pipe), each where node:fs has
+ *  it. */
+const FOLDER_SYNC_FLAGS = constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+
 /** One marker: to its `.tmp` name (whatever is there removed by its name first, a folder left; then `wx`), written,
  *  fsynced, closed, renamed into place; on macOS and Linux the folder fsynced after. Throws on any failure. */
 async function writeMarker(ctx: StagingContext, dir: string, name: string, bytes: Uint8Array): Promise<void> {
@@ -757,7 +772,7 @@ async function writeMarker(ctx: StagingContext, dir: string, name: string, bytes
   await ctx.fs.rename(tmp, join(dir, name))
   // A folder's fsync is what the running system offers (Windows opens no folder for it), whatever rules `ctx` applies.
   if (process.platform !== 'win32') {
-    const folder = await ctx.fs.open(dir, constants.O_RDONLY)
+    const folder = await ctx.fs.open(dir, FOLDER_SYNC_FLAGS)
     try {
       await folder.sync()
     } finally {
@@ -768,12 +783,15 @@ async function writeMarker(ctx: StagingContext, dir: string, name: string, bytes
 
 /**
  * The commit, once the reader staged every member present into `<v>/files/` (§4.5 "The commit", in the order that
- * leaves no staged update or exactly one that nothing marks): every other real folder in `updates/staging/` removed (at
- * most one staged update; a link or a file there is left); the `cleared` line when `last-result.txt` marks `<v>`
- * (last-result.ts; a failed append refuses UPD-CANT-WRITE-DRIVE); `envelope` (member 0's bytes as verified) as
- * `hilbertraum-release.dsse.json`, then `staged.txt`, then, last, `staged.json` (F-5's bytes); then `.incoming-<v>/`
- * removed (one that stays after its retries is left for the next start's sweep: the update is staged). A refusal answers
- * as an error while staging, for the caller to remove the two folders. Never throws.
+ * leaves no staged update or exactly one that nothing marks): `<v>/` tested again first, its walk covering `updates/` and
+ * `updates/staging/` (not a real folder: UPD-CANT-WRITE-DRIVE `link=version`, nothing written; the data pass ran for
+ * minutes since its own test); every other real folder in `updates/staging/` removed (at most one staged update; a link,
+ * a file, or an entry whose test proves nothing, such as a held lstat, is left, and the commit goes on: §4.5 "Links
+ * under updates/"); the `cleared` line when `last-result.txt` marks `<v>` (last-result.ts; a failed append refuses
+ * UPD-CANT-WRITE-DRIVE); `envelope` (member 0's bytes as verified) as `hilbertraum-release.dsse.json`, then `staged.txt`,
+ * then, last, `staged.json` (F-5's bytes); then `.incoming-<v>/` removed (one that stays after its retries is left for the
+ * next start's sweep: the update is staged). A refusal answers as an error while staging, for the caller to remove the
+ * two folders. Never throws.
  */
 export async function commitStaged(
   ctx: StagingContext,
@@ -781,6 +799,8 @@ export async function commitStaged(
   staged: { readonly envelope: Uint8Array; readonly files: readonly AcceptedFile[] }
 ): Promise<{ readonly kind: 'committed'; readonly cleared: boolean; readonly incomingLeft: RemovalFailure | null } | StagingRefused> {
   const memo: Memo = {}
+  const target = await testFolder(ctx, folders.versionDir, memo)
+  if (target.kind !== 'real') return cantWrite('version', target.kind === 'unknown' ? target.cause : null)
   let names: string[]
   try {
     names = await ctx.fs.readdir(folders.stagingDir)
@@ -795,13 +815,12 @@ export async function commitStaged(
     let info: StagingStats
     try {
       info = await ctx.fs.lstat(path)
-    } catch (error) {
-      if (codeOf(error) === 'ENOENT') continue
-      return writeError(causeOf(error))
+    } catch {
+      continue // gone, or a stat that proves nothing (a held name): left as it is
     }
     if (info.isSymbolicLink() || !info.isDirectory()) continue
     const failure = await removeFolderTree(ctx, path, true, memo)
-    if (failure !== null && !failure.link) return writeError(failure.cause)
+    if (failure !== null && !failure.link && !failure.unproven) return writeError(failure.cause)
   }
   const cleared = await clearMarkOf(folders.updatesDir, folders.version, ctx.fs, ctx.platform)
   if (cleared.kind === 'failed') return cantWrite(null, cleared.cause)
@@ -1038,8 +1057,9 @@ export function sweptLogFields(facts: SweepFacts): UpdateLogField[][] {
 
 // ---- "Don't install this update" (§3.5 updates:discardStaged, §4.5)
 
-/** The request's own string `version`, or null (a junk argument): compared byte for byte, never used to build a path. */
-function requestedVersion(request: unknown): string | null {
+/** The request's own string `version`, or null (a junk argument): compared byte for byte, never used to build a path.
+ *  The update service reads it once and hands the discard `{ version }` or null. */
+export function requestedVersion(request: unknown): string | null {
   try {
     if (typeof request !== 'object' || request === null || !Object.hasOwn(request, 'version')) return null
     const version = (request as Record<string, unknown>).version

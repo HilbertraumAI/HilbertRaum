@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  appendUpdateLogLine,
   formatRegisteredLine,
   formatUpdateLogLine,
   startFailedFields,
@@ -22,7 +24,8 @@ import { DESKTOP_ROOT } from '../helpers/repo-files'
 // golden's (tests/fixtures/readers/f11-update-log/), written by hand from the plan, the record and the T3.2 sheet,
 // never from the writer's output. This file holds the pure rules: the fields of each event, the registered events and
 // their typed fields (Δ-66: the appender writes only those, each field only by its key's rule), and the frame every
-// line goes through last. What the writer does on a real drive (the folder, links, the size cap) is
+// line goes through last, and the appender's answer (whether it wrote; its rows, at the end, write to a scratch root).
+// What the writer does on a real drive (the folder, links, the size cap) is
 // tests/integration/update-log-drive.test.ts; the failed-start line in the start runner is
 // tests/integration/backend-start-failure.test.ts.
 
@@ -464,5 +467,36 @@ describe('F-11 golden: the import events (vectors-import.json; record §4.5 "upd
       }
     }
     expect(IMPORT.events['import-refused']!.rules.code!.split(': ').pop()!.split(', ')).toHaveLength(26)
+  })
+})
+
+// The appender's answer (T6.2 review B m-1; impl/p6/T6.2/review-disposition.md F7): whether the line reached the file,
+// which the update service's repeated-refusal rule counts (record §4.5's events: "the last import line this process
+// wrote"). Unlike the rest of this file these rows write: each to a scratch drive root of its own. What the writer does
+// on a drive beyond its answer is tests/integration/update-log-drive.test.ts's.
+describe('appendUpdateLogLine answers whether it appended the line (record §4.5 N-7; §5.3)', () => {
+  const FIELDS: UpdateLogField[] = [['code', 'UPD-POLICY-MANAGED']]
+  function scratchRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), 'hr-update-log-answer-'))
+    mkdirSync(join(root, 'config'))
+    writeFileSync(join(root, 'config', 'drive.json'), '{}')
+    return root
+  }
+
+  it('true when the line was appended to updates/update.log', () => {
+    const root = scratchRoot()
+    expect(appendUpdateLogLine({ rootPath: root, isPreparedDrive: true }, 'import-refused', FIELDS)).toBe(true)
+    expect(readFileSync(join(root, 'updates', 'update.log'), 'latin1')).toMatch(/^\nr1-app [a-z0-9]+ import-refused code=UPD-POLICY-MANAGED t=\S+\n$/)
+  })
+
+  it.each([
+    ['off a prepared drive', false, 'import-refused', false],
+    ['an event nobody registered', true, 'not-registered', false],
+    ['updates is a plain file (no real folder: the appender skips it, §5.3)', true, 'import-refused', true]
+  ] as const)('false when no line was appended: %s', (_label, prepared, event, plainUpdates) => {
+    const root = scratchRoot()
+    if (plainUpdates) writeFileSync(join(root, 'updates'), 'x')
+    expect(appendUpdateLogLine({ rootPath: root, isPreparedDrive: prepared }, event as UpdateLogEvent, FIELDS)).toBe(false)
+    expect(existsSync(join(root, 'updates', 'update.log'))).toBe(false)
   })
 })

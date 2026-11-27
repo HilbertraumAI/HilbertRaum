@@ -17,7 +17,7 @@ vi.mock('node:crypto', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { constants, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAST_RESULT_FILE, LAST_RESULT_SEEN_FILE, clearMarkOf, marksVersion, readLastValidLine, type LastResultFileSystem } from '../../src/main/services/updates/last-result'
@@ -49,22 +49,45 @@ function updatesFolder(): string {
 const appendedForm = (version: string): RegExp =>
   new RegExp(GOLDEN.append.pattern.replace('<v>', version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 
-/** Each call the module makes, for the rows that need the order of an append's calls or a failing write. */
-function recording(faults: { write?: Error } = {}): { fs: LastResultFileSystem; calls: string[] } {
+interface Faults {
+  write?: Error
+  /** A write moves at most this many bytes, the call itself real. */
+  short?: number
+  /** Run right before the n-th lstat of a name (counted per name from 1): the file changes under the call. */
+  beforeLstat?: (path: string, n: number) => void
+  /** Run right before the n-th open of a name (counted per name from 1). */
+  beforeOpen?: (path: string, n: number) => void
+}
+
+/** Each call the module makes (each open with its flags), for the rows that need the order of an append's calls, a
+ *  failing or short write, or a file that changes between two calls. */
+function recording(faults: Faults = {}): { fs: LastResultFileSystem; calls: string[]; opens: Array<{ name: string; flags: number | string }> } {
   const calls: string[] = []
+  const opens: Array<{ name: string; flags: number | string }> = []
+  const counts = new Map<string, number>()
+  const nth = (call: string, path: string): number => {
+    const n = (counts.get(`${call} ${path}`) ?? 0) + 1
+    counts.set(`${call} ${path}`, n)
+    return n
+  }
   const fs: LastResultFileSystem = {
-    lstat: (path) => NODE_STAGING_FS.lstat(path),
+    lstat: (path) => {
+      faults.beforeLstat?.(path, nth('lstat', path))
+      return NODE_STAGING_FS.lstat(path)
+    },
     async open(path, flags) {
+      faults.beforeOpen?.(path, nth('open', path))
       const handle = await NODE_STAGING_FS.open(path, flags)
       const name = path.slice(path.lastIndexOf(path.includes('\\') ? '\\' : '/') + 1)
       calls.push(`open ${name}`)
+      opens.push({ name, flags })
       return {
         stat: () => handle.stat(),
         read: (buffer, offset, length, position) => handle.read(buffer, offset, length, position),
         async write(buffer, offset, length) {
           calls.push(`write ${name}`)
           if (faults.write !== undefined) throw faults.write
-          return handle.write(buffer, offset, length)
+          return handle.write(buffer, offset, faults.short === undefined ? length : Math.min(length, faults.short))
         },
         async sync() {
           calls.push(`sync ${name}`)
@@ -77,7 +100,7 @@ function recording(faults: { write?: Error } = {}): { fs: LastResultFileSystem; 
       }
     }
   }
-  return { fs, calls }
+  return { fs, calls, opens }
 }
 
 const PLATFORM = process.platform
@@ -183,5 +206,69 @@ describe('the cleared line: its token, its file and its failure (record §4.5 "T
     expect(await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).toEqual({ kind: 'failed', cause: { code: 'EIO', syscall: 'write' } })
     expect(readFileSync(join(dir, LAST_RESULT_FILE), 'latin1')).toBe(MARKING)
     expect(calls.filter((c) => c.startsWith('open')).length).toBe(calls.filter((c) => c.startsWith('close')).length)
+  })
+
+  // T6.2 review A M-3 (B01, B02, B03, B06, B07): "never through a link ... checked on its descriptor" for the read and the
+  // append, a short append, and the flags on macOS and Linux (record §4.5 "The cleared line").
+
+  /** The file at `path` replaced by a new one with `text` (the old one kept under another name, so the new one cannot
+   *  take its file id): what a scanner or another writer may do between two calls. */
+  const replaceFile = (path: string, text: string): void => {
+    renameSync(path, join(path, '..', '..', `replaced-${Math.random().toString(16).slice(2)}.txt`))
+    writeFileSync(path, text)
+  }
+
+  it('a last-result.txt replaced between the read\u{2019}s lstat and its open is not the file the lstat saw: no mark, nothing appended (B01)', async () => {
+    const dir = updatesFolder()
+    const file = join(dir, LAST_RESULT_FILE)
+    writeFileSync(file, MARKING)
+    const { fs } = recording({ beforeOpen: (path, n) => void (path === file && n === 1 && replaceFile(path, MARKING)) })
+    expect(await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).toEqual({ kind: 'not-marked' })
+    expect(readFileSync(file, 'latin1')).toBe(MARKING)
+  })
+
+  it('a last-result.txt replaced between the append\u{2019}s lstat and its open: the append is refused with no cause, nothing written (B02)', async () => {
+    const dir = updatesFolder()
+    const file = join(dir, LAST_RESULT_FILE)
+    writeFileSync(file, MARKING)
+    const { fs } = recording({ beforeOpen: (path, n) => void (path === file && n === 2 && replaceFile(path, MARKING)) })
+    expect(await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).toEqual({ kind: 'failed', cause: null })
+    expect(readFileSync(file, 'latin1')).toBe(MARKING)
+  })
+
+  it('a folder at last-result.txt by the append\u{2019}s lstat (the name changed after the read): never opened for the append, refused with no cause (B03)', async () => {
+    const dir = updatesFolder()
+    const file = join(dir, LAST_RESULT_FILE)
+    writeFileSync(file, MARKING)
+    const { fs, opens } = recording({
+      beforeLstat: (path, n) => {
+        if (path !== file || n !== 2) return
+        renameSync(path, join(dir, '..', 'was-last-result.txt'))
+        mkdirSync(path)
+      }
+    })
+    expect(await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).toEqual({ kind: 'failed', cause: null })
+    expect(opens.filter((o) => o.name === LAST_RESULT_FILE)).toHaveLength(1)
+  })
+
+  it('an append that writes fewer bytes than the line is a failed append (no cause): the commit refuses (B06)', async () => {
+    const dir = updatesFolder()
+    writeFileSync(join(dir, LAST_RESULT_FILE), MARKING)
+    const { fs } = recording({ short: 3 })
+    expect(await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).toEqual({ kind: 'failed', cause: null })
+  })
+
+  // CI's ubuntu and macOS legs: Windows has none of these flags.
+  const POSIX_FLAGS = process.platform !== 'win32' && constants.O_NOFOLLOW !== undefined && constants.O_NONBLOCK !== undefined
+  it.runIf(POSIX_FLAGS)('on macOS and Linux the read opens read-only with O_NOFOLLOW and O_NONBLOCK, the append with O_APPEND and O_CREAT too (B07)', async () => {
+    const dir = updatesFolder()
+    writeFileSync(join(dir, LAST_RESULT_FILE), MARKING)
+    const { fs, opens } = recording()
+    expect((await clearMarkOf(dir, '1.1.0', fs, PLATFORM)).kind).toBe('cleared')
+    const posix = constants.O_NOFOLLOW | constants.O_NONBLOCK
+    expect(opens.filter((o) => o.name === LAST_RESULT_FILE).map((o) => o.flags)).toEqual([
+      constants.O_RDONLY | posix,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | posix
+    ])
   })
 })

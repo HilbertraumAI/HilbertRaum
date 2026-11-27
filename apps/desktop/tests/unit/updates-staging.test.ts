@@ -34,11 +34,12 @@ vi.mock('node:crypto', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, constants, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { open as openFile, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { readUpdateFile, type BundleFileSystem, type CheckedUpdateFile } from '../../src/main/services/updates/bundle'
 import type { UpdateKey } from '../../src/main/services/updates/envelope'
 import { formatRegisteredLine } from '../../src/main/services/updates/update-log'
@@ -217,8 +218,13 @@ interface Rule {
   call: FsCall
   /** The case path (drive-relative, `/`) the call is made on (for a rename: its source). */
   when: (rel: string) => boolean
-  error: Error
-  /** Thrown this many times, then the call goes through (default: always). */
+  /** Thrown instead of the call (after `before`, when both are given); without it the call goes through. */
+  error?: Error
+  /** Run right before the real call: the drive changes under it (a name removed, swapped or made meanwhile). */
+  before?: (path: string) => void
+  /** For a write: at most this many bytes are written (0: none), the call itself real. */
+  short?: number
+  /** Applied this many times, then the call goes through untouched (default: always). */
   times?: number
 }
 
@@ -228,6 +234,8 @@ interface Recorded {
   calls: string[]
   /** Every path a call wrote, created, moved or removed (drive-relative). */
   writes: string[]
+  /** Every open, with the flags it was given. */
+  opens: Array<{ rel: string; flags: number | string }>
 }
 
 const WRITE_FLAG = /[wax+]/
@@ -239,15 +247,20 @@ function writesBy(flags: number | string): boolean {
 function recorded(drive: Drive, rules: readonly Rule[] = [], statfs?: { bsize: number; bavail: number }): Recorded {
   const calls: string[] = []
   const writes: string[] = []
+  const opens: Recorded['opens'] = []
   const left = new Map(rules.map((rule) => [rule, rule.times ?? Infinity]))
-  const check = (call: FsCall, path: string): void => {
+  /** Records the call and applies the first rule that matches: its `before`, then its error; answers the rule (for `short`). */
+  const check = (call: FsCall, path: string): Rule | null => {
     const rel = drive.rel(path)
     calls.push(`${call} ${rel}`)
     for (const rule of rules) {
       if (rule.call !== call || !rule.when(rel) || left.get(rule)! <= 0) continue
       left.set(rule, left.get(rule)! - 1)
-      throw rule.error
+      rule.before?.(path)
+      if (rule.error !== undefined) throw rule.error
+      return rule
     }
+    return null
   }
   const real = NODE_STAGING_FS
   const fs: StagingFileSystem = {
@@ -289,6 +302,7 @@ function recorded(drive: Drive, rules: readonly Rule[] = [], statfs?: { bsize: n
     },
     async open(path, flags) {
       check('open', path)
+      opens.push({ rel: drive.rel(path), flags })
       if (writesBy(flags)) writes.push(drive.rel(path))
       const handle = await real.open(path, flags)
       const wrapped: StagingFileHandle = {
@@ -298,22 +312,23 @@ function recorded(drive: Drive, rules: readonly Rule[] = [], statfs?: { bsize: n
           return handle.read(buffer, offset, length, position)
         },
         async write(buffer, offset, length) {
-          check('write', path)
-          return handle.write(buffer, offset, length)
+          const rule = check('write', path)
+          return handle.write(buffer, offset, rule?.short === undefined ? length : Math.min(length, rule.short))
         },
         async sync() {
           check('sync', path)
           return handle.sync()
         },
         async close() {
-          calls.push(`close ${drive.rel(path)}`)
-          return handle.close()
+          // The handle is closed for real first, so a close a rule fails leaves no open file behind.
+          await handle.close()
+          check('close', path)
         }
       }
       return wrapped
     }
   }
-  return { fs, calls, writes }
+  return { fs, calls, writes, opens }
 }
 
 /** Nothing is written outside `updates/` (the brief core): every path a call wrote lies under it (in any letter case, as
@@ -1042,6 +1057,80 @@ describe('a failure at the data pass\u{2019}s start leaves the two staging folde
     expect(isAbsent(drive.at('updates/staging/.incoming-1.1.0'))).toBe(true)
     expect(isAbsent(drive.at('updates/staging/1.1.0/staged.json'))).toBe(false)
   })
+
+  // T6.2 review A M-3 (A28-A31): each folder the start makes is tested before anything is written into it, and a failure
+  // answers as record §4.5 "Errors while staging" says, with the name that blocked it only for UPD-CANT-WRITE-DRIVE.
+  it.each([
+    [
+      'its mkdir of .incoming-<v>/ fails EEXIST (something appeared at the name)',
+      { call: 'mkdir', when: (rel: string) => rel === 'updates/staging/.incoming-1.1.0', error: injected('EEXIST', 'mkdir') },
+      { code: 'UPD-CANT-WRITE-DRIVE', params: {} },
+      { code: 'EEXIST', syscall: 'mkdir' },
+      'incoming'
+    ],
+    [
+      'the test of the .incoming-<v>/ it just made proves nothing (its realpath fails EIO)',
+      { call: 'realpath', when: (rel: string) => rel === 'updates/staging/.incoming-1.1.0', error: injected('EIO', 'realpath'), times: 1 },
+      { code: 'UPD-CANT-WRITE-DRIVE', params: {} },
+      { code: 'EIO', syscall: 'realpath' },
+      'incoming'
+    ],
+    [
+      'its mkdir of <v>/files/ fails ENOSPC',
+      { call: 'mkdir', when: (rel: string) => rel === 'updates/staging/1.1.0/files', error: injected('ENOSPC', 'mkdir') },
+      { code: 'UPD-DRIVE-FULL', params: { requiredBytes: null, freeBytes: null } },
+      { code: 'ENOSPC', syscall: 'mkdir' },
+      null
+    ],
+    [
+      'its mkdir of <v>/files/ fails EFBIG',
+      { call: 'mkdir', when: (rel: string) => rel === 'updates/staging/1.1.0/files', error: injected('EFBIG', 'mkdir') },
+      { code: 'UPD-FILE-TOO-BIG-FOR-DRIVE', params: {} },
+      { code: 'EFBIG', syscall: 'mkdir' },
+      null
+    ]
+  ] as const)('%s: the refusal of record §4.5, and neither folder is left', async (_label, rule, refusal, cause, link) => {
+    const drive = freshDrive()
+    const rec = recorded(drive, [rule as Rule])
+    expect(await startOn(drive, rec, 'win32')).toEqual({ kind: 'refused', refusal, cause, link })
+    expect(isAbsent(drive.at('updates/staging/.incoming-1.1.0'))).toBe(true)
+    expect(isAbsent(drive.at('updates/staging/1.1.0'))).toBe(true)
+  })
+
+  // T6.2 review A M-3 (A02): a removal whose test of <v>/ proves nothing is a failed removal, answered by its cause.
+  it('a removal at the start whose test of <v>/ proves nothing (its realpath fails EIO) answers UPD-CANT-WRITE-DRIVE with that cause and no link name', async () => {
+    let armed = false
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [{ call: 'realpath', when: (rel) => armed && rel === 'updates/staging/1.1.0', error: injected('EIO', 'realpath') }])
+    const ctx = contextOf(drive, rec)
+    const pre = await checkDriveBeforeDialog(ctx)
+    if (pre.kind !== 'ready') throw new Error(JSON.stringify(pre))
+    const post = await checkBeforeDataPass(ctx, pre.drive, { version: '1.1.0', present: PRESENT })
+    if (post.kind !== 'ready') throw new Error(JSON.stringify(post))
+    armed = true
+    expect(await startDataPass(ctx, pre.drive, post.targets, '1.1.0')).toEqual({
+      kind: 'refused',
+      refusal: { code: 'UPD-CANT-WRITE-DRIVE', params: {} },
+      cause: { code: 'EIO', syscall: 'realpath' },
+      link: null
+    })
+    expect(isAbsent(drive.at('updates/staging/1.1.0/staged.json'))).toBe(false)
+  })
+
+  // T6.2 review A M-3 (A41): both names are tried; the answer is the first failure's.
+  it('both removals at the start fail: each name is tried, and the answer carries the first one\u{2019}s cause', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    mkdirSync(drive.at('updates/staging/.incoming-1.1.0'))
+    writeFileSync(drive.at('updates/staging/.incoming-1.1.0/apply.cmd'), 'x')
+    const rec = recorded(drive, [
+      { call: 'unlink', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', error: injected('EIO', 'unlink') },
+      { call: 'unlink', when: (rel) => rel === 'updates/staging/.incoming-1.1.0/apply.cmd', error: injected('EROFS', 'unlink') }
+    ])
+    expect(await startOn(drive, rec, 'linux')).toEqual({ kind: 'refused', refusal: { code: 'UPD-CANT-WRITE-DRIVE', params: {} }, cause: { code: 'EIO', syscall: 'unlink' }, link: null })
+    expect(rec.calls).toContain('unlink updates/staging/.incoming-1.1.0/apply.cmd')
+  })
 })
 
 // ---- the commit (F-5): the golden update files' bytes, and the order that makes a kill safe
@@ -1152,5 +1241,478 @@ describe('the commit writes F-5\u{2019}s bytes, staged.json last (f5-staged.json
     }
     expectAfter(drive, e, was)
     expectWritesUnderUpdates(rec)
+  })
+})
+
+// ---- fix round 1 of the T6.2 reviews (impl/p6/T6.2/review-disposition.md F3, F4, F6): the branches review A's further
+// mutations reached (its M-3 table) and the commit's own test of <v>/ (its M-2). Expected values from the record row each
+// names; the case table holds none of these drive states.
+
+const CANT_WRITE = { code: 'UPD-CANT-WRITE-DRIVE', params: {} }
+const READ_ONLY = { code: 'UPD-DRIVE-READ-ONLY', params: {} }
+const FULL_NO_NUMBERS = { code: 'UPD-DRIVE-FULL', params: { requiredBytes: null, freeBytes: null } }
+const NO_COUNTS = { incoming: 0, 'no-marker': 0, 'invalid-marker': 0, 'member-missing': 0, 'not-a-folder': 0, link: 0 }
+/** `staged.json`'s cap (record §4.6: 62 × 65,536 bytes). */
+const MARKER_CAP = 4_063_232
+/** The flags of record §4.5 and §4.6 exist on macOS and Linux only (Windows has no O_NOFOLLOW): those rows run there. */
+const POSIX_FLAGS = process.platform !== 'win32' && constants.O_NOFOLLOW !== undefined && constants.O_NONBLOCK !== undefined && constants.O_DIRECTORY !== undefined
+const WIN32_HOST = (): Host => table.hosts.win32 as unknown as Host
+/** Windows: can a new empty folder take the per-folder case-sensitivity attribute here (fsutil; no privilege needed on
+ *  the box this was written on)? */
+const canCaseSensitive = ((): boolean => {
+  if (!isWindows) return false
+  try {
+    execFileSync('fsutil.exe', ['file', 'setCaseSensitiveInfo', mkdtempSync(join(tmpdir(), 'hr-updates-staging-cs-')), 'enable'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
+const ACCEPT_STD = (): Expect => caseOf('accept-std').expect as Expect
+type Files = Parameters<typeof commitStaged>[2]['files']
+
+/** accept-std's file staged by staging's steps up to the commit (§4.5's order), every call recorded. The caller closes `file`. */
+async function untilCommit(drive: Drive, rec: Recorded): Promise<{ ctx: StagingContext; folders: StagingFolders; file: CheckedUpdateFile; files: Files }> {
+  const { folders, file } = await stageFile(drive, rec, caseFile(drive, caseOf('accept-std')), TEST_KEYS, WIN32_HOST())
+  const stage = await file.stage({ incomingDir: folders.incomingDir, filesDir: folders.filesDir, cancelled: () => false, progress: () => undefined })
+  if (stage.kind !== 'staged') {
+    await file.close()
+    throw new Error(stage.kind)
+  }
+  return { ctx: contextOf(drive, rec), folders, file, files: stage.files }
+}
+
+describe('the commit tests <v>/ again before it writes, leaves what it cannot prove, and fails as errors while staging do (record §4.5 "The commit", "Links under updates/", "Errors while staging"; T6.2 review A M-2, M-3, m-3)', () => {
+  // Review A h8: the data pass runs for minutes; <v>/ is checked again before anything is written into it.
+  it.each(FOLDER_KINDS)('<v>/ swapped for %s after the data pass\u{2019}s start: refused UPD-CANT-WRITE-DRIVE link=version, nothing written', async (_label, make) => {
+    const drive = freshDrive()
+    const rec = recorded(drive)
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      const target = linkTarget(drive, 'elsewhere')
+      mkdirSync(join(target.path, 'files'))
+      const tree = snapshot(target.path)
+      renameSync(folders.versionDir, join(drive.outside, 'moved'))
+      make(target.path, folders.versionDir)
+      const from = rec.writes.length
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null, link: 'version' })
+      expect(rec.writes.slice(from)).toEqual([])
+      expect(snapshot(target.path)).toEqual(tree)
+    } finally {
+      await file.close()
+    }
+  })
+
+  // Review A's A18 (told apart by a scratch input, impl/p6/T6.2/fix-1/equiv/): the real-folder test walks every name from
+  // the root by lstat, so a link on the way is met even where its target's path differs only in letter case, which the
+  // realpath comparison folds. A case-sensitive NTFS folder holds `updates` and `Updates` as two names.
+  it.runIf(canCaseSensitive)('updates/ swapped after the data pass\u{2019}s start for a junction to its case twin Updates/ (a case-sensitive folder): refused link=version, nothing written', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-updates-staging-'))
+    const root = join(dir, 'drive')
+    mkdirSync(root)
+    execFileSync('fsutil.exe', ['file', 'setCaseSensitiveInfo', root, 'enable'], { stdio: 'ignore' })
+    mkdirSync(join(root, 'config'))
+    writeFileSync(join(root, 'config', 'drive.json'), '{}')
+    const outside = join(dir, 'outside')
+    mkdirSync(outside)
+    const drive: Drive = { dir, root, outside, at: (path) => join(root, ...path.split('/')), rel: (path) => relative(root, path).split(sep).join('/') }
+    const rec = recorded(drive)
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      renameSync(drive.at('updates'), join(root, 'Updates'))
+      symlinkSync(join(root, 'Updates'), drive.at('updates'), 'junction')
+      const from = rec.writes.length
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null, link: 'version' })
+      expect(rec.writes.slice(from)).toEqual([])
+    } finally {
+      await file.close()
+    }
+  })
+
+  it('a test of <v>/ that proves nothing at the commit (its realpath fails EIO): refused with that cause, link=version, nothing written', async () => {
+    let armed = false
+    const drive = freshDrive()
+    const rec = recorded(drive, [{ call: 'realpath', when: (rel) => armed && rel === 'updates/staging/1.1.0', error: injected('EIO', 'realpath') }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      armed = true
+      const from = rec.writes.length
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({
+        kind: 'refused',
+        refusal: CANT_WRITE,
+        cause: { code: 'EIO', syscall: 'realpath' },
+        link: 'version'
+      })
+      expect(rec.writes.slice(from)).toEqual([])
+    } finally {
+      await file.close()
+    }
+  })
+
+  // Review A m-3, as the disposition rules it (F6): an entry whose test proves nothing is left, and the commit goes on.
+  it.each([
+    ['an lstat held (EPERM)', 'lstat', injected('EPERM', 'lstat')],
+    ['an lstat that fails EIO', 'lstat', injected('EIO', 'lstat')],
+    ['a real-folder test that proves nothing (its realpath fails EIO)', 'realpath', injected('EIO', 'realpath')]
+  ] as const)('another version whose entry gives %s is left as it is, and the commit goes on', async (_label, call, error) => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.0.5', 'std')
+    plantStaged(drive, '0.9.0', 'std')
+    const tree = snapshot(drive.at('updates/staging/0.9.0'))
+    const rec = recorded(drive, [{ call, when: (rel) => rel === 'updates/staging/0.9.0', error }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    expect(snapshot(drive.at('updates/staging/0.9.0'))).toEqual(tree)
+    expect(readdirSync(drive.at('updates/staging')).sort()).toEqual(['0.9.0', '1.1.0'])
+  })
+
+  // Review A h7 and A01: a link among the other versions (also one lstat reads as a folder) and a stray file are left.
+  it.each(FOLDER_KINDS)('another entry that is %s, and a stray file, are left as they are; the real other version goes', async (_label, make) => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.0.5', 'std')
+    const target = linkTarget(drive, 'elsewhere')
+    make(target.path, drive.at('updates/staging/0.8.0'))
+    writeFileSync(drive.at('updates/staging/stray.txt'), 'stray')
+    const link = lstatSync(drive.at('updates/staging/0.8.0')).isSymbolicLink() ? readlinkSync(drive.at('updates/staging/0.8.0')) : null
+    const rec = recorded(drive)
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    expect(readdirSync(drive.at('updates/staging')).sort()).toEqual(['0.8.0', '1.1.0', 'stray.txt'])
+    if (link !== null) expect(readlinkSync(drive.at('updates/staging/0.8.0'))).toBe(link)
+    expect(snapshot(target.path)).toEqual(target.tree)
+  })
+
+  it('a marker\u{2019}s .tmp left at its name meanwhile is removed by its name first: committed, staged.txt as accept-std\u{2019}s (review A A03)', async () => {
+    const drive = freshDrive()
+    const rec = recorded(drive)
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      writeFileSync(join(folders.versionDir, 'staged.txt.tmp'), 'left over')
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    expect(readFileSync(drive.at('updates/staging/1.1.0/staged.txt'), 'latin1')).toBe(ACCEPT_STD().after!.stagedTxt)
+    expect(readdirSync(drive.at('updates/staging/1.1.0')).sort()).toEqual(['files', 'hilbertraum-release.dsse.json', 'staged.json', 'staged.txt'])
+  })
+
+  it('a short write of a marker (7 bytes) is completed by the next writes: staged.json as accept-std\u{2019}s, byte for byte (review A A04)', async () => {
+    const drive = freshDrive()
+    const rec = recorded(drive, [{ call: 'write', when: (rel) => rel === 'updates/staging/1.1.0/staged.json.tmp', short: 7, times: 1 }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    expect(readFileSync(drive.at('updates/staging/1.1.0/staged.json'), 'latin1')).toBe(ACCEPT_STD().after!.stagedJson)
+  })
+
+  it('a marker\u{2019}s write that moves no byte refuses the commit: UPD-CANT-WRITE-DRIVE with no cause, staged.json never made (review A A05)', async () => {
+    const drive = freshDrive()
+    const rec = recorded(drive, [{ call: 'write', when: (rel) => rel === 'updates/staging/1.1.0/staged.json.tmp', short: 0 }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null, link: null })
+    } finally {
+      await file.close()
+    }
+    expect(isAbsent(drive.at('updates/staging/1.1.0/staged.json'))).toBe(true)
+  })
+
+  it.each([
+    ['ENOSPC', FULL_NO_NUMBERS],
+    ['EFBIG', { code: 'UPD-FILE-TOO-BIG-FOR-DRIVE', params: {} }]
+  ] as const)('a marker\u{2019}s write that fails %s answers as record §4.5 "Errors while staging" says (review A A30, A31)', async (code, refusal) => {
+    const drive = freshDrive()
+    const rec = recorded(drive, [{ call: 'write', when: (rel) => rel === 'updates/staging/1.1.0/staged.txt.tmp', error: injected(code, 'write') }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal, cause: { code, syscall: 'write' }, link: null })
+    } finally {
+      await file.close()
+    }
+  })
+
+  it('the commit\u{2019}s own listing of updates/staging/ that fails EIO refuses it with that cause, before anything is removed (review A A42)', async () => {
+    let armed = false
+    const drive = freshDrive()
+    plantStaged(drive, '1.0.5', 'std')
+    const rec = recorded(drive, [{ call: 'readdir', when: (rel) => armed && rel === 'updates/staging', error: injected('EIO', 'scandir') }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      armed = true
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EIO', syscall: 'scandir' }, link: null })
+    } finally {
+      await file.close()
+    }
+    expect(isAbsent(drive.at('updates/staging/1.0.5/staged.json'))).toBe(false)
+  })
+
+  // Record §4.5 "The commit": "on macOS and Linux the folder fsynced after" each rename; the open of the folder for it is
+  // read-only, O_DIRECTORY, O_NOFOLLOW and O_NONBLOCK (review A M-2, A44). CI's ubuntu and macOS legs run it.
+  it.runIf(POSIX_FLAGS)('on macOS and Linux each marker\u{2019}s rename is followed by the folder\u{2019}s fsync, the folder opened read-only with O_DIRECTORY, O_NOFOLLOW and O_NONBLOCK', async () => {
+    const drive = freshDrive()
+    const rec = recorded(drive)
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    const from = rec.calls.length
+    const opensFrom = rec.opens.length
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    const steps = rec.calls.slice(from)
+    const folder = 'updates/staging/1.1.0'
+    for (const name of ['hilbertraum-release.dsse.json', 'staged.txt', 'staged.json']) {
+      const renamed = steps.indexOf(`rename ${folder}/${name}.tmp`)
+      const opened = steps.indexOf(`open ${folder}`, renamed)
+      expect(renamed, name).toBeGreaterThanOrEqual(0)
+      expect(opened, `${name}: the folder opened after the rename`).toBeGreaterThan(renamed)
+      expect(steps.indexOf(`sync ${folder}`, opened), `${name}: the folder fsynced`).toBeGreaterThan(opened)
+    }
+    const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    expect(rec.opens.slice(opensFrom).filter((o) => o.rel === folder).map((o) => o.flags)).toEqual([flags, flags, flags])
+  })
+})
+
+describe('the sweep: a read that proves nothing leaves the entry, a missing files/ is member-missing, staged.json is read as §4.6 says (record §4.5 "The start-up sweep", §4.6 "The read"; T6.2 review A M-3)', () => {
+  // A09, A10, A12, A13: a stat, an open or a real-folder test that fails other than with ENOENT proves nothing.
+  it.each([
+    ['the lstat of staged.json fails EIO', 'lstat', 'updates/staging/1.1.0/staged.json'],
+    ['the open of staged.json fails EIO', 'open', 'updates/staging/1.1.0/staged.json'],
+    ['a listed member\u{2019}s lstat fails EIO', 'lstat', 'updates/staging/1.1.0/files/notes.txt'],
+    ['the lstat of files/ fails EIO (its real-folder test proves nothing)', 'lstat', 'updates/staging/1.1.0/files']
+  ] as const)('%s: the entry is left, counted under no reason, and never the staged update', async (_label, call, at) => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const tree = snapshot(drive.at('updates/staging/1.1.0'))
+    const rec = recorded(drive, [{ call, when: (rel) => rel === at, error: injected('EIO', call) }])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts, removals: plan.removals.length }).toEqual({ staged: null, notice: null, counts: NO_COUNTS, removals: 0 })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(snapshot(drive.at('updates/staging/1.1.0'))).toEqual(tree)
+  })
+
+  // A14: "a files/ that is not a real folder counts as every member missing" (§4.5), an absent one included.
+  it('a valid staged.json whose files/ is missing: member-missing, removed, and the notice set', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    renameSync(drive.at('updates/staging/1.1.0/files'), join(drive.outside, 'files'))
+    const ctx = contextOf(drive, recorded(drive))
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts }).toEqual({
+      staged: null,
+      notice: { code: 'UPD-FILE-DAMAGED-ON-DRIVE', params: {} },
+      counts: { ...NO_COUNTS, 'member-missing': 1 }
+    })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(isAbsent(drive.at('updates/staging/1.1.0'))).toBe(true)
+  })
+
+  // A15: an entry whose own lstat fails is left for this start, never taken for a stray file.
+  it('an entry of updates/staging/ whose lstat fails EIO is left for this start, never unlinked as a stray file', async () => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates/staging/.incoming-1.2.0'), { recursive: true })
+    writeFileSync(drive.at('updates/staging/.incoming-1.2.0/a.exe'), 'x')
+    const rec = recorded(drive, [{ call: 'lstat', when: (rel) => rel === 'updates/staging/.incoming-1.2.0', error: injected('EIO', 'lstat') }])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect({ counts: plan.counts, removals: plan.removals.length }).toEqual({ counts: NO_COUNTS, removals: 0 })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(isAbsent(drive.at('updates/staging/.incoming-1.2.0/a.exe'))).toBe(false)
+  })
+
+  // A48: a removal that fails is reported (app.log), the entry left for the next start.
+  it('a stray file whose unlink fails EIO is reported with its reason and cause, and left', async () => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates/staging'), { recursive: true })
+    writeFileSync(drive.at('updates/staging/stray.txt'), 'x')
+    const rec = recorded(drive, [{ call: 'unlink', when: (rel) => rel === 'updates/staging/stray.txt', error: injected('EIO', 'unlink') }])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect(plan.counts).toEqual({ ...NO_COUNTS, 'not-a-folder': 1 })
+    expect(await carryOutSweep(ctx, plan)).toEqual([{ reason: 'not-a-folder', cause: { code: 'EIO', syscall: 'unlink' } }])
+    expect(isAbsent(drive.at('updates/staging/stray.txt'))).toBe(false)
+  })
+
+  // A06: "checked on its descriptor" (§4.6): the file opened must be the one the lstat saw.
+  it('a staged.json swapped between its lstat and its open is not the file the lstat saw: invalid-marker, removed', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const marker = drive.at('updates/staging/1.1.0/staged.json')
+    const bytes = readFileSync(marker)
+    // The old file is kept under another name, so the new one cannot take its file id.
+    const swap = (path: string): void => {
+      renameSync(path, join(drive.outside, 'old-staged.json'))
+      writeFileSync(path, bytes)
+    }
+    const rec = recorded(drive, [{ call: 'open', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', before: swap, times: 1 }])
+    const plan = await planSweep(contextOf(drive, rec), drive.at('updates'))
+    expect({ staged: plan.staged, counts: plan.counts }).toEqual({ staged: null, counts: { ...NO_COUNTS, 'invalid-marker': 1 } })
+  })
+
+  // A07: "by lstat a regular file ... of at most the cap, else not valid and never opened" (§4.6).
+  it('a staged.json over the cap by its lstat is never opened: invalid-marker', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    writeFileSync(drive.at('updates/staging/1.1.0/staged.json'), Buffer.alloc(MARKER_CAP + 1, 0x20))
+    const rec = recorded(drive)
+    const plan = await planSweep(contextOf(drive, rec), drive.at('updates'))
+    expect(plan.counts).toEqual({ ...NO_COUNTS, 'invalid-marker': 1 })
+    expect(rec.opens.filter((o) => o.rel === 'updates/staging/1.1.0/staged.json')).toEqual([])
+  })
+
+  // A08: the read on the descriptor decides too ("read to one byte past the cap"): a file that grows after its lstat.
+  it('a staged.json of exactly the cap is valid; one that grows past the cap between its lstat and its read is not', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const marker = drive.at('updates/staging/1.1.0/staged.json')
+    const text = readFileSync(marker, 'latin1')
+    writeFileSync(marker, text + ' '.repeat(MARKER_CAP - text.length), 'latin1')
+    expect((await planSweep(contextOf(drive, recorded(drive)), drive.at('updates'))).staged).toEqual({ version: '1.1.0' })
+    const rec = recorded(drive, [{ call: 'open', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', before: (path) => appendFileSync(path, ' '), times: 1 }])
+    const plan = await planSweep(contextOf(drive, rec), drive.at('updates'))
+    expect({ staged: plan.staged, counts: plan.counts }).toEqual({ staged: null, counts: { ...NO_COUNTS, 'invalid-marker': 1 } })
+  })
+
+  // A45: §4.6 "The read": opened read-only with O_NOFOLLOW and O_NONBLOCK on macOS and Linux. CI's ubuntu and macOS legs.
+  it.runIf(POSIX_FLAGS)('on macOS and Linux staged.json is opened read-only with O_NOFOLLOW and O_NONBLOCK', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive)
+    expect((await planSweep(contextOf(drive, rec, process.platform), drive.at('updates'))).staged).toEqual({ version: '1.1.0' })
+    expect(rec.opens.filter((o) => o.rel === 'updates/staging/1.1.0/staged.json').map((o) => o.flags)).toEqual([constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK])
+  })
+})
+
+describe('the probe\u{2019}s readings (record §4.2 table A.1; notes-1 reading 2; T6.2 review A M-3: A25-A27)', () => {
+  it.each([
+    ['its write moves no byte', { call: 'write', when: isProbe, short: 0 }, READ_ONLY, null],
+    ['its close fails EIO', { call: 'close', when: isProbe, error: injected('EIO', 'close') }, READ_ONLY, { code: 'EIO', syscall: 'close' }],
+    ['its close fails ENOSPC', { call: 'close', when: isProbe, error: injected('ENOSPC', 'close') }, FULL_NO_NUMBERS, { code: 'ENOSPC', syscall: 'close' }],
+    ['the lstat of its name fails EIO', { call: 'lstat', when: isProbe, error: injected('EIO', 'lstat') }, READ_ONLY, { code: 'EIO', syscall: 'lstat' }]
+  ] as const)('%s: the refusal before the dialog', async (_label, rule, refusal, cause) => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates'))
+    const rec = recorded(drive, [rule as Rule])
+    expect(await checkDriveBeforeDialog(contextOf(drive, rec, 'linux'))).toEqual({ kind: 'refused', refusal, cause, link: null })
+  })
+})
+
+describe('the discard\u{2019}s answers on a drive that is not as staging left it (record §3.5 updates:discardStaged, §4.5; notes-1 reading 8; T6.2 review A M-3)', () => {
+  const discard = (drive: Drive, rec: Recorded, request: unknown = { version: '1.1.0' }) => discardStaged(contextOf(drive, rec), { version: '1.1.0' }, request)
+
+  it('updates/staging/ that is a plain file: UPD-CANT-WRITE-DRIVE, nothing removed (A32)', async () => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates'))
+    writeFileSync(drive.at('updates/staging'), 'x')
+    const rec = recorded(drive)
+    expect(await discard(drive, rec)).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null })
+    expect(rec.writes).toEqual([])
+  })
+
+  it('a listing of updates/staging/ that fails EIO: UPD-CANT-WRITE-DRIVE with its cause, nothing removed (A33)', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [{ call: 'readdir', when: (rel) => rel === 'updates/staging', error: injected('EIO', 'scandir') }])
+    expect(await discard(drive, rec)).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EIO', syscall: 'scandir' } })
+    expect(rec.writes).toEqual([])
+  })
+
+  it.each(FOLDER_KINDS)('updates/ that is %s: not-staged, and nothing under it is read or removed (A34)', async (_label, make) => {
+    const drive = freshDrive()
+    const target = linkTarget(drive, 'elsewhere')
+    mkdirSync(join(target.path, 'staging', '1.1.0', 'files'), { recursive: true })
+    writeFileSync(join(target.path, 'staging', '1.1.0', 'staged.json'), '{}')
+    const tree = snapshot(target.path)
+    make(target.path, drive.at('updates'))
+    const rec = recorded(drive)
+    expect(await discard(drive, rec)).toEqual({ kind: 'not-staged' })
+    expect(rec.calls.filter((call) => / updates\//.test(call))).toEqual([])
+    expect(snapshot(target.path)).toEqual(tree)
+  })
+
+  it('a request whose version is inherited, not its own, names no version: not-staged, nothing removed (A35)', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive)
+    expect(await discard(drive, rec, Object.create({ version: '1.1.0' }) as unknown)).toEqual({ kind: 'not-staged' })
+    expect(rec.writes).toEqual([])
+  })
+
+  it('a first lstat of <v>/ that fails EIO is no proof it is gone: UPD-CANT-WRITE-DRIVE with its cause, the folder kept (A47)', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [{ call: 'lstat', when: (rel) => rel === 'updates/staging/1.1.0', error: injected('EIO', 'lstat') }])
+    expect(await discard(drive, rec)).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EIO', syscall: 'lstat' } })
+    expect(isAbsent(drive.at('updates/staging/1.1.0/staged.json'))).toBe(false)
+  })
+
+  it('a member gone before its unlink, and one gone before its lstat (another remover meanwhile): still discarded (A20, A21)', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [
+      { call: 'unlink', when: (rel) => rel === 'updates/staging/1.1.0/files/apply.cmd', before: (path) => unlinkSync(path), times: 1 },
+      { call: 'lstat', when: (rel) => rel === 'updates/staging/1.1.0/files/notes.txt', before: (path) => unlinkSync(path), times: 1 }
+    ])
+    expect(await discard(drive, rec)).toEqual({ kind: 'discarded', version: '1.1.0' })
+    expect(isAbsent(drive.at('updates/staging/1.1.0'))).toBe(true)
+  })
+
+  it('a sub-folder whose real-folder test proves nothing (its realpath fails EIO) ends the walk: refused with that cause, never removed (A22)', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const members = readdirSync(drive.at('updates/staging/1.1.0/files')).sort()
+    const rec = recorded(drive, [{ call: 'realpath', when: (rel) => rel === 'updates/staging/1.1.0/files', error: injected('EIO', 'realpath') }])
+    expect(await discard(drive, rec)).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EIO', syscall: 'realpath' } })
+    expect(readdirSync(drive.at('updates/staging/1.1.0/files')).sort()).toEqual(members)
+  })
+})
+
+describe('which entry a name is, and the listings after the dialog (record §4.5 "Links under updates/"; notes-1 readings 3, 4; T6.2 review A M-3)', () => {
+  // A39: notes-1 reading 4.
+  it('a listing of updates/staging/ that fails after the dialog answers UPD-CANT-WRITE-DRIVE link=version with its cause', async () => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates/staging'), { recursive: true })
+    const rec = recorded(drive, [{ call: 'readdir', when: (rel) => rel === 'updates/staging', error: injected('EIO', 'scandir') }])
+    const ctx = contextOf(drive, rec)
+    const pre = await checkDriveBeforeDialog(ctx)
+    if (pre.kind !== 'ready') throw new Error(JSON.stringify(pre))
+    expect(await checkBeforeDataPass(ctx, pre.drive, { version: '1.1.0', present: [{ name: 'apply.cmd', size: 22 }] })).toEqual({
+      kind: 'refused',
+      refusal: CANT_WRITE,
+      cause: { code: 'EIO', syscall: 'scandir' },
+      link: 'version'
+    })
+  })
+
+  // A46: the second listing's entry is tested like the first one's.
+  it.each(FOLDER_KINDS)('updates/ that appears as %s between the listing and the mkdir: the second listing finds it and tests it, link=updates, nothing written through it', async (_label, make) => {
+    const drive = freshDrive()
+    const target = linkTarget(drive, 'elsewhere')
+    const rec = recorded(drive, [{ call: 'mkdir', when: (rel) => rel === 'updates', before: (path) => make(target.path, path), times: 1 }])
+    expect(await checkDriveBeforeDialog(contextOf(drive, rec))).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null, link: 'updates' })
+    expect(snapshot(target.path)).toEqual(target.tree)
+    expect(rec.writes).toEqual(['updates'])
+  })
+
+  // A17: "the one entry whose name equals the asked name after the fold" (§4.5): two such entries prove nothing. Only a
+  // file system that matches names by another rule shows two while an lstat of the asked name finds one: the in-memory
+  // tree below, whose lstat folds the asked name onto one of them.
+  it('two entries equal to staging after the fold, while an lstat of staging finds one, prove nothing: UPD-CANT-WRITE-DRIVE link=staging', async () => {
+    const root = join(tmpdir(), 'hr-updates-staging-memory', 'drive')
+    const tree = memoryFolders(root, ['updates', 'updates/Staging', 'updates/STAGING'])
+    const fs: StagingFileSystem = { ...tree, lstat: (path) => tree.lstat(basename(path) === 'staging' ? join(dirname(path), 'Staging') : path) }
+    expect(await checkDriveBeforeDialog({ root, platform: 'linux', fs })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: null, link: 'staging' })
   })
 })

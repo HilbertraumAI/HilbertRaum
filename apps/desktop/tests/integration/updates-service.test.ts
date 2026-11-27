@@ -65,11 +65,12 @@ vi.mock('../../src/main/services/updates/bundle', async (importOriginal) => {
 })
 
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { open as openFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { renameWithRetry } from '../../src/main/services/fs-retry'
+import { log } from '../../src/main/services/logging'
 import { readUpdatePolicy } from '../../src/main/services/policy'
 import type { BundleFileHandle, BundleFileSystem } from '../../src/main/services/updates/bundle'
 import { readDriveRelease, rootApps } from '../../src/main/services/updates/drive-release'
@@ -288,13 +289,21 @@ function armed(drive: Drive, rules: readonly Rule[], calls: string[]): (call: st
   }
 }
 
-/** The start step's synchronous calls (NODE_START_FS) and status's, recorded; a rule may fail one. */
-function startRecorder(drive: Drive, rules: readonly Rule[] = [], calls: string[] = []): Recorder<StartFileSystem> {
+/** What a listing answers instead of the real one (its drive-relative path, `.` for the root, and the real names). */
+type Listing = (rel: string, names: string[]) => string[]
+
+/** The start step's synchronous calls (NODE_START_FS) and status's, recorded; a rule may fail one, a listing may answer
+ *  other names. */
+function startRecorder(drive: Drive, rules: readonly Rule[] = [], calls: string[] = [], listing?: Listing): Recorder<StartFileSystem> {
   const check = armed(drive, rules.filter((r) => !r.hold), calls)
+  const list = (path: string): string[] => {
+    const names = NODE_START_FS.readdirSync(path)
+    return listing === undefined ? names : listing(drive.rel(path) || '.', names)
+  }
   return {
     calls,
     fs: {
-      readdirSync: (path) => (check('readdirSync', path), NODE_START_FS.readdirSync(path)),
+      readdirSync: (path) => (check('readdirSync', path), list(path)),
       lstatSync: (path) => (check('lstatSync', path), NODE_START_FS.lstatSync(path))
     }
   }
@@ -416,6 +425,12 @@ interface HarnessOptions {
   startRules?: Rule[]
   /** The array the start recorder writes its calls into (for a hook that runs inside the start step). */
   startCalls?: string[]
+  /** The start step's and status's listings answer these names instead. */
+  startListing?: Listing
+  /** The host the service is handed, made from the case's. */
+  host?: (base: UpdateServiceDeps['host']) => UpdateServiceDeps['host']
+  /** Run before the real appender with the event (a throw here is the appender's). */
+  beforeAppend?: (event: string) => void
   stagingRules?: Rule[]
   bundleRules?: Rule[]
   folderLink?: FolderLink
@@ -458,7 +473,7 @@ function harness(host: Host, items: ReadonlyArray<Record<string, unknown>> = [],
   const drive = options.drive ?? makeDrive(host)
   plant(drive, items, options.folderLink)
   const file = options.build ? writeBuild(drive, options.build) : null
-  const start = startRecorder(drive, options.startRules, options.startCalls)
+  const start = startRecorder(drive, options.startRules, options.startCalls, options.startListing)
   const statfs: Harness['statfs'] = { value: host.statfs }
   const staging = stagingRecorder(drive, options.stagingRules, statfs)
   const bundle = bundleRecorder(drive, options.bundleRules)
@@ -467,11 +482,12 @@ function harness(host: Host, items: ReadonlyArray<Record<string, unknown>> = [],
   const mono = { value: 1_000 }
   const { dialog, chooseFile } = dialogStub(() => file)
   dialog.queue.push(...(options.dialog ?? []))
+  const hostDeps: UpdateServiceDeps['host'] = { platform: host.os, osVersion: () => host.osVersion, glibc: () => host.glibc, uiLanguage: () => host.uiLanguage }
   const service = createUpdateService({
     paths: options.noLayout ? null : { rootPath: drive.root, configPath: drive.at('config'), isPreparedDrive: host.prepared !== false },
     keys: options.keys ?? (host.keys.length === 0 ? [] : TEST_KEYS),
     runningVersion: semver(host.runningVersion),
-    host: { platform: host.os, osVersion: () => host.osVersion, glibc: () => host.glibc, uiLanguage: () => host.uiLanguage },
+    host: options.host?.(hostDeps) ?? hostDeps,
     clock: { now: () => Date.now(), monotonic: () => mono.value },
     reads: {
       policy: (dir) => (reads.push('policy'), readUpdatePolicy(dir)),
@@ -483,7 +499,8 @@ function harness(host: Host, items: ReadonlyArray<Record<string, unknown>> = [],
     chooseFile,
     appendLog: (paths, event, fields) => {
       appended.push(event)
-      appendUpdateLogLine(paths, event, fields)
+      options.beforeAppend?.(event)
+      return appendUpdateLogLine(paths, event, fields)
     },
     fs: { bundle: bundle.fs, staging: staging.fs, start: start.fs },
     startHook: options.startHook
@@ -525,6 +542,30 @@ function statusForm(s: UpdatesStatus): Record<string, unknown> {
 function comparable(expected: Record<string, unknown>): Record<string, unknown> {
   const { token: _token, dialog: _dialog, ...rest } = expected
   return rest
+}
+
+/** The keys of an answer the runner compares exactly, each where the case gives it (T6.2 review B m-4). */
+const EXACT_KEYS: readonly string[] = ['answer', 'code', 'params', 'update', 'notices']
+
+/**
+ * The one case whose answers name an `update` of `version` alone, while every answer's `update` is `{ version, issued,
+ * summary }` (record §3.5): what it pins is the version the file now holds, and its other two fields are its built file's
+ * own. Its `update` alone is compared as a subset (the orchestrator's ruling on T6.2 fix round 1's STOP, 2026-11-27); its
+ * other keys, and every other case, exactly.
+ */
+const UPDATE_AS_SUBSET: ReadonlySet<string> = new Set(['token-redeem-file-now-another-version'])
+
+/**
+ * An answer in the table's form against a case's: `answer`, `code`, `params`, `update` and `notices` exactly, each where
+ * the case gives it, so a `params: {}` holds no parameter and an `update` no field the case does not name; a status entry
+ * and any other key the case gives (`notice`, `version`) as a subset (the table names the fields that matter).
+ */
+function expectTableAnswer(actual: Record<string, unknown>, expected: Record<string, unknown>, label: string, caseId: string): void {
+  const rest = comparable(expected)
+  const exact = (key: string): boolean => EXACT_KEYS.includes(key) && !(key === 'update' && UPDATE_AS_SUBSET.has(caseId))
+  const exactKeys = Object.keys(rest).filter(exact)
+  expect(Object.fromEntries(exactKeys.map((key) => [key, actual[key]])), label).toEqual(Object.fromEntries(exactKeys.map((key) => [key, rest[key]])))
+  expect(actual, label).toMatchObject(Object.fromEntries(Object.entries(rest).filter(([key]) => !exact(key))))
 }
 
 interface Expect {
@@ -571,7 +612,7 @@ async function runImport(c: ImportCase): Promise<void> {
   const h = harness(hostOf(c), c.drive ?? [], { build: c.build, dialog: [c.build ? 'file' : 'closed'] })
   const trees = before(h.drive, e)
   const answer = tableForm(await h.service.importFile())
-  expect(answer).toMatchObject(comparable({ answer: e.answer, ...(e.code ? { code: e.code, params: e.params } : {}) }))
+  expectTableAnswer(answer, { answer: e.answer, ...(e.code ? { code: e.code, params: e.params } : {}) }, c.id, c.id)
   expect(h.dialog.opened, `${c.id}: the dialog`).toBe(e.dialog === false ? 0 : 1)
   expect(h.lines()).toEqual(e.log ? [onThisSystem(e.log.line)] : [])
   expectAfter(h, e, trees)
@@ -833,7 +874,7 @@ async function runCalls(c: ImportCase): Promise<void> {
   const channelAnswers = answers.filter((a): a is Record<string, unknown> => a !== null)
   expect(channelAnswers.length).toBe(e.answers!.length)
   e.answers!.forEach((expected, i) => {
-    expect(channelAnswers[i], `${c.id}: answer ${i}`).toMatchObject(comparable(expected))
+    expectTableAnswer(channelAnswers[i]!, expected, `${c.id}: answer ${i}`, c.id)
     if (expected.dialog === false) expect(h.dialog.opened).toBe(0)
   })
   expect(h.lines()).toEqual(e.lines!.map((line) => onThisSystem(line)))
@@ -1450,5 +1491,303 @@ describe('the service\u{2019}s other answers (record §3.5 "The channels\u{2019}
     held.release()
     expect(await discard.promise).toEqual({ kind: 'discarded', version: '1.1.0' })
     expect(h.lines()).toEqual([onThisSystem(vector('i83'))])
+  })
+})
+
+// ---- fix round 1 of the T6.2 reviews (impl/p6/T6.2/review-disposition.md F1, F2, F7, F9, F11): what the service says
+// after a run or a discard that may have removed the staged update, the cancel after the data pass, the repeated-refusal
+// memory, and the branches review B found without a row. Expected values from the record row each names.
+
+const stagedOf = async (h: Harness): Promise<unknown> => {
+  const drive = (await h.service.status()).drive
+  return drive.kind === 'prepared' ? drive.staged : 'none'
+}
+const policyOf = async (h: Harness): Promise<unknown> => {
+  const drive = (await h.service.status()).drive
+  return drive.kind === 'prepared' ? drive.policy : 'none'
+}
+const CANT_WRITE_ANSWER = { kind: 'refused', refusal: { code: 'UPD-CANT-WRITE-DRIVE', params: {} } }
+
+describe('staged is null from the moment a run or a discard may have removed it (record §3.5 updates:status `staged`; T6.2 review M-1 of both lenses)', () => {
+  it('a re-import of the staged version cancelled at its first member\u{2019}s move: cancelled, nothing staged on the drive, and status says so (review B P2)', async () => {
+    held = gate()
+    let second = false
+    const h = harness(WIN32, [], {
+      build: STD_BUILD(),
+      dialog: ['file', 'file'],
+      bundleRules: [{ call: 'rename', when: (rel) => second && rel.startsWith('updates/staging/.incoming-1.1.0/'), hold: held }]
+    })
+    expect(await h.service.importFile()).toMatchObject({ kind: 'staged' })
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0' })
+    const supportEnd = async (): Promise<unknown> => {
+      const drive = (await h.service.status()).drive
+      return drive.kind === 'prepared' ? drive.supportEnd : 'none'
+    }
+    expect(await supportEnd()).toEqual({ state: 'absent' })
+    writeFileSync(h.drive.at('config/kit-support.txt'), '2027-06\n')
+    second = true
+    const run = tracked(h.service.importFile())
+    await held.reached
+    expect(await supportEnd(), 'the clock has not moved: the data pass of the staged version ended the cached reads').toEqual({ state: 'month', month: '2027-06' })
+    expect(await h.service.cancel()).toEqual({ kind: 'stopping' })
+    held.release()
+    expect(await run.promise).toEqual({ kind: 'cancelled' })
+    expect(stagedVersions(h.drive)).toEqual([])
+    expect(await stagedOf(h)).toBeNull()
+    expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'not-staged' })
+    expect(await stagedOf(h)).toBeNull()
+    expect(h.lines()).toEqual([onThisSystem(vector('i56')), onThisSystem(vector('i68'))])
+  })
+
+  it('a re-import of a version equal to the staged one after the folder-name fold (1.1.0-rc1 for 1.1.0-RC1) refused in its data pass: staged null', async () => {
+    const h = harness(WIN32, [{ staged: '1.1.0-RC1', bundle: 'std' }], {
+      build: otherCaseBuild('accept-case-only-version-replaces'),
+      dialog: ['file'],
+      bundleRules: [{ call: 'write', when: (rel) => rel.startsWith('updates/staging/.incoming-1.1.0-rc1/'), error: injected('EIO', 'write'), times: 1 }]
+    })
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0-RC1' })
+    expect(await h.service.importFile()).toEqual(CANT_WRITE_ANSWER)
+    // On a file system that folds case the data pass removed 1.1.0-RC1/; on one that does not it is another folder and
+    // stays, and staged is null all the same (the safe direction, §3.5).
+    expect(await stagedOf(h)).toBeNull()
+  })
+
+  it('another version\u{2019}s commit refused after its removal step: refused, nothing staged on the drive, and status says so (review B P3)', async () => {
+    const h = harness(WIN32, [], {
+      build: STD_BUILD(),
+      dialog: ['file'],
+      stagingRules: [{ call: 'rename', when: (rel) => rel === 'updates/staging/1.1.0-rc1/staged.json.tmp', error: injected('EIO', 'rename') }]
+    })
+    expect(await h.service.importFile()).toMatchObject({ kind: 'staged' })
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0' })
+    h.dialog.queue.push({ path: writeBuild(h.drive, otherCaseBuild('accept-case-only-version-replaces'), 'rc.hrupdate') })
+    expect(await h.service.importFile()).toEqual(CANT_WRITE_ANSWER)
+    expect(stagedVersions(h.drive)).toEqual([])
+    expect(await stagedOf(h)).toBeNull()
+    expect(h.lines()).toEqual([
+      onThisSystem(vector('i56')),
+      onThisSystem('r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE version=1.1.0-rc1 stale_drive_version=no err=EIO syscall=rename t=2026-11-27T10:00:00Z')
+    ])
+  })
+
+  it('a commit refused at its first step (its listing fails) is a commit that ended refused: staged null although the drive still holds it, the safe direction', async () => {
+    let armed = false
+    const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }], {
+      build: otherCaseBuild('accept-case-only-version-replaces'),
+      dialog: ['file'],
+      stagingRules: [{ call: 'readdir', when: (rel) => armed && rel === 'updates/staging', error: injected('EIO', 'scandir') }]
+    })
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0' })
+    seams.beforeStage = async () => {
+      armed = true
+    }
+    expect(await h.service.importFile()).toEqual(CANT_WRITE_ANSWER)
+    expect(stagedVersions(h.drive)).toEqual(['1.1.0'])
+    expect(await stagedOf(h)).toBeNull()
+  })
+
+  it('a discard of the staged version answered not-staged (its folder went meanwhile): staged null; one that names another version leaves it', async () => {
+    const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }])
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0' })
+    expect(await h.service.discardStaged({ version: '1.0.9' })).toEqual({ kind: 'not-staged' })
+    expect(await stagedOf(h)).toEqual({ version: '1.1.0' })
+    renameSync(h.drive.at('updates/staging/1.1.0'), h.drive.at('<outside>/gone'))
+    expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'not-staged' })
+    expect(await stagedOf(h)).toBeNull()
+    expect(h.lines()).toEqual([])
+  })
+
+  // F9 too (review B m-3): a refused discard through the service writes no line and ends the cached drive reads.
+  it('a discard refused UPD-CANT-WRITE-DRIVE (a member\u{2019}s unlink fails EIO): staged null, no line, the drive read again', async () => {
+    const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }], {
+      stagingRules: [{ call: 'unlink', when: (rel) => rel === 'updates/staging/1.1.0/files/notes.txt', error: injected('EIO', 'unlink') }]
+    })
+    expect(await policyOf(h)).toEqual({ install: 'allowed', maxVersion: null, file: 'unreadable' })
+    setPolicy(h.drive, { install: 'allowed', maxVersion: '9.9.9' })
+    expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'refused', refusal: { code: 'UPD-CANT-WRITE-DRIVE', params: {} } })
+    expect(await stagedOf(h)).toBeNull()
+    expect(await policyOf(h), 'the clock has not moved: read again after the discard').toEqual({ install: 'allowed', maxVersion: '9.9.9', file: 'read' })
+    expect(h.lines()).toEqual([])
+  })
+
+  it('a discard refused UPD-IN-PROGRESS (updates/applying/ appeared) removes nothing: staged kept, no line, the drive read again', async () => {
+    const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }])
+    expect((await h.service.status()).drive).toMatchObject({ staged: { version: '1.1.0' }, inProgress: false })
+    mkdirSync(h.drive.at('updates/applying'))
+    expect(await h.service.discardStaged({ version: '1.1.0' })).toEqual({ kind: 'refused', refusal: { code: 'UPD-IN-PROGRESS', params: {} } })
+    expect((await h.service.status()).drive, 'the clock has not moved: read again after the discard').toMatchObject({ staged: { version: '1.1.0' }, inProgress: true })
+    expect(stagedVersions(h.drive)).toEqual(['1.1.0'])
+    expect(h.lines()).toEqual([])
+  })
+})
+
+describe('a cancel after the data pass, and the reads after a run (record §3.5 updates:cancel, updates:status; T6.2 review B M-2, m-5)', () => {
+  it('a cancel answered stopping while the last member is moved is honoured: cancelled, nothing staged, import-cancelled (review B P1)', async () => {
+    held = gate()
+    let moves = 0
+    const h = harness(WIN32, [], {
+      build: STD_BUILD(),
+      dialog: ['file'],
+      bundleRules: [{ call: 'rename', when: (rel) => rel.startsWith('updates/staging/.incoming-1.1.0/') && ++moves === STD_FILES.length, hold: held }]
+    })
+    const run = tracked(h.service.importFile())
+    await held.reached
+    expect((await h.service.status()).import.state).toBe('copying')
+    expect(await h.service.cancel()).toEqual({ kind: 'stopping' })
+    held.release()
+    expect(await run.promise).toEqual({ kind: 'cancelled' })
+    expect(h.lines()).toEqual([onThisSystem(vector('i68'))])
+    expect(isAbsent(h.drive.at('updates/staging/1.1.0'))).toBe(true)
+    expect(isAbsent(h.drive.at('updates/staging/.incoming-1.1.0'))).toBe(true)
+    expect(await stagedOf(h)).toBeNull()
+  })
+
+  it('a run that ends without a commit ends the cached drive reads: the next status reads the policy again (review B m-5)', async () => {
+    const h = harness(WIN32, [], {
+      build: STD_BUILD(),
+      dialog: ['file'],
+      bundleRules: [{ call: 'write', when: (rel) => rel.startsWith('updates/staging/.incoming-'), error: injected('EIO', 'write'), times: 1 }]
+    })
+    seams.beforeStage = async () => {
+      setPolicy(h.drive, { install: 'allowed', maxVersion: '9.9.9' })
+      h.mono.value += 250
+      expect(await policyOf(h), 'the run\u{2019}s own read').toEqual({ install: 'allowed', maxVersion: null, file: 'unreadable' })
+    }
+    expect(await h.service.importFile()).toMatchObject(CANT_WRITE_ANSWER)
+    expect(await policyOf(h), 'the clock has not moved since the read during the run').toEqual({ install: 'allowed', maxVersion: '9.9.9', file: 'read' })
+  })
+})
+
+describe('the repeated-refusal memory counts only a line the appender wrote (record §4.5 N-7 "the last import line this process wrote"; T6.2 review B m-1)', () => {
+  it('a first refusal the appender cannot write (updates is a plain file), then the same code from staging, which it can: that line is written (review B P5)', async () => {
+    const h = harness(WIN32)
+    writeFileSync(h.drive.at('updates'), 'a plain file')
+    expect(await h.service.importFile()).toEqual(CANT_WRITE_ANSWER)
+    expect(h.lines()).toEqual([])
+    unlinkSync(h.drive.at('updates'))
+    mkdirSync(h.drive.at('updates'))
+    writeFileSync(h.drive.at('updates/staging'), 'a plain file')
+    expect(await h.service.importFile()).toEqual(CANT_WRITE_ANSWER)
+    expect(h.lines()).toEqual([onThisSystem(vector('i44'))])
+  })
+
+  it('an appender that throws changes no answer and is no line written: the same refusal is handed on again (review B m-3)', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      let throws = true
+      const h = harness({ ...WIN32, policy: { install: 'managed', maxVersion: null } }, [], {
+        beforeAppend: () => {
+          if (!throws) return
+          throws = false
+          throw Object.assign(new Error('an appender that throws'), { code: 'EIO' })
+        }
+      })
+      const managed = { kind: 'refused', refusal: { code: 'UPD-POLICY-MANAGED', params: {} } }
+      expect(await h.service.importFile()).toEqual(managed)
+      expect(warn).toHaveBeenCalledWith('Update service: an update.log line could not be handed on', { code: 'EIO', syscall: null })
+      expect(await h.service.importFile()).toEqual(managed)
+      expect(h.appended).toEqual(['import-refused', 'import-refused'])
+      expect(h.lines()).toEqual([onThisSystem(vector('i3'))])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('the start step\u{2019}s branches without a row before (record §4.5 "The start step", "Links under updates/"; T6.2 review B m-3)', () => {
+  it('an error that ends the sweep: staged null, no notice, sweeping false, app.log the code only, and the next import runs', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      let reads = 0
+      const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }, { dir: 'updates/staging/.incoming-1.2.0' }], {
+        build: STD_BUILD(),
+        dialog: ['file'],
+        // The sweep's first step reads the host's system: a read that throws there ends the sweep.
+        host: (base) =>
+          Object.defineProperty({ ...base }, 'platform', {
+            enumerable: true,
+            get: () => {
+              if (reads++ === 0) throw Object.assign(new Error('C:\\Users\\someone\\a secret path'), { code: 'EIO' })
+              return base.platform
+            }
+          })
+      })
+      expect(statusForm(await h.service.status())).toMatchObject({ staged: null, notice: null, sweeping: false })
+      expect(isAbsent(h.drive.at('updates/staging/.incoming-1.2.0'))).toBe(false)
+      expect(warn).toHaveBeenCalledWith('Update service: the start-up sweep failed', { code: 'EIO', syscall: null })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret')
+      expect(await h.service.importFile()).toMatchObject({ kind: 'staged' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a start hook that throws (P7\u{2019}s place): the service is built, no sweep, sweeping false, app.log the code only (CF-54)', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }, { dir: 'updates/staging/.incoming-1.2.0' }], {
+        startHook: () => {
+          throw Object.assign(new Error('C:\\Users\\someone\\a secret path'), { code: 'EIO' })
+        }
+      })
+      expect(h.start.calls, 'step (2) never ran').toEqual(['readdirSync .', 'lstatSync updates'])
+      expect(statusForm(await h.service.status())).toMatchObject({ staged: null, notice: null, sweeping: false })
+      expect(h.staging.calls).toEqual([])
+      expect(isAbsent(h.drive.at('updates/staging/.incoming-1.2.0'))).toBe(false)
+      expect(warn).toHaveBeenCalledWith('Update service: the start step failed', { code: 'EIO', syscall: null })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it.runIf(isWindows)('a case variant Updates/ on a file system that folds case is updates/: one listing and three lstats, then the sweep finds the staged update', async () => {
+    const drive = makeDrive(WIN32)
+    plantStaged(drive, '1.1.0', 'std')
+    renameSync(drive.at('updates'), join(drive.root, 'Updates'))
+    const h = harness(WIN32, [], { drive })
+    expect(h.start.calls).toEqual(['readdirSync .', 'lstatSync updates', 'lstatSync Updates', 'lstatSync Updates/applying'])
+    expect(statusForm(await h.service.status())).toMatchObject({ updatesFolder: 'real', staged: { version: '1.1.0' }, sweeping: false })
+  })
+
+  it.each([
+    ['two entries equal to updates after the fold', (names: string[]) => [...names.filter((name) => name !== 'updates'), 'Updates', 'UPDATES']],
+    ['no such entry while an lstat of updates finds one (a race)', (names: string[]) => names.filter((name) => name !== 'updates')]
+  ])('a root listing with %s proves nothing: updates/ is no real folder, no sweep, status not-real', async (_label, rename) => {
+    const h = harness(WIN32, [{ staged: '1.1.0', bundle: 'std' }], { startListing: (rel, names) => (rel === '.' ? rename(names) : names) })
+    expect(statusForm(await h.service.status())).toMatchObject({ updatesFolder: 'not-real', staged: null, sweeping: false })
+    expect(h.staging.calls).toEqual([])
+  })
+
+  // Record §2.10 and CF-50: release 1 ships for three systems; any other is checked as Linux is (`systemOf`).
+  it('a host system outside the three is checked as Linux is: the runtime glibc against the linux floor', async () => {
+    const h = goldenHarness({ ...hostOf({ id: 'linux', host: 'linux' }), glibc: '2.30' }, { host: (base) => ({ ...base, platform: 'freebsd' }) })
+    expect(await h.service.importFile()).toEqual({
+      kind: 'refused',
+      refusal: { code: 'UPD-OS-TOO-OLD', params: { runningVersion: '1.0.0', system: 'linux', floor: '2.31', hostVersion: '2.30' } }
+    })
+  })
+
+  // Record §3.5's 250 ms rule by a monotonic clock: a clock that answers NaN never keeps a read.
+  it('a monotonic clock that answers NaN keeps no drive read: each answer reads the drive again', async () => {
+    const h = harness(WIN32)
+    h.mono.value = Number.NaN
+    await h.service.status()
+    await h.service.status()
+    expect(h.reads.filter((read) => read === 'policy')).toHaveLength(2)
+  })
+
+  it('an argument whose confirmToken cannot be read answers expired and opens no dialog; a dialog that answers no path is closed', async () => {
+    const h = harness(WIN32, [], { dialog: [{ path: '' }] })
+    const hostile = Object.defineProperty({}, 'confirmToken', {
+      enumerable: true,
+      get: () => {
+        throw new Error('a getter that throws')
+      }
+    })
+    expect(await h.service.importFile(hostile)).toEqual({ kind: 'expired' })
+    expect(h.dialog.opened).toBe(0)
+    expect(await h.service.importFile()).toEqual({ kind: 'closed' })
+    expect({ dialog: h.dialog.opened, bundle: h.bundle.calls, lines: h.lines() }).toEqual({ dialog: 1, bundle: [], lines: [] })
   })
 })
