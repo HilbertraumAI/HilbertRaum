@@ -1,0 +1,141 @@
+{
+  "contract": "F-16, the bytes release 1's own writer puts into a ustar header (app-update task T6.0b; record docs/app-updates.md 4.3, table A.2). The byte-level writer of tests/helpers/archives.ts writes these for a good member; P5's writer is tested against the reader, not against this file",
+  "example": {
+    "name": "notes.txt",
+    "size": 512,
+    "why": "the header of a member named notes.txt of 512 bytes; `hex` is each field's whole content, the bytes written and then NULs",
+    "checksumText": "011065",
+    "headerSha256": "9aee48615c2cf0dfc227d4689a6089fc769198551be96764c5976b33026a640d"
+  },
+  "fields": [
+    {
+      "field": "name",
+      "at": 0,
+      "length": 100,
+      "hex": "6e6f7465732e74787400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "row": "Name: the member name, then NULs"
+    },
+    {
+      "field": "mode",
+      "at": 100,
+      "length": 8,
+      "hex": "3030303036343400",
+      "row": "Ignored fields: 0000644 NUL"
+    },
+    {
+      "field": "uid",
+      "at": 108,
+      "length": 8,
+      "hex": "3030303030303000",
+      "row": "Ignored fields: 0000000 NUL"
+    },
+    {
+      "field": "gid",
+      "at": 116,
+      "length": 8,
+      "hex": "3030303030303000",
+      "row": "Ignored fields: 0000000 NUL"
+    },
+    {
+      "field": "size",
+      "at": 124,
+      "length": 12,
+      "hex": "303030303030303130303000",
+      "row": "Size: 11 zero-padded octal digits and NUL (512 = 1000 octal)"
+    },
+    {
+      "field": "mtime",
+      "at": 136,
+      "length": 12,
+      "hex": "303030303030303030303000",
+      "row": "Ignored fields: 00000000000 NUL"
+    },
+    {
+      "field": "checksum",
+      "at": 148,
+      "length": 8,
+      "hex": "3031313036350020",
+      "row": "Checksum: 6 zero-padded octal digits, NUL, space; the unsigned sum of the 512 bytes with these 8 counted as spaces"
+    },
+    {
+      "field": "typeflag",
+      "at": 156,
+      "length": 1,
+      "hex": "30",
+      "row": "Type: 0"
+    },
+    {
+      "field": "linkname",
+      "at": 157,
+      "length": 100,
+      "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "row": "Link name, prefix: all zero"
+    },
+    {
+      "field": "magic",
+      "at": 257,
+      "length": 6,
+      "hex": "757374617200",
+      "row": "Magic and version: ustar NUL"
+    },
+    {
+      "field": "version",
+      "at": 263,
+      "length": 2,
+      "hex": "3030",
+      "row": "Magic and version: 00"
+    },
+    {
+      "field": "uname",
+      "at": 265,
+      "length": 32,
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "row": "Ignored fields: zeros"
+    },
+    {
+      "field": "gname",
+      "at": 297,
+      "length": 32,
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "row": "Ignored fields: zeros"
+    },
+    {
+      "field": "devmajor",
+      "at": 329,
+      "length": 8,
+      "hex": "3030303030303000",
+      "row": "Ignored fields: 0000000 NUL"
+    },
+    {
+      "field": "devminor",
+      "at": 337,
+      "length": 8,
+      "hex": "3030303030303000",
+      "row": "Ignored fields: 0000000 NUL"
+    },
+    {
+      "field": "prefix",
+      "at": 345,
+      "length": 155,
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "row": "Link name, prefix: all zero"
+    },
+    {
+      "field": "padding",
+      "at": 500,
+      "length": 12,
+      "hex": "000000000000000000000000",
+      "row": "Ignored fields: bytes 500–511 zeros"
+    }
+  ],
+  "member": "a 512-byte header, then the member's bytes zero-padded to a multiple of 512 (none for a size that is one)",
+  "end": "exactly two 512-byte zero blocks, then the end of the file",
+  "reservedPrefix": {
+    "text": "HRUPDATE",
+    "hex": "4852555044415445"
+  },
+  "memberZero": {
+    "name": "hilbertraum-release.dsse.json",
+    "cap": 4194304
+  }
+}

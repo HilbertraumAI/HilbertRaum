@@ -1,0 +1,9 @@
+{
+  "why": "The public key the golden update files golden.hrupdate and golden-win32-only.hrupdate are signed with (app-update task T6.0b). A test key: its private half was never written anywhere. It must never stand in keys.json, a build or a doc as a real key (docs/app-updates.md §10.7 \"No private key\"; repo-hygiene.test.ts compares keys.json with it)",
+  "keys": [
+    "MCowBQYDK2VwAyEAYPXOhQfdcC/pXEqkFLEacKxkHt0ViW0R++dtAmTWzSM="
+  ],
+  "keyIds": [
+    "308e591fd49f6bfe3e4f5b7725a59af56340bbf95e0948b43dd36af8c40e2dd4"
+  ]
+}

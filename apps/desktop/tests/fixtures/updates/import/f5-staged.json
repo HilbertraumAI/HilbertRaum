@@ -1,0 +1,134 @@
+{
+  "contract": "F-5, the bytes of staged.txt and staged.json (app-update task T6.0b; record docs/app-updates.md 4.6, 4.5 \"The commit\", 4.2): what release 1 writes when it stages the committed golden update files. One payload serves both files (record 2.4 `group`): golden.hrupdate carries every member, golden-win32-only.hrupdate lacks the groups posix, darwin and linux whole. What is staged does not depend on the computer's system; which file can be imported does (the apply script of record 4.4: golden-win32-only.hrupdate is UPD-NO-HELPER on macOS and Linux)",
+  "how": "stagedTxt: one line `<size> <name>` and LF per member present, in files[] order. stagedJson: {\"format\":1,\"version\":…,\"files\":[…]} with each entry's keys name, size, sha256, then group when the payload gave one; the members present only, in files[] order; no whitespace, no line end. envelope: updates/staging/<v>/hilbertraum-release.dsse.json is member 0 byte for byte. files/: each member present under its member name with the size and sha256 of membersInFileOrder (role and install_as are not staged anywhere). The four names files, hilbertraum-release.dsse.json, staged.txt and staged.json are the only ones in updates/staging/<v>/",
+  "hostForAccept": "a running version below 1.2.0 with no higher app_version on the drive, a clock within 24 hours before and 365 days after 2026-11-27T12:00:00Z, win32 10.0.19045 or later (darwin 13.0, glibc 2.31), and golden-keys.json's key as the key set",
+  "staged": [
+    {
+      "file": "golden.hrupdate",
+      "fileBytes": 14336,
+      "fileSha256": "b237ae8defed4c99c1a9f3ba1ff3b551be98bdd4d01d3b8c6d04219dcdb62f1f",
+      "envelope": {
+        "name": "hilbertraum-release.dsse.json",
+        "size": 2248,
+        "sha256": "aab10ca4596c3fdd51e6d93ed9607fb34b8cc172632c9cbc7e1a2bf7ed3d2d64"
+      },
+      "payloadSha256": "6a950d46ab61011356e73db05d3f2fcded7487af3aa6fcf9b711fe9127613451",
+      "version": "1.2.0",
+      "issued": "2026-11-27T12:00:00Z",
+      "membersInFileOrder": [
+        {
+          "name": "notes.txt",
+          "at": 3072,
+          "size": 600,
+          "sha256": "412c55fa3ad92f8cda2902f2d92418480678edf0f21bef6885ca85e96a7cd3cd"
+        },
+        {
+          "name": "HilbertRaum-1.2.0.AppImage",
+          "at": 4608,
+          "size": 513,
+          "sha256": "2139ebe76d0cfe2645208b7c82111e3939f12e4cff33661fec44410c6378c590"
+        },
+        {
+          "name": "apply.sh",
+          "at": 6144,
+          "size": 52,
+          "sha256": "35e582455f0fb1613b5c52d0b677d58fc8d4b5887230c8ab9221a244d32527e1"
+        },
+        {
+          "name": "zero-bytes.txt",
+          "at": 7168,
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "HilbertRaum-1.2.0-portable.exe",
+          "at": 7680,
+          "size": 1536,
+          "sha256": "cb61d8689cb067c2acdd07f857be7a1b04d2bf61f1d4ba69be9ab5c922e4d70f"
+        },
+        {
+          "name": "start-hilbertraum.cmd",
+          "at": 9728,
+          "size": 51,
+          "sha256": "362659da0286592675b62a6e561f35abb7aaf7cd2897f0e6492b89ed01c47f54"
+        },
+        {
+          "name": "HilbertRaum-1.2.0-mac-arm64.app.zip",
+          "at": 10752,
+          "size": 1000,
+          "sha256": "4f6d911e4f7cb06c71b54bdbc4c3cf87f9db9bee33fd7e1f5e5590269fefcfd5"
+        },
+        {
+          "name": "apply.cmd",
+          "at": 12288,
+          "size": 60,
+          "sha256": "d7942e8b4f080299fe5e5b015f4642a192d5c7564381f2ad0d0df6ed5add147e"
+        }
+      ],
+      "groupsPresent": [
+        "win32",
+        "posix",
+        "darwin",
+        "linux"
+      ],
+      "groupsAbsent": [],
+      "stagedTxt": "60 apply.cmd\n52 apply.sh\n1536 HilbertRaum-1.2.0-portable.exe\n1000 HilbertRaum-1.2.0-mac-arm64.app.zip\n513 HilbertRaum-1.2.0.AppImage\n51 start-hilbertraum.cmd\n600 notes.txt\n0 zero-bytes.txt\n",
+      "stagedJson": "{\"format\":1,\"version\":\"1.2.0\",\"files\":[{\"name\":\"apply.cmd\",\"size\":60,\"sha256\":\"d7942e8b4f080299fe5e5b015f4642a192d5c7564381f2ad0d0df6ed5add147e\",\"group\":\"win32\"},{\"name\":\"apply.sh\",\"size\":52,\"sha256\":\"35e582455f0fb1613b5c52d0b677d58fc8d4b5887230c8ab9221a244d32527e1\",\"group\":\"posix\"},{\"name\":\"HilbertRaum-1.2.0-portable.exe\",\"size\":1536,\"sha256\":\"cb61d8689cb067c2acdd07f857be7a1b04d2bf61f1d4ba69be9ab5c922e4d70f\",\"group\":\"win32\"},{\"name\":\"HilbertRaum-1.2.0-mac-arm64.app.zip\",\"size\":1000,\"sha256\":\"4f6d911e4f7cb06c71b54bdbc4c3cf87f9db9bee33fd7e1f5e5590269fefcfd5\",\"group\":\"darwin\"},{\"name\":\"HilbertRaum-1.2.0.AppImage\",\"size\":513,\"sha256\":\"2139ebe76d0cfe2645208b7c82111e3939f12e4cff33661fec44410c6378c590\",\"group\":\"linux\"},{\"name\":\"start-hilbertraum.cmd\",\"size\":51,\"sha256\":\"362659da0286592675b62a6e561f35abb7aaf7cd2897f0e6492b89ed01c47f54\",\"group\":\"win32\"},{\"name\":\"notes.txt\",\"size\":600,\"sha256\":\"412c55fa3ad92f8cda2902f2d92418480678edf0f21bef6885ca85e96a7cd3cd\"},{\"name\":\"zero-bytes.txt\",\"size\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}]}"
+    },
+    {
+      "file": "golden-win32-only.hrupdate",
+      "fileBytes": 10240,
+      "fileSha256": "8eb69fc67c903f89be29f5dc617bcf3d5f4d51cdd559c6cef1ba9cca1b6f4d91",
+      "envelope": {
+        "name": "hilbertraum-release.dsse.json",
+        "size": 2248,
+        "sha256": "aab10ca4596c3fdd51e6d93ed9607fb34b8cc172632c9cbc7e1a2bf7ed3d2d64"
+      },
+      "payloadSha256": "6a950d46ab61011356e73db05d3f2fcded7487af3aa6fcf9b711fe9127613451",
+      "version": "1.2.0",
+      "issued": "2026-11-27T12:00:00Z",
+      "membersInFileOrder": [
+        {
+          "name": "notes.txt",
+          "at": 3072,
+          "size": 600,
+          "sha256": "412c55fa3ad92f8cda2902f2d92418480678edf0f21bef6885ca85e96a7cd3cd"
+        },
+        {
+          "name": "zero-bytes.txt",
+          "at": 4608,
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "HilbertRaum-1.2.0-portable.exe",
+          "at": 5120,
+          "size": 1536,
+          "sha256": "cb61d8689cb067c2acdd07f857be7a1b04d2bf61f1d4ba69be9ab5c922e4d70f"
+        },
+        {
+          "name": "start-hilbertraum.cmd",
+          "at": 7168,
+          "size": 51,
+          "sha256": "362659da0286592675b62a6e561f35abb7aaf7cd2897f0e6492b89ed01c47f54"
+        },
+        {
+          "name": "apply.cmd",
+          "at": 8192,
+          "size": 60,
+          "sha256": "d7942e8b4f080299fe5e5b015f4642a192d5c7564381f2ad0d0df6ed5add147e"
+        }
+      ],
+      "groupsPresent": [
+        "win32"
+      ],
+      "groupsAbsent": [
+        "posix",
+        "darwin",
+        "linux"
+      ],
+      "stagedTxt": "60 apply.cmd\n1536 HilbertRaum-1.2.0-portable.exe\n51 start-hilbertraum.cmd\n600 notes.txt\n0 zero-bytes.txt\n",
+      "stagedJson": "{\"format\":1,\"version\":\"1.2.0\",\"files\":[{\"name\":\"apply.cmd\",\"size\":60,\"sha256\":\"d7942e8b4f080299fe5e5b015f4642a192d5c7564381f2ad0d0df6ed5add147e\",\"group\":\"win32\"},{\"name\":\"HilbertRaum-1.2.0-portable.exe\",\"size\":1536,\"sha256\":\"cb61d8689cb067c2acdd07f857be7a1b04d2bf61f1d4ba69be9ab5c922e4d70f\",\"group\":\"win32\"},{\"name\":\"start-hilbertraum.cmd\",\"size\":51,\"sha256\":\"362659da0286592675b62a6e561f35abb7aaf7cd2897f0e6492b89ed01c47f54\",\"group\":\"win32\"},{\"name\":\"notes.txt\",\"size\":600,\"sha256\":\"412c55fa3ad92f8cda2902f2d92418480678edf0f21bef6885ca85e96a7cd3cd\"},{\"name\":\"zero-bytes.txt\",\"size\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}]}"
+    }
+  ]
+}
