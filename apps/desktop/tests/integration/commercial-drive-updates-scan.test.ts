@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertCommercialDrive } from '../../src/main/services/commercial-drive'
@@ -119,6 +119,51 @@ describe('the root scans with a staged update on the drive (Δ-80 row 7; record 
       expect(res.checks.appArtifactsPresent).toBe(false)
     }
   )
+
+  // T6.2 part 1b (CF-33; record §4.4 "Case"): each system's own start file decides, through rootArtifactOf, which the gate
+  // calls. What changed: a Windows app name in another case was "not a release artifact of any platform" and left the
+  // Kit without its Windows app; it is the Windows app now, carrying the version as written.
+  it.each(['hilbertraum-0.1.59-portable.exe', 'HilbertRaum-0.1.59-PORTABLE.EXE'])(
+    'a Kit whose Windows app is named %s passes the gate: its start file starts it, so it is the win-x64 app',
+    async (name) => {
+      const { root, chat } = sellableDrive()
+      rmSync(join(root, ARTIFACT['win-x64']))
+      writeFileSync(join(root, name), 'app-bytes')
+      expect(rootApps(root).find((app) => app.system === 'win32')).toMatchObject({ name, version: APP_VERSION })
+      expect((await gate(root, chat)).problems).toEqual([])
+    }
+  )
+
+  // The app in another case replaces the app (a file system that folds case holds one of the two names).
+  it.each<[string, KitPlatform]>([
+    ['hilbertraum-0.1.59.AppImage', 'linux-x64'],
+    ['HilbertRaum-0.1.59.appimage', 'linux-x64'],
+    ['HilbertRaum-0.1.59-mac-arm64.app.ZIP', 'mac-arm64']
+  ])('a macOS or Linux app named in another case (%s) is no app: refused as a HilbertRaum-* file, and the Kit lacks that app', async (name, platform) => {
+    const { root, chat } = sellableDrive()
+    rmSync(join(root, ARTIFACT[platform]))
+    writeFileSync(join(root, name), 'app-bytes')
+    expect(rootApps(root).map((app) => app.name)).not.toContain(name)
+    expect((await gate(root, chat)).problems).toEqual([NOT_AN_APP(name), `${platform}: no app artifact at the drive root (expected ${ARTIFACT[platform]})`])
+  })
+
+  // Two names that differ only in case can sit side by side only where the file system keeps case apart (ext4: CI's
+  // ubuntu leg); NTFS, exFAT and APFS hold one of them.
+  const keepsCaseApart = ((): boolean => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-commercial-updates-scan-case-'))
+    writeFileSync(join(dir, 'a'), '')
+    return !existsSync(join(dir, 'A'))
+  })()
+  it.runIf(keepsCaseApart)('two Windows apps that differ only in case are two Windows apps: the gate refuses the second', async () => {
+    const { root, chat } = sellableDrive()
+    const other = ARTIFACT['win-x64'].toLowerCase()
+    writeFileSync(join(root, other), 'app-bytes')
+    expect(rootApps(root).filter((app) => app.system === 'win32').map((app) => app.name).sort()).toEqual([ARTIFACT['win-x64'], other].sort())
+    const res = await gate(root, chat)
+    expect(res.problems).toHaveLength(1)
+    expect(res.problems[0]).toMatch(/^win-x64: more than one app artifact at the drive root \(.+\) — a drive must carry exactly one; delete the others$/)
+    expect(res.problems[0]).toContain(other)
+  })
 
   it.each(['update-1.1.0.hrupdate', 'HilbertRaum_1.1.0.hrupdate', 'Kit-update.hrupdate'])(
     'an update file named outside the prefix at the root (%s) is no app and no problem',

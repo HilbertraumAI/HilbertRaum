@@ -225,27 +225,45 @@ export interface RootApp extends RootArtifact {
 /** The start files a Kit carries at its root (`launchers/`, `build-commercial-drive`'s list), recorded in `files`. */
 export const START_FILE_NAMES: readonly string[] = ['Start HilbertRaum.cmd', 'Start HilbertRaum.command', 'start-hilbertraum.sh', 'READ ME FIRST.txt']
 
-/** Release 1's root globs for app files (record §4.4): the segment between prefix and suffix is the carried version. */
-const APP_FILE_NAMES: ReadonlyArray<readonly [DriveSystem, RegExp]> = [
-  ['win32', /^HilbertRaum-(.*)-portable\.exe$/],
-  ['darwin', /^HilbertRaum-(.*)-mac-arm64\.app\.zip$/],
-  ['linux', /^HilbertRaum-(.*)\.AppImage$/]
+/**
+ * Release 1's root globs for app files (record §4.4), each with its own start file's case rule (T6.2, CF-33): the
+ * segment between prefix and suffix is the carried version. `foldCase`: the Windows start file's `for` glob matches
+ * without case on the file systems a Kit uses, so its name is compared after an ASCII fold of the glob's fixed parts
+ * (the glob below is written folded); the macOS and Linux start files are bash globs, which match byte for byte.
+ */
+const APP_FILE_NAMES: ReadonlyArray<readonly [DriveSystem, RegExp, boolean]> = [
+  ['win32', /^hilbertraum-(.*)-portable\.exe$/, true],
+  ['darwin', /^HilbertRaum-(.*)-mac-arm64\.app\.zip$/, false],
+  ['linux', /^HilbertRaum-(.*)\.AppImage$/, false]
 ]
+
+/** The globs' common prefix, `HilbertRaum-`: where each name's version segment starts. */
+const GLOB_PREFIX_LENGTH = 'HilbertRaum-'.length
+
+/** `A`-`Z` folded to `a`-`z` and nothing else (never a locale's rule: a dotless i upper-cases to `I`). Keeps the length,
+ *  so a segment found in the folded name lies at the same place in the name. */
+const asciiFold = (text: string): string => text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32))
 
 /**
  * Whether a drive-root entry is an app by release 1's root globs (record §4.4), and which version its name carries.
  * A file `HilbertRaum-V-portable.exe`, `HilbertRaum-V-mac-arm64.app.zip` or `HilbertRaum-V.AppImage` carries V when V
- * is a version, matched byte for byte (never by prefix, substring or case: `HilbertRaum-1.4.0-rc.1-portable.exe`
- * carries `1.4.0-rc.1`, never `1.4.0`); a name inside a glob whose segment is no version is an app of no known
- * version. A folder `*.app` (not a hidden one: bash's `*` skips a leading dot) is a macOS app of no known version, as
- * the start file finds it. Links and anything else are no app.
+ * is a version, never by prefix or substring (`HilbertRaum-1.4.0-rc.1-portable.exe` carries `1.4.0-rc.1`, never
+ * `1.4.0`); a name inside a glob whose segment is no version is an app of no known version. Case (T6.2, CF-33): each
+ * system's own start file decides, so a `win32` name matches after an ASCII fold of the glob's fixed parts
+ * (`hilbertraum-1.4.0-PORTABLE.EXE` carries `1.4.0`; the segment is taken as written and is a version only as written),
+ * and a `darwin` or `linux` name, and a folder's `.app`, byte for byte. A folder `*.app` (not a hidden one: bash's `*`
+ * skips a leading dot) is a macOS app of no known version, as the start file finds it. Links and anything else are no
+ * app.
  */
 export function rootArtifactOf(name: string, kind: RootEntryKind): RootArtifact | null {
   if (kind === 'folder') return name.endsWith('.app') && !name.startsWith('.') ? { system: 'darwin', version: null } : null
   if (kind !== 'file') return null
-  for (const [system, glob] of APP_FILE_NAMES) {
-    const m = glob.exec(name)
-    if (m) return { system, version: isReleaseVersion(m[1]) ? m[1] : null }
+  for (const [system, glob, foldCase] of APP_FILE_NAMES) {
+    const m = glob.exec(foldCase ? asciiFold(name) : name)
+    if (m === null) continue
+    // Every glob opens with the 12 characters of `HilbertRaum-`, so the segment starts there in the name as written.
+    const segment = name.slice(GLOB_PREFIX_LENGTH, GLOB_PREFIX_LENGTH + m[1].length)
+    return { system, version: isReleaseVersion(segment) ? segment : null }
   }
   return null
 }

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { NODE_STAGING_FS, planSweep } from '../../src/main/services/updates/staging'
+import { rootArtifactOf, type RootArtifact, type RootEntryKind } from '../../src/main/services/updates/drive-release'
 import {
   ENVELOPE_MEMBER_NAME,
   MEMBER_NAME_MAX_BYTES,
@@ -20,8 +21,8 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // of docs/app-updates.md §4.4, row by row. Release 1 applies the rule to every name in a signed payload's `files[]`
 // (a name that breaks it is UPD-TOO-NEW, §4.4 "A name that breaks the rule"; the payload's rows are in
 // updates-payload.test.ts) and, from P6 on, to every header name and to `staged.json` (P6 adds its staging rows here).
-// The root globs (`rootArtifactOf`) are not this rule: drive-release.test.ts holds them. Non-ASCII test strings are
-// written as `\u{…}` escapes.
+// The root globs (`rootArtifactOf`) are not this rule: drive-release.test.ts holds their names, and the case rule per
+// system is F-18's root-glob half (its rows below, T6.2 part 1b). Non-ASCII test strings are written as `\u{…}` escapes.
 
 describe('isMemberName: the characters (table A.3, "Characters")', () => {
   it.each([
@@ -221,6 +222,33 @@ describe('staging applies the rule to staged.json (record §4.6 "Valid"; CF-45)'
     ['two names that differ after the fold', ['notes.txt', 'notes.txt.bak']]
   ])('a staged.json listing %s is valid: the update stays staged', async (_label, names) => {
     expect(await sweepOf(names, true)).toEqual({ staged: '1.1.0', invalid: 0 })
+  })
+})
+
+// F-18's root-glob half (T6.2 part 1b, CF-33; record §4.4 "The root globs release 1 reads", §5.7 "Which systems have a
+// root artifact"): each system's own start file decides the case, so the app counts what that start file would start.
+// Windows' `for` glob ignores case on a Kit's file systems: a win32 name is compared after an ASCII fold of the glob's
+// fixed parts, and its version segment is taken as written. The macOS and Linux start files are bash globs: their names,
+// and a folder's `.app`, byte for byte. The same three shapes per system, so a fold that reaches the wrong system shows.
+// (tests/fixtures/readers/f13-drive-release/vectors.json's `artifacts`, run by drive-release.test.ts, hold the helper's
+// own names; these rows hold the rule per system.)
+describe('the root globs\u{2019} case rule, per system (record §4.4; F-18, CF-33)', () => {
+  it.each<[string, string, RootEntryKind, RootArtifact | null]>([
+    ['win32, as the glob spells it', 'HilbertRaum-1.4.0-portable.exe', 'file', { system: 'win32', version: '1.4.0' }],
+    ['win32, every fixed part in another case', 'hILBERTrAUM-1.4.0-pORTABLE.eXE', 'file', { system: 'win32', version: '1.4.0' }],
+    ['win32, the version segment as written', 'hilbertraum-1.4.0-Beta.2+Build.7-portable.exe', 'file', { system: 'win32', version: '1.4.0-Beta.2+Build.7' }],
+    ['win32, a segment that is no version as written', 'hilbertraum-V1.4.0-portable.exe', 'file', { system: 'win32', version: null }],
+    ['win32, ASCII only: a dotless i (which upper-cases to I) is no i', 'H\u{131}lbertRaum-1.4.0-portable.exe', 'file', null],    ['darwin, as the glob spells it', 'HilbertRaum-1.4.0-mac-arm64.app.zip', 'file', { system: 'darwin', version: '1.4.0' }],
+    ['darwin, the prefix in another case', 'hilbertraum-1.4.0-mac-arm64.app.zip', 'file', null],
+    ['darwin, the suffix in another case', 'HilbertRaum-1.4.0-MAC-ARM64.APP.ZIP', 'file', null],
+    ['darwin, a folder .app', 'Any.app', 'folder', { system: 'darwin', version: null }],
+    ['darwin, a folder .APP', 'Any.APP', 'folder', null],
+    ['darwin, a folder .App', 'HilbertRaum.App', 'folder', null],
+    ['linux, as the glob spells it', 'HilbertRaum-1.4.0.AppImage', 'file', { system: 'linux', version: '1.4.0' }],
+    ['linux, the prefix in another case', 'HILBERTRAUM-1.4.0.AppImage', 'file', null],
+    ['linux, the suffix in another case', 'HilbertRaum-1.4.0.APPIMAGE', 'file', null]
+  ])('%s: %s', (_label, name, kind, artifact) => {
+    expect(rootArtifactOf(name, kind)).toStrictEqual(artifact)
   })
 })
 
