@@ -30,6 +30,7 @@ and the rulings asked for (below); the first writing had shaped its cases to nee
 | `f12-support-dates.json` | 97 golden dates of `supportNotice` | T6.4a's tests |
 | `f14-locked-channels.json` | the channels `registerUpdatesIpc` registers in PR-6a | T6.3's tests |
 | `last-result.json` | 31 readings of `updates/last-result.txt` for the commit's `cleared` line (one whose last line ends CR LF), and the appended line's form | T6.2's tests |
+| `case-owners.json` | which test file runs each of `cases.json`'s 372 cases: `bundle` (213), `staging` (126) or `service` (33); written by T6.2 part 2 (below) | `tests/unit/updates-bundle.test.ts`, `tests/unit/updates-staging.test.ts`, `tests/integration/updates-service.test.ts` (a guard row in each) |
 | `../../readers/f11-update-log/vectors-import.json` | 106 lines of the five import events (`import-refused`, `import-staged`, `import-cancelled`, `staging-swept`, `staging-discarded`), valid and refused-field cases, in the form of `vectors-unlock.json` beside it; `vectors.json` and `vectors-unlock.json` were not touched | T6.2's tests (`update-log.test.ts`) |
 
 ## How the values were stated
@@ -132,6 +133,18 @@ holds only while `updates/` is not a real folder (`pre-updates-is-a-file`, `pre-
 failed listing is a thrown error, so `pre-staging-listing-fails` carries `err=EIO syscall=scandir link=staging`
 (vector `i108`); and a `dismissed` that is not a plain object counts as no dismissal at all, an entry under another key
 being ignored (the five F-12 dates `dismissed-null` to `dismissed-unknown-key-only`).
+
+## `case-owners.json` (T6.2 part 2, 2026-11-27)
+
+Written by the T6.2 part 2 implementer (Opus 5.5) after the reader (T6.1, `ea9c8aeb`, `d6407c36`) and staging (T6.2
+part 1, `cfcc2b42`, `6807e392`) were committed, so that every case is run in exactly one test file (T6.1 review m-2). It
+holds no expected value: it says only which file runs a case. Its source is the split as those two commits pinned it, read
+from git HEAD by a script kept with the wave's working papers (`impl/p6/T6.2/case-owners-2.mjs`): T6.1's rule in
+`updates-bundle.test.ts` (every id outside the service's prefixes and named ids is the reader's: 213), and part 1's two
+lists in `updates-staging.test.ts` (`RUN_HERE`: staging, 126; `LEFT_TO_SERVICE`: the update service, 33). The script
+refuses to write unless the three sets partition the table's ids exactly as the two files pinned them; the entries stand
+in `cases.json`'s order. The two files then read their lists from it (their counts stay pinned), and the service's file
+runs the 33. A case moves between files only with an edit here and the guard rows; no case's `expect` was changed.
 
 ## No key
 

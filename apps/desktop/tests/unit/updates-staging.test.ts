@@ -40,10 +40,7 @@ import { open as openFile, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { readUpdateFile, type BundleFileSystem, type CheckedUpdateFile } from '../../src/main/services/updates/bundle'
-import { parseKeySet, type UpdateKey } from '../../src/main/services/updates/envelope'
-import type { PayloadInput } from '../../src/main/services/updates/payload'
-import { parseSemver } from '../../src/main/services/updates/version'
-import { rootArtifactOf, type RootApp } from '../../src/main/services/updates/drive-release'
+import type { UpdateKey } from '../../src/main/services/updates/envelope'
 import { formatRegisteredLine } from '../../src/main/services/updates/update-log'
 import {
   NODE_STAGING_FS,
@@ -64,11 +61,11 @@ import {
   type UpdatesDrive
 } from '../../src/main/services/updates/staging'
 import type { StagingRefused } from '../../src/shared/updates/import-types'
-import { buildCaseFile, bytesOf, loadImportCases, makeBundleSigners, type BytesSpec, type ImportCase } from '../helpers/update-bundles'
+import { buildCaseFile, bytesOf, IMPORT_FIXTURES, loadImportCases, makeBundleSigners, type BytesSpec, type ImportCase } from '../helpers/update-bundles'
+import { hostOf, keySet, payloadInput, type Host } from '../helpers/update-inputs'
 import { FOLDER_LINKS, type FolderLink } from '../helpers/folder-links'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 
-const MARKER = 'hilbertraum-key-set-1:'
 const UPDATES_FIXTURES = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates')
 const table = loadImportCases()
 const signers = makeBundleSigners() // in memory; nothing of them is written
@@ -76,11 +73,6 @@ const isWindows = process.platform === 'win32'
 
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
 
-function keySet(spkiBase64: readonly string[]): readonly UpdateKey[] {
-  const read = parseKeySet(MARKER + spkiBase64.join(','))
-  expect(read.valid).toBe(true)
-  return read.valid ? read.keys : []
-}
 const TEST_KEYS = keySet([signers.test.spki.toString('base64')])
 
 afterEach(() => {
@@ -88,56 +80,8 @@ afterEach(() => {
   seams.tokens = []
 })
 
-// ---- the case table's host (cases.json `schema.host`)
-
-interface Host {
-  os: 'win32' | 'darwin' | 'linux'
-  osVersion: string | null
-  glibc: string | null
-  runningVersion: string
-  driveAppVersion: string | null
-  rootApps: string[] | null
-  now: string
-  uiLanguage: string
-  keys: string[]
-  policy: { install: string; maxVersion: string | null }
-  prepared?: boolean
-  statfs?: { bsize: number; bavail: number }
-  rootLength?: number
-}
-
-function hostOf(c: ImportCase): Host {
-  const host = table.hosts[c.host ?? '']
-  expect(host, `${c.id}: host ${String(c.host)}`).toBeDefined()
-  return { ...host, ...c.hostSet } as unknown as Host
-}
-
-function semver(text: string): NonNullable<ReturnType<typeof parseSemver>> {
-  const parsed = parseSemver(text)
-  expect(parsed, text).not.toBeNull()
-  return parsed!
-}
-
-/** What the service reads once per import (payload.ts's PayloadInput); the root apps as rootApps would list the names. */
-function payloadInput(host: Host): PayloadInput {
-  const rootApps: RootApp[] | null =
-    host.rootApps === null
-      ? null
-      : host.rootApps.map((name) => {
-          const artifact = rootArtifactOf(name, 'file')
-          expect(artifact, `${name} should be a root app`).not.toBeNull()
-          return { name, kind: 'file', ...artifact! }
-        })
-  const common = {
-    runningVersion: semver(host.runningVersion),
-    driveAppVersion: host.driveAppVersion,
-    rootApps,
-    maxVersion: host.policy.maxVersion === null ? null : semver(host.policy.maxVersion),
-    now: Date.parse(host.now),
-    uiLanguage: host.uiLanguage
-  }
-  return host.os === 'linux' ? { ...common, os: 'linux', osVersion: null, glibc: host.glibc } : { ...common, os: host.os, osVersion: host.osVersion!, glibc: null }
-}
+// ---- the case table's host (cases.json `schema.host`) and the payload check's input: the shared inputs of
+// tests/helpers/update-inputs.ts
 
 /** What the service hands the reader (T6.1): node:fs/promises itself. */
 const BUNDLE_FS: BundleFileSystem = { open: (path, flags) => openFile(path, flags), rename, unlink }
@@ -628,72 +572,18 @@ async function runDiscard(c: ImportCase, folderLink?: FolderLink): Promise<void>
   expectWritesUnderUpdates(rec)
 }
 
-// ---- which cases run here (impl/p6/T6.2/case-split-1.md), and which part 2 and T6.3 run
+// ---- which cases run here, and which the update service runs: tests/fixtures/updates/import/case-owners.json (T6.2
+// part 2; the deciding steps in impl/p6/T6.2/case-split-1.md and case-split-2.md)
 
+const OWNERS = (JSON.parse(readFileSync(join(IMPORT_FIXTURES, 'case-owners.json'), 'utf8')) as { owners: Record<string, string> }).owners
 /** The cases whose deciding step is one of staging.ts's functions. */
-const RUN_HERE: readonly string[] = [
-  // before the dialog: updates/, updates/staging/, updates/applying/, the probe, the 64 MiB margin
-  'pre-updates-is-a-file', 'pre-updates-is-a-link', 'pre-updates-mkdir-enospc', 'pre-updates-mkdir-erofs',
-  'pre-updates-mkdir-eexist-then-nothing', 'pre-updates-listing-fails', 'pre-staging-is-a-file', 'pre-staging-is-a-link',
-  'pre-staging-listing-fails', 'pre-in-progress', 'pre-in-progress-applying-is-a-file',
-  'pre-order-staging-link-before-in-progress', 'pre-order-in-progress-before-probe', 'pre-probe-name-occupied',
-  'pre-probe-enospc', 'pre-probe-erofs', 'pre-probe-other-failure', 'pre-order-probe-before-margin', 'pre-margin-below',
-  'pre-margin-bsize-zero-below', 'probe-leftover-file-removed', 'probe-link-removed-not-followed',
-  'probe-empty-folder-removed', 'probe-final-delete-fails-ignored',
-  // after the reader's checked answer: the path length, <v>/ and .incoming-<v>/, free space
-  'pre-margin-exactly-64-mib', 'path-at-259', 'path-at-260', 'path-not-checked-on-linux',
-  'path-order-before-version-folder-link', 'path-absent-member-name-not-counted', 'path-present-99-byte-name-at-259',
-  'path-present-99-byte-name-at-260', 'link-version-is-a-file', 'link-version-is-a-link', 'link-incoming-is-a-link',
-  'link-incoming-is-a-file', 'link-order-before-free-space', 'space-at-the-formula', 'space-one-cluster-under',
-  'space-members-present-only', 'space-members-present-only-under', 'space-large-cluster', 'space-large-cluster-under',
-  'space-statfs-fails', 'space-counts-held-bytes-as-free', 'space-counts-held-bytes-one-under',
-  'space-counts-incoming-bytes-as-free', 'space-link-inside-counts-zero', 'space-order-before-old-file',
-  'space-bsize-zero-at-the-formula', 'space-bsize-zero-one-under', 'space-other-version-not-counted-as-free',
-  // the data pass's start, the commit and its cleared line
-  'accept-updates-folder-other-case', 'accept-replaces-staged-same-version', 'accept-commit-removes-other-versions',
-  'accept-case-only-version-replaces', 'link-inside-earlier-version-folder', 'commit-cleared-line-appended',
-  'commit-cleared-last-line-crlf', 'commit-cleared-helper-blocked-other-computer', 'commit-cleared-unknown-code-marks',
-  'commit-not-cleared-other-version', 'commit-not-cleared-applied', 'commit-not-cleared-already-cleared',
-  'commit-cleared-last-valid-line-wins', 'commit-cleared-token-avoids-seen', 'commit-cleared-append-fails',
-  'commit-last-result-is-a-link', 'commit-marker-write-fails',
-  // the start-up sweep (the start step's asynchronous part)
-  'start-staged-survives', 'start-incoming-with-unverified-exe', 'start-no-marker', 'start-invalid-marker-not-json',
-  'start-invalid-marker-array', 'start-invalid-marker-bom', 'start-invalid-marker-format-2',
-  'start-invalid-marker-format-string', 'start-invalid-marker-format-missing', 'start-invalid-marker-version-other',
-  'start-invalid-marker-version-not-semver', 'start-invalid-marker-files-empty', 'start-invalid-marker-files-not-array',
-  'start-invalid-marker-name-breaks-rule', 'start-invalid-marker-names-fold-equal', 'start-invalid-marker-size-negative',
-  'start-invalid-marker-size-8gib', 'start-invalid-marker-size-fraction', 'start-invalid-marker-size-string',
-  'start-invalid-marker-sha256-upper-case', 'start-invalid-marker-sha256-63', 'start-invalid-marker-group-empty',
-  'start-invalid-marker-group-null', 'start-invalid-marker-entry-not-object', 'start-invalid-marker-folder-name-case',
-  'start-invalid-marker-over-cap', 'start-valid-marker-at-cap', 'start-invalid-marker-is-a-link',
-  'start-invalid-marker-is-a-folder', 'start-invalid-marker-two-names', 'start-valid-marker-unknown-keys',
-  'start-valid-marker-format-1.0', 'start-valid-marker-duplicate-key-last-wins',
-  'start-valid-marker-whitespace-and-line-end', 'start-valid-marker-with-group', 'start-member-missing',
-  'start-member-other-size', 'start-member-is-a-folder', 'start-member-is-a-link', 'start-files-folder-is-a-link',
-  'start-extra-file-in-files-ignored', 'start-stray-file', 'start-link-entry-left', 'start-incoming-link-left',
-  'start-staging-is-a-link', 'start-staging-is-a-file', 'start-all-reasons-in-order', 'start-two-staged-highest-shown',
-  'start-removal-fails', 'start-stat-fails-entry-left',
-  // the discard's staging function
-  'discard-staged', 'discard-other-version', 'discard-version-as-path', 'discard-junk-argument', 'discard-in-progress',
-  'discard-removal-fails', 'discard-link-inside'
-]
-
+const RUN_HERE: readonly string[] = table.cases.filter((c) => OWNERS[c.id] === 'staging').map((c) => c.id)
 /**
- * The cases left for part 2's service (the key set, not a drive, the policy, the order of the checks, the repeated
- * refusal, the start's synchronous part and its wait, a run going, the old-file token) and T6.3's channels (the dialog,
- * the argument, cancel, busy); their deciding steps are in impl/p6/T6.2/case-split-1.md.
+ * The cases the update service runs (updates-service.test.ts): the key set, not a drive, the policy, the order of the
+ * checks, the repeated refusal, the start's synchronous part and its wait, a run going, the old-file token, the dialog,
+ * the argument, cancel, busy.
  */
-const LEFT_TO_SERVICE: readonly string[] = [
-  'pre-not-available', 'pre-not-available-before-not-a-drive', 'pre-not-a-drive', 'pre-order-not-a-drive-before-policy',
-  'pre-policy-managed', 'pre-policy-invalid', 'pre-order-policy-before-updates-link', 'pre-repeat-same-refusal-one-line',
-  'pre-repeat-after-another-refusal-logs-again', 'pre-repeat-with-a-discard-line-between',
-  'pre-repeat-after-same-code-past-the-dialog', 'dialog-closed', 'argument-without-own-token-opens-the-dialog',
-  'pay-issued-365d-1s-confirmed', 'token-unknown', 'token-spent-by-early-refusal', 'token-spent-by-dialog-call',
-  'token-redeem-file-no-longer-old', 'token-redeem-file-now-another-version', 'cancel-while-checking-before-the-dialog',
-  'cancel-while-choosing', 'cancel-while-committing', 'cancel-idle', 'busy-second-call', 'start-nothing',
-  'start-updates-not-real', 'start-applying-exists-no-sweep', 'start-applying-stat-fails', 'start-not-a-prepared-drive',
-  'start-notice-until-a-commit', 'start-wait-ends-after-10-s', 'discard-not-a-drive', 'discard-while-a-run-goes'
-]
+const LEFT_TO_SERVICE: readonly string[] = table.cases.filter((c) => OWNERS[c.id] === 'service').map((c) => c.id)
 
 /** T6.1's split rule (updates-bundle.test.ts): the cases the reader leaves. */
 const SERVICE_PREFIXES = ['pre-', 'probe-', 'start-', 'discard-', 'commit-', 'space-', 'link-', 'path-', 'token-', 'busy-', 'cancel-']
@@ -716,7 +606,7 @@ async function runCase(c: ImportCase, folderLink?: FolderLink): Promise<void> {
 }
 
 describe('the import case table through staging.ts (tests/fixtures/updates/import/cases.json; record §4.2, §4.5, §4.6, §4.7)', () => {
-  it('the split is pinned: of the 159 cases the reader leaves, 126 run here and 33 are left to part 2 and T6.3, each once', () => {
+  it('the split is pinned: of the 159 cases the reader leaves, 126 run here and 33 in the service\u{2019}s file, each once, as case-owners.json gives them', () => {
     expect({ left: LEFT_BY_THE_READER.length, here: RUN_HERE.length, service: LEFT_TO_SERVICE.length }).toEqual({ left: 159, here: 126, service: 33 })
     expect(new Set([...RUN_HERE, ...LEFT_TO_SERVICE]).size).toBe(159)
     expect([...RUN_HERE, ...LEFT_TO_SERVICE].sort()).toEqual([...LEFT_BY_THE_READER].sort())

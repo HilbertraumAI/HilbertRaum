@@ -1,14 +1,14 @@
 // The codes of an update import that P6 adds, and the verdicts of the update file container (app-update P6; F-16's
 // reader side, F-5; docs/app-updates.md §3.5 "The types", §4.5, §4.7, §5.8): a reference code of §5.8 with its
-// parameters, never copy and never an address, beside P4's union in ./types, which stays as it is. P6's channels add
-// their argument and answer shapes here (T6.3). Types only: the reader (main/services/updates/bundle.ts) is loaded by
-// the release tools through Node's own type stripping, which erases a type-only use of this file and could not resolve
-// a value taken from it.
+// parameters, never copy and never an address, beside P4's union in ./types, which stays as it is. The four channels'
+// argument and answer shapes are here too (T6.2; T6.3 registers the channels). Types only: the reader
+// (main/services/updates/bundle.ts) is loaded by the release tools through Node's own type stripping, which erases a
+// type-only use of this file and could not resolve a value taken from it.
 //
 // Every parameter is a number or text the reader or the service computed or the payload wrote, never a path and never
 // user text.
 
-import type { AcceptedFile, AcceptedPayload, EnvelopeRefusal, NoParams, PayloadRefusal, UpdateRefusal } from './types'
+import type { AcceptedFile, AcceptedPayload, EnvelopeRefusal, NoParams, PayloadRefusal, UpdateNotice, UpdateRefusal } from './types'
 
 /**
  * P6's twelve refusal codes (§3.5 "The types"; table B.9). `UPD-DRIVE-FULL` carries the bytes the free-space check
@@ -158,4 +158,119 @@ export type DiscardEnd =
       readonly kind: 'refused'
       readonly refusal: Extract<ImportOnlyRefusal, { code: 'UPD-IN-PROGRESS' | 'UPD-CANT-WRITE-DRIVE' }>
       readonly cause: ImportIoCause | null
+    }
+
+// ---- the four channels callable while locked (T6.2 part 2: main/services/updates/service.ts answers them, T6.3 registers
+// them; record §3.5 "The channels' values"). This build's own contract between its main process and its renderer.
+
+/** What an import shows of the update (§3.7): its version, its `issued` text (or null) and its `summary` in the UI
+ *  language (or null). */
+export interface ImportUpdateFacts {
+  readonly version: string
+  readonly issued: string | null
+  readonly summary: string | null
+}
+
+/** The two warnings an accepted payload can carry (§2.10): shown while the update is copied and with the answer. */
+export type ImportWarning = Extract<UpdateNotice, { code: 'UPD-ISSUED-IN-FUTURE' | 'UPD-OTHER-SYSTEM-FLOOR' }>
+
+/** The old-file confirmation (§3.5 "The old-file confirmation"): one explicit answer before staging. */
+export type OldFileNotice = Extract<UpdateNotice, { code: 'UPD-OLD-FILE' }>
+
+/** `updates:importFile`'s argument: none, or an object of which only an own `confirmToken` is read (§3.5). Any other
+ *  value opens the file dialog; no argument carries a path. */
+export type ImportFileArgument = { readonly confirmToken: string } | undefined
+
+/**
+ * `updates:importFile`'s answer, one per call when its run ends (§3.5): `staged`; `confirm` (the old-file question, with a
+ * one-time token the next call hands back); `refused` (one code of §4.5's order with its parameters); `cancelled` (the
+ * user's `updates:cancel`); `closed` (the dialog closed without a file); `busy` (another run is going, or the start
+ * step's sweep outlasted the channels' wait); `expired` (a token that is not live).
+ */
+export type ImportFileAnswer =
+  | { readonly kind: 'staged'; readonly update: ImportUpdateFacts; readonly notices: readonly ImportWarning[] }
+  | {
+      readonly kind: 'confirm'
+      readonly token: string
+      readonly update: ImportUpdateFacts
+      readonly notice: OldFileNotice
+      readonly notices: readonly ImportWarning[]
+    }
+  | { readonly kind: 'refused'; readonly refusal: ImportRefusal }
+  | { readonly kind: 'cancelled' | 'closed' | 'busy' | 'expired' }
+
+/**
+ * A run's state (§3.5 "A run's states"): `checking` (the checks before the dialog, and again once the file is open),
+ * `choosing` (the dialog is open), `copying` (the data pass: the bytes staged of the members present, with the run's
+ * update and warnings), `committing`; `idle` when no run goes.
+ */
+export type ImportRunStatus =
+  | { readonly state: 'idle' | 'checking' | 'choosing' }
+  | {
+      readonly state: 'copying'
+      readonly done: number
+      readonly total: number
+      readonly update: ImportUpdateFacts
+      readonly notices: readonly ImportWarning[]
+    }
+  | { readonly state: 'committing'; readonly update: ImportUpdateFacts; readonly notices: readonly ImportWarning[] }
+
+/** The update policy as `status` shows it (§8.1, readUpdatePolicy's three fields; `maxVersion` the cap's text). */
+export interface UpdatePolicyStatus {
+  readonly install: 'allowed' | 'managed' | 'invalid'
+  readonly maxVersion: string | null
+  readonly file: 'read' | 'none' | 'unreadable'
+}
+
+/** `config/kit-support.txt` as `status` shows it (§5.9's reading: a damaged stamp shows as `unreadable`). */
+export type SupportEndStatus = { readonly state: 'month'; readonly month: string } | { readonly state: 'absent' | 'unreadable' }
+
+/**
+ * The drive part of `updates:status` (§3.5): on a prepared drive what `updates/` holds, else `none` (nothing under the
+ * root is read). `updatesFolder`, `policy`, `inProgress` and `supportEnd` are read from the drive at most once per 250 ms;
+ * `staged`, `notice` and `sweeping` are the service's own state, current in every answer.
+ */
+export type UpdatesDriveStatus =
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'prepared'
+      readonly updatesFolder: 'real' | 'not-real'
+      readonly policy: UpdatePolicyStatus
+      readonly inProgress: boolean
+      readonly staged: { readonly version: string } | null
+      readonly notice: DamagedOnDriveNotice | null
+      readonly sweeping: boolean
+      readonly supportEnd: SupportEndStatus
+    }
+
+/** `updates:status`'s answer (§3.5): no argument. `available` is false when the build embeds no key. */
+export interface UpdatesStatus {
+  readonly runningVersion: string
+  readonly available: boolean
+  readonly import: ImportRunStatus
+  readonly buildDate: string | null
+  readonly drive: UpdatesDriveStatus
+}
+
+/** `updates:cancel`'s answer (§3.5): `stopping` (the run stops at its next check point), `committing` (the commit
+ *  finishes), `idle` (no run; a live confirmation token is spent). */
+export interface CancelAnswer {
+  readonly kind: 'stopping' | 'committing' | 'idle'
+}
+
+/** `updates:discardStaged`'s argument: an object with an own string `version`, compared byte for byte, never a path. */
+export interface DiscardStagedArgument {
+  readonly version: string
+}
+
+/**
+ * `updates:discardStaged`'s answer (§3.5): `refused` (`UPD-NOT-A-DRIVE`, `UPD-IN-PROGRESS`, `UPD-CANT-WRITE-DRIVE`),
+ * `busy`, `not-staged` or `discarded`.
+ */
+export type DiscardStagedAnswer =
+  | { readonly kind: 'not-staged' | 'busy' }
+  | { readonly kind: 'discarded'; readonly version: string }
+  | {
+      readonly kind: 'refused'
+      readonly refusal: Extract<ImportOnlyRefusal, { code: 'UPD-NOT-A-DRIVE' | 'UPD-IN-PROGRESS' | 'UPD-CANT-WRITE-DRIVE' }>
     }

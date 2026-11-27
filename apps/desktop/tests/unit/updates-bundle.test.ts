@@ -7,14 +7,11 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { READ_SLICE_BYTES, readUpdateFile, type BundleFileHandle, type BundleFileSystem, type CheckedUpdateFile, type UpdateFileRead } from '../../src/main/services/updates/bundle'
-import { parseKeySet, type UpdateKey } from '../../src/main/services/updates/envelope'
-import type { PayloadInput } from '../../src/main/services/updates/payload'
-import { parseSemver } from '../../src/main/services/updates/version'
-import { rootArtifactOf, type RootApp } from '../../src/main/services/updates/drive-release'
 import type { AcceptedFile, AcceptedPayload } from '../../src/shared/updates/types'
 import type { ImportIoCause, StagingEnd } from '../../src/shared/updates/import-types'
 import { makeUstarFile, ustarChecksum, ustarMember } from '../helpers/archives'
-import { buildCaseFile, envelopeBytes, loadImportCases, makeBundleSigners, type ImportCase } from '../helpers/update-bundles'
+import { buildCaseFile, envelopeBytes, IMPORT_FIXTURES, loadImportCases, makeBundleSigners, type ImportCase } from '../helpers/update-bundles'
+import { hostOf, keySet, MARKER, payloadInput, type Host } from '../helpers/update-inputs'
 import { DESKTOP_ROOT, REPO_ROOT } from '../helpers/repo-files'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -31,68 +28,18 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // case names. No key is written: the signers are made in memory (update-bundles.ts), and the golden key set is public.
 // Non-ASCII test strings are written as `\u{…}` escapes.
 
-const MARKER = 'hilbertraum-key-set-1:'
 const UPDATES_FIXTURES = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates')
 const table = loadImportCases()
 const signers = makeBundleSigners() // in memory; nothing of them is written
 
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
 
-function keySet(spkiBase64: readonly string[]): readonly UpdateKey[] {
-  const read = parseKeySet(MARKER + spkiBase64.join(','))
-  expect(read.valid).toBe(true)
-  return read.valid ? read.keys : []
-}
 const TEST_KEYS = keySet([signers.test.spki.toString('base64')])
 
-// ---- the case table's host (cases.json `schema.host`) as the payload check's input (payload.ts's PayloadInput)
+// ---- the case table's host (cases.json `schema.host`) as the payload check's input (payload.ts's PayloadInput): the
+// shared inputs of tests/helpers/update-inputs.ts
 
-interface Host {
-  os: 'win32' | 'darwin' | 'linux'
-  osVersion: string | null
-  glibc: string | null
-  runningVersion: string
-  driveAppVersion: string | null
-  rootApps: string[] | null
-  now: string
-  uiLanguage: string
-  keys: string[]
-  policy: { install: string; maxVersion: string | null }
-}
-
-function hostOf(c: ImportCase): Host {
-  const host = table.hosts[c.host ?? '']
-  expect(host, `${c.id}: host ${String(c.host)}`).toBeDefined()
-  return { ...host, ...c.hostSet } as unknown as Host
-}
 const namedHost = (os: 'win32' | 'darwin' | 'linux'): Host => table.hosts[os] as unknown as Host
-
-function semver(text: string): NonNullable<ReturnType<typeof parseSemver>> {
-  const parsed = parseSemver(text)
-  expect(parsed, text).not.toBeNull()
-  return parsed!
-}
-
-/** What the service reads once per import (payload.ts's PayloadInput); the root apps as rootApps would list the names. */
-function payloadInput(host: Host): PayloadInput {
-  const rootApps: RootApp[] | null =
-    host.rootApps === null
-      ? null
-      : host.rootApps.map((name) => {
-          const artifact = rootArtifactOf(name, 'file')
-          expect(artifact, `${name} should be a root app`).not.toBeNull()
-          return { name, kind: 'file', ...artifact! }
-        })
-  const common = {
-    runningVersion: semver(host.runningVersion),
-    driveAppVersion: host.driveAppVersion,
-    rootApps,
-    maxVersion: host.policy.maxVersion === null ? null : semver(host.policy.maxVersion),
-    now: Date.parse(host.now),
-    uiLanguage: host.uiLanguage
-  }
-  return host.os === 'linux' ? { ...common, os: 'linux', osVersion: null, glibc: host.glibc } : { ...common, os: host.os, osVersion: host.osVersion!, glibc: null }
-}
 
 // ---- scratch folders, and the service's part: node:fs/promises through a recorder
 
@@ -518,62 +465,15 @@ const READER_CASES = table.cases.filter((c) => !SERVICE_PREFIXES.some((prefix) =
 const POSIX_ONLY = new Set(['open-named-pipe'])
 
 /**
- * The cases left to the service's tests (T6.2, T6.3), sorted, as the split stood when the reader was reviewed (T6.1 fix
- * round 1, m-2): a case that moves between the reader and the service, or leaves the table, turns the split row red, so
- * the move is an edit here that a review sees. T6.2 and T6.3 hold the other half: each of these runs in exactly one of
- * their files.
+ * Which file runs each case (tests/fixtures/updates/import/case-owners.json, T6.2 part 2; T6.1 fix round 1, m-2): the
+ * reader's are run here, the others in updates-staging.test.ts and updates-service.test.ts, each in exactly one of them. A
+ * case that moves between the reader and the service, or leaves the table, turns the split row red, so the move is an
+ * edit of the fixture that a review sees.
  */
-const LEFT_CASE_IDS: readonly string[] = [
-  'accept-case-only-version-replaces', 'accept-commit-removes-other-versions', 'accept-replaces-staged-same-version',
-  'accept-updates-folder-other-case', 'argument-without-own-token-opens-the-dialog', 'busy-second-call', 'cancel-idle',
-  'cancel-while-checking-before-the-dialog', 'cancel-while-choosing', 'cancel-while-committing',
-  'commit-cleared-append-fails', 'commit-cleared-helper-blocked-other-computer', 'commit-cleared-last-line-crlf',
-  'commit-cleared-last-valid-line-wins', 'commit-cleared-line-appended', 'commit-cleared-token-avoids-seen',
-  'commit-cleared-unknown-code-marks', 'commit-last-result-is-a-link', 'commit-marker-write-fails',
-  'commit-not-cleared-already-cleared', 'commit-not-cleared-applied', 'commit-not-cleared-other-version',
-  'dialog-closed', 'discard-in-progress', 'discard-junk-argument', 'discard-link-inside', 'discard-not-a-drive',
-  'discard-other-version', 'discard-removal-fails', 'discard-staged', 'discard-version-as-path',
-  'discard-while-a-run-goes', 'link-incoming-is-a-file', 'link-incoming-is-a-link',
-  'link-inside-earlier-version-folder', 'link-order-before-free-space', 'link-version-is-a-file',
-  'link-version-is-a-link', 'path-absent-member-name-not-counted', 'path-at-259', 'path-at-260',
-  'path-not-checked-on-linux', 'path-order-before-version-folder-link', 'path-present-99-byte-name-at-259',
-  'path-present-99-byte-name-at-260', 'pay-issued-365d-1s-confirmed', 'pre-in-progress',
-  'pre-in-progress-applying-is-a-file', 'pre-margin-below', 'pre-margin-bsize-zero-below', 'pre-margin-exactly-64-mib',
-  'pre-not-a-drive', 'pre-not-available', 'pre-not-available-before-not-a-drive', 'pre-order-in-progress-before-probe',
-  'pre-order-not-a-drive-before-policy', 'pre-order-policy-before-updates-link', 'pre-order-probe-before-margin',
-  'pre-order-staging-link-before-in-progress', 'pre-policy-invalid', 'pre-policy-managed', 'pre-probe-enospc',
-  'pre-probe-erofs', 'pre-probe-name-occupied', 'pre-probe-other-failure',
-  'pre-repeat-after-another-refusal-logs-again', 'pre-repeat-after-same-code-past-the-dialog',
-  'pre-repeat-same-refusal-one-line', 'pre-repeat-with-a-discard-line-between', 'pre-staging-is-a-file',
-  'pre-staging-is-a-link', 'pre-staging-listing-fails', 'pre-updates-is-a-file', 'pre-updates-is-a-link',
-  'pre-updates-listing-fails', 'pre-updates-mkdir-eexist-then-nothing', 'pre-updates-mkdir-enospc',
-  'pre-updates-mkdir-erofs', 'probe-empty-folder-removed', 'probe-final-delete-fails-ignored',
-  'probe-leftover-file-removed', 'probe-link-removed-not-followed', 'space-at-the-formula',
-  'space-bsize-zero-at-the-formula', 'space-bsize-zero-one-under', 'space-counts-held-bytes-as-free',
-  'space-counts-held-bytes-one-under', 'space-counts-incoming-bytes-as-free', 'space-large-cluster',
-  'space-large-cluster-under', 'space-link-inside-counts-zero', 'space-members-present-only',
-  'space-members-present-only-under', 'space-one-cluster-under', 'space-order-before-old-file',
-  'space-other-version-not-counted-as-free', 'space-statfs-fails', 'start-all-reasons-in-order',
-  'start-applying-exists-no-sweep', 'start-applying-stat-fails', 'start-extra-file-in-files-ignored',
-  'start-files-folder-is-a-link', 'start-incoming-link-left', 'start-incoming-with-unverified-exe',
-  'start-invalid-marker-array', 'start-invalid-marker-bom', 'start-invalid-marker-entry-not-object',
-  'start-invalid-marker-files-empty', 'start-invalid-marker-files-not-array', 'start-invalid-marker-folder-name-case',
-  'start-invalid-marker-format-2', 'start-invalid-marker-format-missing', 'start-invalid-marker-format-string',
-  'start-invalid-marker-group-empty', 'start-invalid-marker-group-null', 'start-invalid-marker-is-a-folder',
-  'start-invalid-marker-is-a-link', 'start-invalid-marker-name-breaks-rule', 'start-invalid-marker-names-fold-equal',
-  'start-invalid-marker-not-json', 'start-invalid-marker-over-cap', 'start-invalid-marker-sha256-63',
-  'start-invalid-marker-sha256-upper-case', 'start-invalid-marker-size-8gib', 'start-invalid-marker-size-fraction',
-  'start-invalid-marker-size-negative', 'start-invalid-marker-size-string', 'start-invalid-marker-two-names',
-  'start-invalid-marker-version-not-semver', 'start-invalid-marker-version-other', 'start-link-entry-left',
-  'start-member-is-a-folder', 'start-member-is-a-link', 'start-member-missing', 'start-member-other-size',
-  'start-no-marker', 'start-not-a-prepared-drive', 'start-nothing', 'start-notice-until-a-commit',
-  'start-removal-fails', 'start-staged-survives', 'start-staging-is-a-file', 'start-staging-is-a-link',
-  'start-stat-fails-entry-left', 'start-stray-file', 'start-two-staged-highest-shown', 'start-updates-not-real',
-  'start-valid-marker-at-cap', 'start-valid-marker-duplicate-key-last-wins', 'start-valid-marker-format-1.0',
-  'start-valid-marker-unknown-keys', 'start-valid-marker-whitespace-and-line-end', 'start-valid-marker-with-group',
-  'start-wait-ends-after-10-s', 'token-redeem-file-no-longer-old', 'token-redeem-file-now-another-version',
-  'token-spent-by-dialog-call', 'token-spent-by-early-refusal', 'token-unknown'
-]
+const OWNERS = (JSON.parse(readFileSync(join(IMPORT_FIXTURES, 'case-owners.json'), 'utf8')) as { owners: Record<string, string> }).owners
+const ownedBy = (owner: string): string[] => Object.keys(OWNERS).filter((id) => OWNERS[id] === owner).sort()
+/** The cases left to the service's tests (T6.2, T6.3), sorted. */
+const LEFT_CASE_IDS: readonly string[] = Object.keys(OWNERS).filter((id) => OWNERS[id] !== 'bundle').sort()
 
 describe('the import case table through the reader (tests/fixtures/updates/import/cases.json; record §4.3, §4.5, §4.7)', () => {
   it('the reader-side cases are found, and every injected fault and every run of several calls among them has a setup', () => {
@@ -582,9 +482,10 @@ describe('the import case table through the reader (tests/fixtures/updates/impor
     expect(READER_CASES.filter((c) => (c.inject !== undefined || c.kind === 'calls') && SETUPS[c.id] === undefined).map((c) => c.id)).toEqual([])
   })
 
-  it('the split is pinned: 372 cases, 213 run here, and the 159 left ids exactly as listed', () => {
+  it('the split is pinned: 372 cases, 213 run here (exactly the ids case-owners.json gives the reader), and the 159 left ids as it gives them to the others', () => {
     const left = table.cases.filter((c) => !READER_CASES.includes(c)).map((c) => c.id)
     expect({ cases: table.cases.length, run: READER_CASES.length, left: left.length }).toEqual({ cases: 372, run: 213, left: 159 })
+    expect(READER_CASES.map((c) => c.id).sort()).toEqual(ownedBy('bundle'))
     expect([...left].sort()).toEqual(LEFT_CASE_IDS)
   })
 
