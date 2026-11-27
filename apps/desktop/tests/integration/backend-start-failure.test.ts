@@ -37,11 +37,21 @@ vi.mock('../../src/main/ipc/registerStartFailureIpc', async (importOriginal) => 
   return { ...actual, registerStartFailureIpc: registerSpy }
 })
 
+// T6.3 review m-1 (fix round 1, F3): the update channels' narrow context in the failure state is what PR-6b's "Copy
+// details for support" channel and P7's hand-off will read the layout and the version from, so the update registrar's
+// call is watched the same way (calling through) to hold what the failure state hands it.
+const { registerUpdatesSpy } = vi.hoisted(() => ({ registerUpdatesSpy: vi.fn() }))
+vi.mock('../../src/main/ipc/registerUpdatesIpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/ipc/registerUpdatesIpc')>()
+  registerUpdatesSpy.mockImplementation(actual.registerUpdatesIpc)
+  return { ...actual, registerUpdatesIpc: registerUpdatesSpy }
+})
+
 import { oneUpdateService, runBackendStart } from '../../src/main/backend-start'
-import { guardedHandle, releaseGuardedHandlers } from '../../src/main/ipc/guarded-handle'
+import { guardedHandle, releaseGuardedHandlers, type TrustedSenders } from '../../src/main/ipc/guarded-handle'
 import { registerUpdatesIpc } from '../../src/main/ipc/registerUpdatesIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
-import { initLogging, readLogTail } from '../../src/main/services/logging'
+import { initLogging, log, readLogTail } from '../../src/main/services/logging'
 import { DEFAULT_POLICY, readUpdatePolicy } from '../../src/main/services/policy'
 import { readDriveRelease, rootApps } from '../../src/main/services/updates/drive-release'
 import { readKitSupport } from '../../src/main/services/updates/kit-support'
@@ -119,6 +129,7 @@ beforeEach(() => {
   releaseGuardedHandlers()
   handlers.clear()
   registerSpy.mockClear()
+  registerUpdatesSpy.mockClear()
   initLogging(join(tempRoot('backend-start-logs'), 'logs')) // a fresh, empty in-memory buffer
 })
 
@@ -404,6 +415,79 @@ describe('a back-end start that throws still answers the update channels, on the
       { error: 'Error', message: `Attempted to register a second handler for '${IPC.updatesDiscardStaged}'`, code: null, sqliteCode: null, sqlite: null }
     ])
     expect(lines.filter((l) => l.includes('the failure state could not be registered'))).toEqual([])
+  })
+
+  // T6.3 review m-6 (fix round 1, F4): the update part takes back what it registered before it writes its line, so the
+  // all-or-none holds even when the line itself throws (not reachable with today's logger; the order is the guarantee).
+  it('a throw part-way and a line that throws too: the update part still leaves none of its channels', async () => {
+    guardedHandle(IPC.updatesDiscardStaged, () => 'registered before the start', { trustedSenders: ANY_SENDER })
+    const writeLine = log.error
+    const spy = vi.spyOn(log, 'error').mockImplementation((message, meta) => {
+      if (message.startsWith('Backend start: the update channels')) throw new Error('the line could not be written')
+      writeLine(message, meta)
+    })
+    try {
+      const start = (): void => {
+        throw new TypeError('a fault')
+      }
+      expect(runBackendStart(start, deps)).toEqual({ cause: 'other', code: null })
+    } finally {
+      spy.mockRestore()
+    }
+    expect([...handlers.keys()].sort()).toEqual([...GATE_CHANNELS, IPC.updatesDiscardStaged].sort())
+    expect((await gateState()).state).toBe('start_failed')
+  })
+
+  // T6.3 review m-1 (fix round 1, F3): the failure state hands the update channels a narrow context of its own fields,
+  // the senders and the layout the very objects it holds, and nothing else (no failure, no getter), on the one service.
+  it('the failure state hands the update channels the narrow context of its own four fields, the layout by identity', () => {
+    const root = tempRoot('backend-start-updates-narrow')
+    const layout = resolvePaths({ envRoot: root, fallbackRoot: root })
+    const senders: TrustedSenders = { isTrusted: () => true } // a set of its own, held by identity
+    const start = (): void => {
+      throw new TypeError('a fault after the layout was resolved')
+    }
+    runBackendStart(start, { ...deps, trustedSenders: senders, isDev: true, appVersion: '0.1.67', paths: () => layout })
+    expect(registerUpdatesSpy).toHaveBeenCalledTimes(1)
+    const [narrow, service] = registerUpdatesSpy.mock.calls[0]! as [Record<string, unknown>, unknown]
+    expect(narrow).toStrictEqual({ trustedSenders: senders, paths: layout, isDev: true, appVersion: '0.1.67' })
+    expect(narrow.trustedSenders).toBe(senders)
+    expect(narrow.paths).toBe(layout)
+    expect(service).toBe(STAND_IN_SERVICE)
+  })
+})
+
+// T6.3 review m-6 (fix round 1, F4): the two rules of the one-service getter (backend-start.ts's oneUpdateService), which
+// index.ts's updateServiceFor is. Both starts name the same layout in production, so neither rule is met there today:
+// these rows hold them for the day a caller names another.
+describe('oneUpdateService: one update service per process (W-82)', () => {
+  /** A build that makes a new service at every call, so a second build shows as a second object. */
+  const freshBuild = () => vi.fn((_layout: ResolvedPaths | null): UpdateService => ({ ...STAND_IN_SERVICE }))
+
+  it.each<[string, () => Array<ResolvedPaths | null>]>([
+    ['no layout first', () => [null, null, preparedLayout(tempRoot('one-service-a')), null]],
+    ['a layout first', () => [preparedLayout(tempRoot('one-service-b')), null, preparedLayout(tempRoot('one-service-c'))]]
+  ])('%s: every later call answers the service the first call built, whatever layout it names', (_label, layouts) => {
+    const named = layouts()
+    const build = freshBuild()
+    const updates = oneUpdateService(build)
+    const services = named.map((layout) => updates(layout))
+    expect(services.every((service) => service === services[0])).toBe(true)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(build.mock.calls[0]![0]).toBe(named[0])
+  })
+
+  it('a build that throws builds nothing: the next call tries again, and the service it builds is kept', () => {
+    const layout = preparedLayout(tempRoot('one-service-throw'))
+    const build = freshBuild().mockImplementationOnce(() => {
+      throw Object.assign(new Error('EIO: i/o error, scandir'), { code: 'EIO' })
+    })
+    const updates = oneUpdateService(build)
+    expect(() => updates(layout)).toThrow('EIO')
+    const service = updates(layout)
+    expect(updates(null)).toBe(service)
+    expect(build).toHaveBeenCalledTimes(2)
+    expect(build.mock.calls.map(([named]) => named === layout)).toEqual([true, true])
   })
 })
 

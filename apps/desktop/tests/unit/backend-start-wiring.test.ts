@@ -20,9 +20,11 @@ import { join } from 'node:path'
 // App-update T6.3 (F-14, W-82; docs/app-updates.md §3.5 "The service and its start", "Who picks the file"): the update
 // service is built once per process, by one factory, inside `initBackend` right after the `Update keys` line and before
 // the policy and the workspace's start, and its four channels are registered right after it on a narrow context written
-// as an object literal, never `ctx`; the runner is handed the same factory for the failure state; the service's
-// dependencies fail closed on an app version that does not parse and name main's own dialog, parented, with no default
-// folder. What the channels do is updates-ipc.test.ts; the failure state's use of the factory, backend-start-failure.test.ts.
+// as an object literal, never `ctx`; the runner is handed the same factory for the failure state; and (fix round 1, F2)
+// the service's dependencies are update-service-deps.ts's, handed Electron's `app`, `dialog`, `BrowserWindow` and
+// `process`, and nothing else: index.ts adds no dependency of its own and sets no audit sink. What each dependency is
+// (main's dialog, the host, the glibc hook, the readers, the fail-closed version) is tests/unit/update-service-deps.test.ts;
+// what the channels do is updates-ipc.test.ts; the failure state's use of the factory, backend-start-failure.test.ts.
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
@@ -102,13 +104,6 @@ function initBackendBody(src: string): string {
   return at === -1 ? '' : src.slice(at, end === -1 ? undefined : end)
 }
 
-/** The text of the top-level `function name(` up to its closing brace at column 0, or ''. */
-function functionText(src: string, name: string): string {
-  const at = src.search(new RegExp(`\\n(async )?function ${name}\\(`))
-  const end = src.indexOf('\n}\n', at + 1)
-  return at === -1 || end === -1 ? '' : src.slice(at, end + 2)
-}
-
 /** T6.3: the file's one `createUpdateService(` inside its one factory (`updateServiceFor = oneUpdateService(…)`, at module
  *  scope above initBackend); inside initBackend one call of the factory, after the Update keys line and before the
  *  policy and the workspace's start (record §3.5). */
@@ -145,21 +140,21 @@ function runnerHandedTheFactory(src: string): boolean {
   return run !== null && /^\s*initBackend\s*,/.test(run.args) && /\bupdates:\s*updateServiceFor\s*\}\s*$/.test(run.args)
 }
 
-/** T6.3: the service's dependencies. A version that does not parse leaves no key (answer 4: fail closed); the reads are
- *  the drive's own readers in one object (T6.4a's build date joins it); the dialog is main's, parented to the window
- *  that called, one file, with no default folder (record §3.5 "Who picks the file"). */
-function serviceDepsAsRecorded(src: string): boolean {
-  const deps = functionText(src, 'updateServiceDeps')
-  const choose = functionText(src, 'chooseUpdateFile')
+/** T6.3 fix round 1 (F2, review m-2): the service's dependencies are update-service-deps.ts's, made once at module scope
+ *  from Electron's `app`, `dialog`, `BrowserWindow` and `process` and above the factory, which hands the service exactly
+ *  what they build for the layout; index.ts names no dependency of its own (no dialog, no report, no reader, no
+ *  appender, no node:fs object, no start hook) and sets no audit sink (answer 3; T6.10b's, PR-6b). */
+function serviceBuiltThroughTheDepsModule(src: string): boolean {
+  const made = src.match(/\nconst updateServiceDeps = updateServiceDepsFor\(\{ app, dialog, BrowserWindow, process \}\)\n/)
+  const factory = src.match(/\nconst updateServiceFor = oneUpdateService\(\(layout\) => createUpdateService\(updateServiceDeps\(layout\)\)\)\n/)
   return (
-    /\bconst running = parseSemver\(app\.getVersion\(\)\)/.test(deps) &&
-    /\bkeys:\s*running === null \? \[\] : embeddedKeySet\.keys,/.test(deps) &&
-    /\breads:\s*\{\s*policy:\s*readUpdatePolicy,\s*driveRelease:\s*readDriveRelease,\s*rootApps,\s*kitSupport:\s*readKitSupport,\s*buildDate:/.test(deps) &&
-    /\bchooseFile:\s*chooseUpdateFile,/.test(deps) &&
-    /BrowserWindow\.fromWebContents\(sender\)/.test(choose) &&
-    choose.includes("title: tMain('main.dialog.importUpdate')") &&
-    choose.includes("properties: ['openFile']") &&
-    !/defaultPath/.test(choose)
+    /\nimport \{ updateServiceDepsFor \} from '\.\/update-service-deps'\n/.test(src) &&
+    made?.index !== undefined &&
+    factory?.index !== undefined &&
+    made.index < factory.index &&
+    src.split('updateServiceDepsFor(').length - 1 === 1 &&
+    src.split('updateServiceDeps(').length - 1 === 1 &&
+    !/\b(UpdateServiceDeps|chooseFile|showOpenDialog|getReport|getSystemVersion|readUpdatePolicy|readDriveRelease|rootApps|readKitSupport|appendUpdateLogLine|NODE_BUNDLE_FS|NODE_STAGING_FS|NODE_START_FS|startHook|setAuditHook)\b/.test(src)
   )
 }
 
@@ -195,17 +190,24 @@ describe('wiring pin: index.ts builds the update service once and registers its 
     expect(runnerHandedTheFactory(none)).toBe(false)
   })
 
-  it('the dependencies fail closed on a version that does not parse, and name main\u{2019}s parented dialog with no default folder', () => {
-    expect(serviceDepsAsRecorded(indexSrc)).toBe(true)
-    const open = indexSrc.replace(/\bkeys:\s*running === null \? \[\] : embeddedKeySet\.keys,/, 'keys: embeddedKeySet.keys,')
-    expect(open).not.toBe(indexSrc)
-    expect(serviceDepsAsRecorded(open)).toBe(false)
-    const folder = indexSrc.replace(/(\n(\s*)properties: \['openFile'\],)/, "$1\n$2defaultPath: app.getPath('downloads'),")
-    expect(folder).not.toBe(indexSrc)
-    expect(serviceDepsAsRecorded(folder)).toBe(false)
-    const focused = indexSrc.replace(/BrowserWindow\.fromWebContents\(sender\)/, 'BrowserWindow.getFocusedWindow()')
-    expect(focused).not.toBe(indexSrc)
-    expect(serviceDepsAsRecorded(focused)).toBe(false)
+  it('the dependencies are update-service-deps.ts\u{2019}s, handed Electron\u{2019}s parts, and nothing else: no field of index.ts\u{2019}s own, no audit sink', () => {
+    expect(serviceBuiltThroughTheDepsModule(indexSrc)).toBe(true)
+    // Controls: a dependency written over in index.ts (the review's example: an appender that writes nothing) ...
+    const over = indexSrc.replace('createUpdateService(updateServiceDeps(layout))', 'createUpdateService({ ...updateServiceDeps(layout), appendLog: () => false })')
+    expect(over).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(over)).toBe(false)
+    // ... a P7 start hook added in index.ts ...
+    const hook = indexSrc.replace('createUpdateService(updateServiceDeps(layout))', 'createUpdateService({ ...updateServiceDeps(layout), startHook: () => undefined })')
+    expect(hook).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(hook)).toBe(false)
+    // ... a part of Electron that is not Electron's ...
+    const stand = indexSrc.replace('updateServiceDepsFor({ app, dialog, BrowserWindow, process })', 'updateServiceDepsFor({ app, dialog, BrowserWindow: { fromWebContents: () => null }, process })')
+    expect(stand).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(stand)).toBe(false)
+    // ... and an audit sink set from index.ts in PR-6a.
+    const audit = indexSrc.replace(/(\n\s*)(registerUpdatesIpc\()/, '$1updates.setAuditHook(() => undefined)$1$2')
+    expect(audit).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(audit)).toBe(false)
   })
 })
 

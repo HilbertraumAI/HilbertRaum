@@ -318,6 +318,13 @@ function serviceDeps(layout: ResolvedPaths | null, keys: readonly UpdateKey[], f
 }
 
 describe('the channels over the real service: nothing under workspace/, nothing under a root that is no prepared drive', () => {
+  // What this row proves, and what it does not (T6.3 review m-6). It covers every call made through the objects the
+  // service is handed: the paths given to the `fs` objects' calls (the bundle reader's, staging's and the start step's),
+  // the root or config folder given to the four readers, and the root of every update.log line given to the appender;
+  // none lies under `workspace/`. The lstat snapshot then shows that nothing under `workspace/` changed. It does not see a
+  // read a module makes through its own node:fs (the containment check of the start step and of the appender,
+  // workspace-vault.ts's folderContainment; the appender's and the readers' own opens under the folder they are handed):
+  // that none of those builds a path under `workspace/` rests on reading their code, not on this row.
   it('on a prepared drive, an import that stages, a status, a cancel and a discard read and write nothing under workspace/ (F-14)', async () => {
     const dir = tempRoot('updates-ipc-drive')
     const root = join(dir, 'drive')

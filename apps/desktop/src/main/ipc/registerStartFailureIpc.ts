@@ -61,8 +61,9 @@ export function registerStartFailureIpc(fctx: StartFailureContext): void {
       fctx.updates(fctx.paths)
     )
   } catch (error) {
-    log.error('Backend start: the update channels could not be registered', safeFailureForLog(error))
-    // All or none: a throw part-way leaves no update channel of this registration answering.
+    // All or none: a throw part-way leaves no update channel of this registration answering. Released before the line
+    // is written, so the all-or-none holds even if writing it throws.
     releaseGuardedHandlers(beforeUpdates)
+    log.error('Backend start: the update channels could not be registered', safeFailureForLog(error))
   }
 }
