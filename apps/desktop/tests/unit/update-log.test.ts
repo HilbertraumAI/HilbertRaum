@@ -12,6 +12,7 @@ import {
   type UpdateLogField
 } from '../../src/main/services/updates/update-log'
 import type { DriveReleaseRead } from '../../src/main/services/updates/drive-release'
+import { logVersion } from '../../src/main/services/updates/staging'
 import type { BackendStartFailure } from '../../src/shared/types'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 
@@ -249,7 +250,15 @@ describe('F-11 typed events (Δ-66): only registered events are lines, and a fie
       // data-fed (update-log.ts's header names them): config/drive-release.json; the workspace's last_writer stamp
       'startup.release': ['1.0.0-peter'],
       'unlock.writer': ['1.0.0-peter'],
-      'unlock.applied': ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local', '1.0.0-peter', 'EMMA']
+      'unlock.applied': ['Steuer_2026.xlsx', 'DESKTOPDIT', 'peter', 'peters-mbp.local', '1.0.0-peter', 'EMMA'],
+      // P6's import events (T6.2): a run's own verified payload's version, a thrown error's code and system call
+      'import-refused.version': ['1.0.0-peter'],
+      'import-refused.err': ['EMMA'],
+      'import-refused.syscall': ['peter'],
+      'import-staged.version': ['1.0.0-peter'],
+      'import-cancelled.version': ['1.0.0-peter'],
+      // data-fed (update-log.ts's header names it): the discarded folder's staged.json, which release 1 does not verify again
+      'staging-discarded.version': ['1.0.0-peter']
     }
     const admitted: Record<string, string[]> = {}
     for (const [event, schema] of Object.entries(UPDATE_LOG_EVENTS) as Array<[UpdateLogEvent, ReadonlyArray<{ key: string }>]>) {
@@ -398,5 +407,62 @@ describe('F-11 golden: what a reader accepts, read as the record says', () => {
       const timed = parse.time.kind === 't' ? 1 : 0
       expect(Object.keys(parse.fields).length + 3 + timed, line).toBe(tokens.length)
     }
+  })
+})
+
+// P6's five import events (app-update T6.2; record §4.5 "update.log events of the import", §5.3; T6.0b's golden
+// tests/fixtures/readers/f11-update-log/vectors-import.json, written from the record before the events were registered):
+// each vector's fields as the service hands them to the formatter (a count as its decimal text), the exact line written,
+// and, where the vector has `run`, the caller's own step: a valid version of 25 to 64 bytes becomes the sentinel `unknown`
+// before the formatter sees it (logVersion, the service's and the sweep's helper).
+interface ImportVector {
+  name: string
+  why: string
+  event: UpdateLogEvent
+  platform?: string
+  run?: { version: string }
+  fields: Record<string, unknown>
+  line: string
+}
+const IMPORT = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'tests', 'fixtures', 'readers', 'f11-update-log', 'vectors-import.json'), 'utf8')) as {
+  events: Record<string, { order: string[]; rules: Record<string, string> }>
+  emit: { base: { platform: string; now: string }; vectors: ImportVector[] }
+}
+
+describe('F-11 golden: the import events (vectors-import.json; record §4.5 "update.log events of the import")', () => {
+  it.each(IMPORT.emit.vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
+    const fields = Object.entries(v.fields) as unknown as UpdateLogField[] // a count given as a number stays a number (i96, i102)
+    const line = formatRegisteredLine(v.event, fields, { platform: v.platform ?? IMPORT.emit.base.platform, now: new Date(IMPORT.emit.base.now) })
+    expect(line).toBe(v.line)
+    expectAsciiFrame(line!)
+    if (v.run !== undefined) expect(logVersion(v.run.version)).toBe(v.fields.version)
+  })
+
+  it('the caller passes a version of at most 24 bytes as it is, and `unknown` for one of 25 to 64 bytes', () => {
+    expect(logVersion('100.200.300-rc.123456789')).toBe('100.200.300-rc.123456789') // 24 bytes
+    expect(logVersion('100.200.300-rc.1234567890')).toBe('unknown') // 25 bytes
+    expect(logVersion(`1.0.0-${'a'.repeat(58)}`)).toBe('unknown') // 64 bytes
+  })
+
+  // The five events as the golden's `events` states them, by hand from record §4.5: each key in its order, and each key's
+  // closed list or token rule. The registration is data (F-11): a key added, dropped, moved or given another rule is a
+  // golden change, which turns this row red.
+  it('the registered schemas are the golden\u{2019}s: keys in order, each closed list and each token rule', () => {
+    const closedList = (rule: string): string[] => rule.slice(rule.lastIndexOf(': ') + 2).split(';')[0]!.split(', ')
+    for (const [event, { order, rules }] of Object.entries(IMPORT.events)) {
+      const schema = UPDATE_LOG_EVENTS[event as UpdateLogEvent]
+      expect(schema, event).toBeDefined()
+      expect(schema.map((spec) => spec.key), event).toEqual(order)
+      for (const spec of schema) {
+        const rule = rules[spec.key]!.startsWith('as import-refused') ? IMPORT.events['import-refused']!.rules.version! : rules[spec.key]!
+        if (rule.startsWith('closed:')) {
+          expect('oneOf' in spec && [...spec.oneOf].sort(), `${event}.${spec.key}`).toEqual(closedList(rule).sort())
+        } else {
+          expect('rule' in spec && spec.rule, `${event}.${spec.key}`).toBe(rule[0])
+          expect('rule' in spec && (spec.sentinels ?? []), `${event}.${spec.key}`).toEqual(spec.key === 'version' ? ['unknown'] : [])
+        }
+      }
+    }
+    expect(IMPORT.events['import-refused']!.rules.code!.split(': ').pop()!.split(', ')).toHaveLength(26)
   })
 })

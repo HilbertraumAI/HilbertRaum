@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { NODE_STAGING_FS, planSweep } from '../../src/main/services/updates/staging'
 import {
   ENVELOPE_MEMBER_NAME,
   MEMBER_NAME_MAX_BYTES,
@@ -172,6 +176,51 @@ describe('foldMemberName and hasFoldedDuplicate: A to Z only (table A.3, "Unique
     ['a dotless i and i', ['\u{131}', 'i'], false]
   ])('%s: %s', (_label, names, duplicate) => {
     expect(hasFoldedDuplicate(names)).toBe(duplicate)
+  })
+})
+
+// P6's staging rows (T6.2, CF-45): staging imports the rule, never copies it. A `staged.json` is valid only when every
+// `files` name keeps table A.3 and no two are equal after the fold (record §4.6 "Valid"); one that breaks either is not
+// valid, and the start-up sweep removes its folder (`invalid-marker`). Read through the sweep's own reads on a scratch
+// drive, so the row holds what a start does with the marker, not a helper's answer.
+describe('staging applies the rule to staged.json (record §4.6 "Valid"; CF-45)', () => {
+  const NOTES = Buffer.alloc(512, 0x6e)
+  const NOTES_SHA = createHash('sha256').update(NOTES).digest('hex')
+
+  /** The sweep's reading of `updates/staging/1.1.0/` whose staged.json lists `names` (each present in files/ when `present`). */
+  async function sweepOf(names: readonly string[], present: boolean): Promise<{ staged: string | null; invalid: number }> {
+    const root = mkdtempSync(join(tmpdir(), 'hr-updates-artifact-names-'))
+    const dir = join(root, 'updates', 'staging', '1.1.0')
+    mkdirSync(join(dir, 'files'), { recursive: true })
+    if (present) for (const name of names) writeFileSync(join(dir, 'files', name), NOTES)
+    writeFileSync(join(dir, 'staged.json'), JSON.stringify({ format: 1, version: '1.1.0', files: names.map((name) => ({ name, size: 512, sha256: NOTES_SHA })) }))
+    const plan = await planSweep({ root, platform: process.platform, fs: NODE_STAGING_FS }, join(root, 'updates'))
+    return { staged: plan.staged?.version ?? null, invalid: plan.counts['invalid-marker'] }
+  }
+
+  it.each([
+    ['a device name', ['nul.txt']],
+    ['a device name alone, in upper case', ['CON']],
+    ['member 0\u{2019}s name, in another case', ['Hilbertraum-Release.dsse.json']],
+    ['a leading dot', ['.incoming-1.1.0']],
+    ['a separator', ['files/notes.txt']],
+    ['a step up', ['../notes.txt']],
+    ['a space', ['Start HilbertRaum.cmd']],
+    ['a trailing dot', ['notes.']],
+    ['100 bytes', ['a'.repeat(100)]],
+    ['two names equal after the fold', ['notes.txt', 'NOTES.txt']]
+  ])('a staged.json listing %s is not valid (invalid-marker)', async (_label, names) => {
+    expect(await sweepOf(names, false)).toEqual({ staged: null, invalid: 1 })
+  })
+
+  it.each([
+    ['staged.json, a legal member name one level down in files/', ['staged.json']],
+    ['files', ['files']],
+    ['a start file\u{2019}s member name', ['Start-HilbertRaum.cmd']],
+    ['99 bytes', ['a'.repeat(99)]],
+    ['two names that differ after the fold', ['notes.txt', 'notes.txt.bak']]
+  ])('a staged.json listing %s is valid: the update stays staged', async (_label, names) => {
+    expect(await sweepOf(names, true)).toEqual({ staged: '1.1.0', invalid: 0 })
   })
 })
 

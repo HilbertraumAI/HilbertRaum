@@ -28,9 +28,12 @@ import { parseSemver } from './version'
 // Data-fed keys (their value is read from a file another program or build wrote, bounded by its rule; T3.2 review 1,
 // recheck N-1): `startup`'s `release` (V) and `release_format` (I), from config/drive-release.json, and `drive_format`
 // (I), from config/drive.json; `unlock`'s `writer` (V) and `applied` (A), from the workspace file's last_writer stamp,
-// and `user_version` (N) and `found` (I), from its header or a newer-format refusal. Every other key is filled from the
-// app's own source: its version, its bundled runtime-sources.yaml (the pins, P), `process.versions.sqlite`, a thrown
-// error's code (E) and system call (C), and closed lists.
+// and `user_version` (N) and `found` (I), from its header or a newer-format refusal; (P6, T6.2) `staging-discarded`'s
+// `version` (V), and the `version` of any line about a staged update found at a start, from a staged.json under
+// updates/staging/ (release 1's or a later version's), which release 1 does not verify again. Every other key is filled
+// from the app's own source: its version, its bundled runtime-sources.yaml (the pins, P), `process.versions.sqlite`, a
+// thrown error's code (E) and system call (C), a run's own verified payload (an import line's `version`), counts (I), and
+// closed lists.
 //
 // What this module writes (P3 entry decision 9 (c)):
 // - `startup`, once per start of a prepared drive (main/index.ts `initBackend`): the app version, the engine pins of the
@@ -123,6 +126,42 @@ const DAMAGE_WORDS = ['failed-authentication', 'not-a-database'] as const
 /** `workspace_newer`'s artifacts: the vault format's (`VaultNewerWhat`), checked before the password, and the database. */
 const VAULT_FORMAT_WORDS = ['descriptor', 'kdf', 'frame', 'journal'] as const
 const NEWER_WORDS = ['database', ...VAULT_FORMAT_WORDS] as const
+
+/** The codes an import answers (record 4.5's events, table B.9), and `UPD-OLD-FILE` for a run that ends by asking;
+ *  `UPD-NOT-A-DRIVE` stands in the list though no file receives it (off a prepared drive nothing is written). */
+const IMPORT_REFUSED_CODES = [
+  'UPD-NOT-AVAILABLE',
+  'UPD-NOT-A-DRIVE',
+  'UPD-POLICY-MANAGED',
+  'UPD-POLICY-INVALID',
+  'UPD-IN-PROGRESS',
+  'UPD-DRIVE-READ-ONLY',
+  'UPD-DRIVE-FULL',
+  'UPD-TOO-NEW',
+  'UPD-FILE-DAMAGED',
+  'UPD-NOT-GENUINE',
+  'UPD-UNKNOWN-SIGNER',
+  'UPD-FOR-NEWER-HILBERTRAUM',
+  'UPD-NOT-AN-UPDATE',
+  'UPD-WRONG-CHANNEL',
+  'UPD-NEEDS-IN-BETWEEN',
+  'UPD-SAME-OR-OLDER',
+  'UPD-ABOVE-MAX-VERSION',
+  'UPD-CANT-CHECK-LINUX-FLOOR',
+  'UPD-OS-TOO-OLD',
+  'UPD-DOWNLOAD-INCOMPLETE',
+  'UPD-NO-HELPER',
+  'UPD-PATH-TOO-LONG',
+  'UPD-FILE-TOO-BIG-FOR-DRIVE',
+  'UPD-CANT-READ-FILE',
+  'UPD-CANT-WRITE-DRIVE',
+  'UPD-OLD-FILE'
+] as const
+/** Which name blocked an import (`link`, with UPD-CANT-WRITE-DRIVE only; the pairing is the service's duty). */
+const IMPORT_LINK_WORDS = ['updates', 'staging', 'version', 'incoming', 'probe'] as const
+/** The start-up sweep's reasons (record 4.5 "The start-up sweep"). */
+const SWEEP_REASON_WORDS = ['incoming', 'no-marker', 'invalid-marker', 'member-missing', 'not-a-folder', 'link'] as const
+const YES_NO = ['yes', 'no'] as const
 
 /** The engine families whose pins the startup line carries, with their keys (`ocr` is no engine). */
 const PIN_FIELDS: ReadonlyArray<readonly [RuntimeFamily, string]> = [
@@ -345,7 +384,37 @@ const EVENTS = {
     { key: 'found', rule: 'I' },
     { key: 'err', rule: 'E' },
     { key: 'syscall', rule: 'C' }
-  ]
+  ],
+  /** P6 (T6.2; record 4.5's events): a run that ended in a refusal, or by asking (UPD-OLD-FILE). `version` is the run's own
+   *  verified payload's, or the refusal's own version parameter, `unknown` for 25 to 64 bytes; `err` and `syscall` the
+   *  thrown error's, for the codes an I/O error gives; `link` the name that blocked it. */
+  'import-refused': [
+    { key: 'code', oneOf: IMPORT_REFUSED_CODES },
+    { key: 'version', rule: 'V', sentinels: ['unknown'] },
+    { key: 'stale_drive_version', oneOf: YES_NO },
+    { key: 'err', rule: 'E' },
+    { key: 'syscall', rule: 'C' },
+    { key: 'link', oneOf: IMPORT_LINK_WORDS }
+  ],
+  /** P6: a run that staged its update; `files` the `files[]` members staged, member 0 not counted. */
+  'import-staged': [
+    { key: 'version', rule: 'V', sentinels: ['unknown'] },
+    { key: 'stale_drive_version', oneOf: YES_NO },
+    { key: 'files', rule: 'I' },
+    { key: 'old_file', oneOf: ['confirmed', 'no'] },
+    { key: 'issued_in_future', oneOf: YES_NO },
+    { key: 'other_floors', oneOf: YES_NO }
+  ],
+  /** P6: a run the user cancelled after the file was read; `version` when the payload was accepted before the cancel. */
+  'import-cancelled': [{ key: 'version', rule: 'V', sentinels: ['unknown'] }],
+  /** P6: the start-up sweep, one line per reason that counted an entry; `code` with `member-missing` only. */
+  'staging-swept': [
+    { key: 'n', rule: 'I' },
+    { key: 'reason', oneOf: SWEEP_REASON_WORDS },
+    { key: 'code', oneOf: ['UPD-FILE-DAMAGED-ON-DRIVE'] }
+  ],
+  /** P6: "Don't install this update". Data-fed: `version`, the discarded folder's staged.json's. */
+  'staging-discarded': [{ key: 'version', rule: 'V', sentinels: ['unknown'] }]
 } as const satisfies Readonly<Record<string, readonly UpdateLogFieldSpec[]>>
 
 /** A registered event's name: the only events the appender writes. */

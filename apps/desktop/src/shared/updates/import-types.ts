@@ -95,3 +95,67 @@ export type StagingEnd =
   | { readonly kind: 'staged'; readonly files: readonly AcceptedFile[] }
   | { readonly kind: 'refused'; readonly refusal: StagingRefusal; readonly cause: ImportIoCause | null }
   | { readonly kind: 'cancelled' }
+
+// ---- the drive side of staging (T6.2: main/services/updates/staging.ts; §3.5, §3.6, §4.2, §4.5, §4.6, §4.7)
+
+/**
+ * Which name under `updates/` blocked an import (update.log's `link`, §4.5's events): `updates/`, `updates/staging/`,
+ * `updates/staging/<v>/` or `.incoming-<v>/` that exists and is not a real folder (or whose test proves nothing), or
+ * `updates/.write-probe` still occupied (table A.1). Given with `UPD-CANT-WRITE-DRIVE` only.
+ */
+export type StagingLinkName = 'updates' | 'staging' | 'version' | 'incoming' | 'probe'
+
+/**
+ * The refusals of staging's own steps: the drive checks before the file dialog (`updates/`, `updates/staging/`,
+ * `updates/applying/`, the writability probe, the 64 MiB margin), the path length, the staging folders and the
+ * free-space formula before the data pass, and the drive's errors from the data pass's start to the commit (§4.5
+ * "Errors while staging").
+ */
+export type StagingCheckRefusal = Extract<
+  ImportOnlyRefusal,
+  { code: 'UPD-CANT-WRITE-DRIVE' | 'UPD-DRIVE-READ-ONLY' | 'UPD-DRIVE-FULL' | 'UPD-IN-PROGRESS' | 'UPD-PATH-TOO-LONG' | 'UPD-FILE-TOO-BIG-FOR-DRIVE' }
+>
+
+/** A refusal of one of staging's steps, with the facts its update.log line takes: the thrown error behind it (null when
+ *  none was thrown) and the name that blocked it (`link`, with `UPD-CANT-WRITE-DRIVE` only, else null). */
+export interface StagingRefused {
+  readonly kind: 'refused'
+  readonly refusal: StagingCheckRefusal
+  readonly cause: ImportIoCause | null
+  readonly link: StagingLinkName | null
+}
+
+/** The start-up sweep's reasons (§4.5 "The start-up sweep"), in the order of its `staging-swept` lines. */
+export type SweepReason = 'incoming' | 'no-marker' | 'invalid-marker' | 'member-missing' | 'not-a-folder' | 'link'
+
+/**
+ * What the start-up sweep's reads decided (§4.5 "The start step" (3), (4)): the entries of each reason (`n` of its line),
+ * the staged update (the highest valid survivor in F-4's order, or null; never an entry decided for removal; its version
+ * read from a `staged.json` release 1 does not verify again: data-fed) and the one-time notice (`member-missing` only).
+ */
+export interface SweepFacts {
+  readonly counts: Readonly<Record<SweepReason, number>>
+  readonly staged: { readonly version: string } | null
+  readonly notice: DamagedOnDriveNotice | null
+}
+
+/** A removal the sweep decided that failed: reported in app.log by its reason and the error's code and system call. */
+export interface SweepRemovalFailure {
+  readonly reason: SweepReason
+  readonly cause: ImportIoCause | null
+}
+
+/**
+ * The drive side of `updates:discardStaged` (F-5's decline; §3.5, §4.5 "Don't install this update"): no staged update of
+ * that version, the version's `updates/staging/<v>/` removed, or refused (`UPD-IN-PROGRESS` while `updates/applying/`
+ * exists; `UPD-CANT-WRITE-DRIVE` for a removal that failed or a link at the name). The channel and its earlier answers
+ * (not a drive, busy) are T6.3's and the service's.
+ */
+export type DiscardEnd =
+  | { readonly kind: 'not-staged' }
+  | { readonly kind: 'discarded'; readonly version: string }
+  | {
+      readonly kind: 'refused'
+      readonly refusal: Extract<ImportOnlyRefusal, { code: 'UPD-IN-PROGRESS' | 'UPD-CANT-WRITE-DRIVE' }>
+      readonly cause: ImportIoCause | null
+    }
