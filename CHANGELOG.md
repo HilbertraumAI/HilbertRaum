@@ -63,6 +63,14 @@ from its first public `1.0.0` release onward.
   how many update keys the app carries (a number only, never a key), and the project's release builds for
   Windows, macOS and Linux check that the key list inside each package matches the one in the source code's key
   file.
+- **More groundwork for updates from a file; still nothing changes for you.** This version can also read an update
+  file and get it ready on the drive, entirely offline and before the workspace is unlocked: it uses nothing of the
+  file before its signature checks out, copies its parts into the drive's `updates/` folder while it checks each one,
+  and tidies away a half-copied update at the next start. No screen offers this yet, and the app still carries no
+  update key. The drive's support log notes each import and tidy-up, with codes and counts only. For maintainers:
+  each release build now records the date of the commit it was built from (the future age and end-of-support
+  reminders count from it), the release workflow checks that date inside each package, and each build first lists
+  any changed files, since a build from a changed tree records no date.
 - **For Kit builders:** `build-commercial-drive` needs the Kit's support end, `-SupportEnd YYYY-MM`
   (`--support-end`), on every run but `-VerifyOnly`, writes it once to `config/kit-support.txt`, and writes the
   drive's release record as its last write before the final check; that check also refuses a Kit without these,

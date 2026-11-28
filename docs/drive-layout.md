@@ -43,10 +43,24 @@ From the root, these paths are derived and created (idempotently) on first run:
 │                          #   projector; translation = the TranslateGemma GGUF, its own sidecar)
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
-├── updates/               # on a prepared drive only (config/drive.json there), made by the first line:
-│   └── update.log         #   the plaintext, content-free support log, readable before unlock: one line
-│                          #   per start, failed start and unlock attempt (app-updates.md §8.2); over
-│                          #   64 KiB the app keeps the newest 32 KiB through update.log.tmp + a rename
+├── updates/               # on a prepared drive only (config/drive.json there), made by the first line
+│   │                      #   (or by an update import that finds it missing):
+│   ├── update.log         #   the plaintext, content-free support log, readable before unlock: one line
+│   │                      #   per start, failed start and unlock attempt, and per update import and
+│   │                      #   start-up sweep (app-updates.md §8.2, §4.5); over 64 KiB the app keeps the
+│   │                      #   newest 32 KiB through update.log.tmp + a rename
+│   ├── staging/           # an imported update file, staged (app-updates.md §4.2, §4.5; made by an
+│   │   │                  #   import's data pass, never earlier; no screen offers the import yet)
+│   │   ├── <v>/           #   the staged update of version <v>, at most one: files/ (its members, each
+│   │   │                  #   under its member name), then hilbertraum-release.dsse.json (the verified
+│   │   │                  #   envelope), staged.txt (the member list the apply reads) and, last,
+│   │   │                  #   staged.json (the commit marker); each written as <name>.tmp + a rename
+│   │   └── .incoming-<v>/ #   the members of <v> while they are written and hashed; removed by the
+│   │                      #   commit, a refusal, a cancel or the next start's sweep
+│   ├── .write-probe       #   transient: each import writes one byte here and deletes it again
+│   └── last-result.txt    #   the update attempts' outcome lines (the apply, the start files and the app
+│                          #   write them, P7); an import's commit appends `cleared <v> <token>` when the
+│                          #   file still marks <v> (app-updates.md §4.5, §5.3)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
                            #   drive-release.json: what the drive was built with (apps, start files,
                            #   engines; written by the drive scripts, app-updates.md §8.5)
@@ -140,8 +154,14 @@ HILBERTRAUM/
 ├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
 │                                                #   drive, by the same sell-gate rule (#893)
 ├── updates/                                    # update.log (a line per start, failed start and unlock attempt on a
-│                                                #   prepared drive; update.log.tmp only during a trim, or left by a
-│                                                #   failed one; app-updates.md §8.2) — none on a sold drive: the sell
+│                                                #   prepared drive, and per update import and start-up sweep;
+│                                                #   update.log.tmp only during a trim, or left by a failed one;
+│                                                #   app-updates.md §8.2); staging/ (an imported update: <v>/ with
+│                                                #   files/, hilbertraum-release.dsse.json, staged.txt and, last,
+│                                                #   staged.json, at most one; .incoming-<v>/ while its members are
+│                                                #   written and hashed; app-updates.md §4.2, §4.5); .write-probe (an
+│                                                #   import's one-byte check, deleted again); last-result.txt (P7's;
+│                                                #   an import's commit appends its `cleared` line) — none on a sold drive: the sell
 │                                                #   gate refuses any entry in it, an empty folder included (a Kit
 │                                                #   that was started; app-update W-33, T3.8); an empty updates/
 │                                                #   itself passes

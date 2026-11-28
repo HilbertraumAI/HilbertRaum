@@ -851,18 +851,26 @@ exception to the rule that no log line reaches the drive before the unlock: it i
 plaintext on a prepared drive, before the password, and anyone holding the drive can read it. It is
 therefore content-free **by each event's typed fields**, not by its callers' care. `services/updates/update-log.ts` writes
 only the events registered in its frozen `UPDATE_LOG_EVENTS` table (in this build `startup`,
-`start-failed` and `unlock`), and each field only when its key is in the event's schema and its
-value passes the one rule the key names: a version, an engine pin, an integer, the SQLite version,
+`start-failed` and `unlock`, and since app-update P6 the update import's `import-refused`,
+`import-staged`, `import-cancelled`, `staging-swept` and `staging-discarded`), and each field only
+when its key is in the event's schema and its value passes the one rule the key names: a version, an engine pin, an integer, the SQLite version,
 an error code, a bare system call, a signed integer, the `last_writer` stamp's applied-through token,
 or a closed list of words. A line is ASCII, at most 256 bytes, written as one append; an error appears
 only as its code and bare system call, never a message, a path or SQLite's text.
 - **What it reveals:** the time of every start, failed start and unlock attempt, wrong passwords
   included, to the second; the outcome as a fixed word; the app version, the engine pins of the app's
   own bundled `runtime-sources.yaml`, the drive's recorded app version and formats, the SQLite
-  version; the workspace file's own `user_version` and the version in its `last_writer` stamp.
+  version; the workspace file's own `user_version` and the version in its `last_writer` stamp; and
+  (P6) when an update import ran and how it ended: the version it named, its refusal as a reference
+  code (with an error's code and bare system call, or which name under `updates/` blocked it), how
+  many members it staged and whether its warnings showed, and the start-up sweep's counts by reason.
+  Never the update file's path or name, the folder it came from, or a member's name.
 - **Data-fed keys:** some values come from a file another program or build wrote: the drive record's
   `release` and `release_format`, `drive.json`'s `drive_format`, the stamp's `writer` and `applied`,
-  the header's `user_version` and a newer database's `found`. Each is bounded by its rule, but a
+  the header's `user_version` and a newer database's `found`; since P6, `staging-discarded`'s
+  `version` and that of any line about a staged update found at a start, read from a `staged.json` on
+  the drive that is not verified again (an import's own lines carry its verified payload's version).
+  Each is bounded by its rule, but a
   word-shaped rule can carry a word someone wrote there: a version in SemVer's shape
   (`1.0.0-peter`), the 16-byte `applied` token. Only someone holding the workspace key writes the
   stamp. Keys filled from the app's own sources have word-shaped rules too (a pin, a system call), so
@@ -4337,8 +4345,9 @@ byte-identical to b9849's.
 The in-field update (BUILD_STATE §5 item 3) trusts an update file only when a public key built into
 the app verifies its signature. P4 built that trust core, frozen with golden vectors (F-1–F-4): the
 check of a file's signed envelope and of its payload, the key set each build embeds, and the release
-guard that checks the embedded keys in every release build. Nothing in this build hands the check a
-file yet (the import is P6's), so no outside input reaches it. This section says what is checked and
+guard that checks the embedded keys in every release build. Since P6's first half the update import
+hands the check the file a user picks, before any unlock ("The update import" below; no screen offers
+it yet). This section says what is checked and
 what is not; every exact value (the caps, the grammars, the codes, the weak encodings, the guard's
 reasons) is in the design record's §2, and the recorded limits are in
 [`known-limitations.md`](known-limitations.md) "App updates: the trust core".
@@ -4382,8 +4391,9 @@ glibc, the clock, the UI language) is an argument. It does not check the update 
 members' bytes against their hashes, whether each group of members is complete, or this computer's
 apply script: those are the import's (P6). `install_as`, `group` and `summary` are signed text it
 never uses as a path, and P6 shows `summary` as plain text. Its type asks for a verified envelope, but
-any code can build that shape: that the bytes were verified is the caller's duty, and P6 adds a row
-that holds it.
+any code can build that shape: that the bytes were verified is the caller's duty, and P6's reader hands
+it only `verifyEnvelope`'s own result, in the same turn, over member 0 read once (CF-51, a row of
+`updates-bundle.test.ts`).
 
 **The embedded key set** (`services/updates/keys.json`, read by `keys.ts` through `parseKeySet`;
 record §2.7). A build trusts the Ed25519 public keys in its own `keys.json`: release 1 embeds three,
@@ -4417,7 +4427,9 @@ whoever can make that change can also change `keys.json`, the guard and the work
 catches it, and the key proof and the key count below close it on the real binary. The guard reads
 bytes and does not parse JavaScript, so a quoted copy of the set in a comment or inside another string
 is not told apart from the real one. It passes a bundle that embeds no key: it compares, it does not
-judge an empty set.
+judge an empty set. Since P6 the same check also pins the build date the bundle embeds to the release
+commit's committer date (record §5.10); that date feeds only the age and support notices, never a
+decision about an update file.
 
 **The key proof** (the owner's step before release 1 is published; record §2.8). On the exact
 release-1 candidate binary of each sold system:
@@ -4458,6 +4470,92 @@ update off. It keeps the protocol's format tokens (the key-set marker among them
 reader with them, and never spells the marker in another `keys.json` field or anywhere else in its
 main bundle, where the release guard would find it twice. There is no trust on first use and no key a
 user can add.
+
+## The update import before unlock (app-update P6; [`app-updates.md`](app-updates.md) §3.5, §4)
+
+P6's first half (PR-6a) built the import that runs the trust core above on a file the user picks, and
+stages the update on the drive: the update file's reader (`services/updates/bundle.ts`), staging and the
+start-up sweep (`services/updates/staging.ts`), the update service behind the channels
+(`services/updates/service.ts`) and the channels (`ipc/registerUpdatesIpc.ts`). The import must work
+exactly when the app is broken: before an unlock, on the refusal screens and after a failed start, with
+no network. No screen offers it yet (PR-6b). The recorded limits are in
+[`known-limitations.md`](known-limitations.md) "App updates: the import and staging".
+
+**The channels callable before unlock** (F-14, frozen; record §3.5). `updates:importFile`,
+`updates:status`, `updates:cancel` and `updates:discardStaged` answer while the workspace is locked, and
+`registerStartFailureIpc` registers them again in a start that failed (W-82). They have **no lock gate**:
+none calls `requireUnlocked()` or asks the lock state. What keeps them narrow instead:
+- **Trusted senders only.** Each goes through `guardedHandle` (#252) with the main window's sender set,
+  so an untrusted sender reaches no method.
+- **A narrow context, never `AppContext`.** The registrar takes `{ trustedSenders, paths, isDev,
+  appVersion }` and the service's four methods, so no channel can reach the workspace, the database, the
+  audit sink or any service of the unlocked app; in PR-6a the handlers use only the senders.
+  `ipc-lock-coverage.test.ts` lists `registerUpdatesIpc` in its `COVERED_ELSEWHERE` with that reason, and
+  `updates-ipc.test.ts` holds the list as a golden row (`tests/fixtures/updates/import/f14-locked-channels.json`)
+  and asserts, per channel, the narrow context and no `requireUnlocked()`.
+- **No path from the renderer.** No channel takes one. `updates:importFile` opens main's own file dialog
+  (one file, no default folder), and the picked path never leaves main: it is never logged, shown or
+  sent to the renderer. Of its argument only an own `confirmToken` is read (the one-time token of the
+  old-file question, minted in main and bound to the picked file); of `updates:discardStaged`'s only an
+  own string `version`, compared byte for byte with the staged version and never used to build a path.
+- **What each may read and write**, and only on a prepared drive (on any other root, and in a failure
+  state with no layout, `status` answers "no drive" and the import and the discard refuse
+  `UPD-NOT-A-DRIVE`, reading and writing nothing under the root or the user-data folder; F-21):
+  - `updates:importFile` reads the picked file through one read-only descriptor, `config/policy.json`'s
+    update keys, `config/drive-release.json` and the drive root's listing (for the version rule), what
+    is under `updates/` (`staging/`, `applying/`, `last-result.txt`, `last-result.seen`) and the free
+    space; it writes only under `updates/`: `updates/` itself when it is missing, the one-byte probe
+    `.write-probe` (deleted again), `staging/` and its folders, the `cleared` line of
+    `last-result.txt`, and its `update.log` line;
+  - `updates:status` reads `updates/` and `updates/applying/` (by listing and `lstat`),
+    `config/policy.json`'s update keys and `config/kit-support.txt`, at most once per 250 ms and nothing
+    while a run or a discard goes, and writes nothing;
+  - `updates:cancel` reads and writes nothing on the drive; the run it stops removes its own staging
+    folders;
+  - `updates:discardStaged` removes one `updates/staging/<v>/` (its `staged.json` first) and writes its
+    `update.log` line;
+  - none reads or writes anything under `workspace/`, and nothing is written outside `updates/`. The
+    start step's sweep, at every start of a prepared drive and so before any unlock, reads
+    `updates/staging/` and removes what record §4.5 decides, by awaited calls that never hold the main
+    process.
+- **Content-free answers.** Every answer is a typed reference code with its parameters (numbers, or
+  text the service computed or the update's verified payload signed), never copy, never a path. A method
+  that rejects (only a handed read or hook that throws can make one) reaches the renderer as an error
+  with no message, and `app.log` gets a fixed reason with the channel and an errno-shaped code alone.
+  When the failure state cannot register the update part (all or none), every update channel answers
+  Electron's own refusal, which names only the channel.
+
+**What an update file meets** (record §4.3–§4.5). Nothing of the file is used before its envelope
+verifies: the reader opens it once, read-only (`O_NONBLOCK` on macOS and Linux, so a named pipe cannot
+hold the open; a regular file by `fstat` on the descriptor), reads member 0 whole (at most 4 MiB),
+verifies it with the embedded keys and checks the payload on the verified bytes, then walks the headers
+(no member data) before anything is written. A member name is used only once it equals a signed
+`files[]` name byte for byte, so it keeps the member-name rule (no separator, no `..`), and each member is
+written only into the two folders staging made for it, hashed while it is written and moved only when its
+hash matches. The verification runs on the main process's thread, with no worker (CF-47): a hostile file
+at the caps holds it for about a second ("Update trust" above and its limit). Under `updates/` nothing is
+listed, read, written or removed through a link, a junction or a folder found elsewhere: a **damage
+limit, not a boundary** (whoever can plant a link there can already write the drive), which narrows the
+window between a test and the call after it without closing it, and which does not see a mount point
+(a bind mount, a FUSE mount or a disk image attached there; some need no root). A refusal before the
+data pass creates nothing under `updates/` but the probe's own name, deleted again; a refusal or a
+cancel from the data pass on removes what it wrote.
+
+**The import's lines in the plaintext `update.log`** (F-11; "The one plaintext log on the drive"
+above). The five import events are registered in `UPDATE_LOG_EVENTS` like the others, each key with
+one token rule or a closed list (the code, the version, yes or no, an error's code and bare system
+call, a count, which fixed name under `updates/` blocked it), so a line holds no path, no file or
+member name and no message. In PR-6a they go to `update.log` only; the audit log's `update_staged`
+event (W-18, record §8.6) is PR-6b's, after an unlock only. The `version` of a line
+about a staged update found at a start is read from a `staged.json` that is not verified again
+(data-fed, bounded by the version rule).
+
+**A staged update found at a start** (record §11.3, §4.6 "Who wrote it"; owner question CF-56 at P7's
+entry). `status` names a staged update by its valid `staged.json` alone, with no signature check: only
+an import of the running process has verified it, and the kept envelope is not verified again at a
+start. So whoever can write the drive can have one offered, which gives them no more than writing the
+root app, which runs with no click at all. What P7's hand-off verifies before it runs one is the
+owner's call CF-56; until then the limit stands as recorded.
 
 ## Residual egress channels
 

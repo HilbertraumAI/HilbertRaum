@@ -1319,7 +1319,8 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
 
 - **`test-win`** — `windows-latest`, two shards like CI's windows legs (#458): `npm ci` → typecheck →
   build → **the full test suite**, on the first-class OS: belt-and-braces on the exact tagged commit.
-- **`build-win`** — `windows-latest`, after `test-win`: `npm ci` → typecheck → build →
+- **`build-win`** — `windows-latest`, after `test-win`: `npm ci` → typecheck → the tracked-changes print
+  (app-update W-17; "The update key check" below) → build →
   `npm run package:win` → `HilbertRaum-<version>-portable.exe`, then **checks the packaged app** (#769,
   blocking): `packaging.test.ts`, `third-party-notices.test.ts` and `asar-unpack-closure.test.ts` run
   against `release/win-unpacked` (`HILBERTRAUM_PACKED_ASAR` / `HILBERTRAUM_PACKED_EXE`): the layout
@@ -1328,8 +1329,8 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
   the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
   step itself on every PR (a workflow change first runs at a tag). Then it **checks the packaged
-  app's embedded update keys** on `release/win-unpacked/resources/app.asar` (app-update W-3,
-  blocking; "The update key check" below). Then it **checks the packaged
+  app's embedded update keys and build date** on `release/win-unpacked/resources/app.asar` (app-update
+  W-3, W-17, blocking; "The update key check" below). Then it **checks the packaged
   app's user-data folder** (app-update W-15, blocking): it starts the portable exe with a scratch
   drive root and no profile switch, waits for `%APPDATA%\@hilbertraum\desktop\lockfile` (the
   single-instance lock's file, present only while an instance holds that profile), and stops the
@@ -1354,20 +1355,20 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   (issue #102 item 1): parity for the win release + an offline/air-gapped engine install path
   without the repo scripts (unzip into `runtime/llama.cpp/`). No symlink-dereference concern on
   win (the Vulkan build carries none).
-- **`build-mac`** — `macos-15` (Apple Silicon): `npm ci` → typecheck → `npm run package` (`dir`
-  target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
+- **`build-mac`** — `macos-15` (Apple Silicon): `npm ci` → typecheck → the tracked-changes print →
+  `npm run package` (`dir` target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
   Silicon) → **ditto-zip** (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on
   exFAT, which can't hold the `.app`'s framework symlinks; the drive launcher extracts to a local
-  cache) → **checks the signed app's embedded update keys** on
+  cache) → **checks the signed app's embedded update keys and build date** on
   `release/mac*/HilbertRaum.app/Contents/Resources/app.asar`, before the zip is uploaded (app-update
-  W-3, blocking; "The update key check" below). Also fetches the mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with
+  W-3, W-17, blocking; "The update key check" below). Also fetches the mac Metal runtime via `scripts/fetch-runtime.sh` and zips it with
   symlinks **dereferenced** (`llama-runtime-mac-arm64.zip`) so it drops straight onto exFAT under
   `runtime/llama.cpp/mac/`.
-- **`build-linux`** — `ubuntu-latest`: `npm ci` → typecheck → `npm run package` →
-  `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg runs), uploaded,
-  then **checks the packaged app's embedded update keys** on
+- **`build-linux`** — `ubuntu-latest`: `npm ci` → typecheck → the tracked-changes print →
+  `npm run package` → `HilbertRaum-<version>.AppImage` (community-tested until the GPU-matrix Linux leg
+  runs), uploaded, then **checks the packaged app's embedded update keys and build date** on
   `release/linux-unpacked/resources/app.asar`, which the AppImage target leaves in place (app-update
-  W-3, blocking; "The update key check" below).
+  W-3, W-17, blocking; "The update key check" below).
 - **`release`** (tag-gated, needs all three) — asserts **tag == `apps/desktop/package.json`
   version** (fail fast on mismatch), aggregates `SHA256SUMS.txt`, builds the release notes from the
   CHANGELOG section for the version being tagged — `## [<version>]`, with `[Unreleased]` as the
@@ -1414,6 +1415,24 @@ build leg; on a `ci.yml` leg, where no variable is set, it is the file's one ski
 proves the literal, not what the code makes of it (owner, 2026-11-26): the code review, the key proof
 and the key count cover the rest ([`security-model.md`](security-model.md) "Update trust").
 
+**The build date, in the same packed row** (app-update W-17, F-12; [`app-updates.md`](app-updates.md)
+§5.10, "The build-date step" and "The guard's build-date check"). Each build writes the release commit's
+committer date into the git-ignored `src/main/services/updates/build-date.json`, which the main bundle
+embeds (the age reminder and the support notices count from it); a build whose tree has tracked
+changes, that is no checkout of this repository, or whose git fails writes `null` and names the
+condition in one build log line. The same row then reads git's `%cI` of the checkout's HEAD itself (with
+`--no-replace-objects` and `--no-show-signature`), writes it as UTC to the second, and passes only when
+that text is found exactly once across the files under `out/main`, in a `.js`, `.mjs` or `.cjs` file,
+with the same quote directly before and after it. A failure names its reason: `expected-unreadable`,
+`date-not-found` (a build with no release date included), `date-repeated`, `date-not-in-code` or
+`date-not-quoted`. It is the same step on the same three legs: no new step and no new `npx` form. So
+that a leg whose tree a step changed shows why its check then fails with `date-not-found`, **each build
+leg first prints its tracked changes**: a plain step, "Show tracked changes before the build (app-update
+W-17)", runs `git status --porcelain --untracked-files=no` after the leg's typecheck and directly before
+its first build (`npm run build` on `build-win`, `npm run package` on `build-mac` and `build-linux`), and
+prints nothing on a clean tree. Like the key check, the date check proves the literal in the bundle, not
+what the app makes of it; a row that builds the reader through Vite holds that part.
+
 What a red one means (T4.3's step-placement decision and review R-8): that leg fails, and the
 tag-gated `release` job, which needs all three legs, does not run, so no draft release is made. What
 the run already uploaded stays downloadable from the run: the Windows portable exe and the AppImage are
@@ -1423,7 +1442,9 @@ builds, never a release.
 Per PR: `packaging.test.ts` reads the three steps on every PR (the command, each leg's archive path,
 each step's place after its leg's package step, no `if:`, `continue-on-error:` or `shell:` on the step,
 no `if:`, `defaults:` or `continue-on-error:` on its job, no workflow default shell, the `release`
-job's `needs` and its tag-only `if:`), and `updates-bundle-check.test.ts`'s other rows run on every CI
+job's `needs` and its tag-only `if:`) and the three tracked-changes prints (exactly one per build leg,
+after the checkout, before every build and directly before the first, a step of a name and that command
+alone), and `updates-bundle-check.test.ts`'s other rows run on every CI
 leg, its `out/main` row on the bundle each leg builds before its tests. A change to the steps still
 first runs at a dispatch or a tag.
 
@@ -1436,7 +1457,9 @@ local vitest after `npm ci`, so neither happens there. The older #769 step above
 
 By hand, after a local package build (checklist item 16 below): from `apps/desktop`, set
 `HILBERTRAUM_PACKED_ASAR` to the archive and run
-`npm test -- tests/unit/updates-bundle-check.test.ts`; every row passes and none skips.
+`npm test -- tests/unit/updates-bundle-check.test.ts`; every row passes and none skips. A package built
+from a tree with tracked changes embeds no build date, so its date check fails with `date-not-found`:
+build from a clean checkout of the commit.
 
 **The ritual is draft → owner smoke → publish.** The workflow never publishes: the owner downloads
 the draft's artifacts, runs the applicable "Manual pre-ship checklist" below (at minimum item 1 —
@@ -1587,14 +1610,17 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    after the probe's `cmd` call, so `rename_ok` is later by about that call's time than in spike
    1's poll, which had no probe; and the unpack folder is looked at a few milliseconds after the
    probe's open, when `cmd` has returned.
-16. **The update keys embedded in each built `app.asar` (app-update W-3).** `release.yml`'s three
-   build legs check every archive they package ("The update key check" above): check that all three
-   steps passed. By hand, after an electron-builder or electron-vite bump or a local package build, from
+16. **The update keys and the build date embedded in each built `app.asar` (app-update W-3, W-17).**
+   `release.yml`'s three build legs check every archive they package ("The update key check" above):
+   check that all three steps passed, and that each leg's "Show tracked changes before the build" step
+   printed nothing. By hand, after an electron-builder or electron-vite bump or a local package build, from
    `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR` to the archive (`release/win-unpacked/resources/app.asar`,
    the `.app`'s `Contents/Resources/app.asar`, `release/linux-unpacked/resources/app.asar`), then
-   `npm test -- tests/unit/updates-bundle-check.test.ts`. **Pass** = no failed and no skipped row. The
-   step checks the key-set literal against the committed `keys.json` only; whether the build trusts
-   exactly the owner's keys is the key proof's ([`app-updates.md`](app-updates.md) §2.8).
+   `npm test -- tests/unit/updates-bundle-check.test.ts`. **Pass** = no failed and no skipped row (a
+   package built from a tree with tracked changes fails the date check). The step checks the key-set
+   literal against the committed `keys.json` and the build date against the checkout's HEAD only;
+   whether the build trusts exactly the owner's keys is the key proof's ([`app-updates.md`](app-updates.md)
+   §2.8).
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
