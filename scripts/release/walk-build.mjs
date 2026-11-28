@@ -9,48 +9,68 @@
 //   node scripts/release/walk-build.mjs remove --dir <copy> [--repo <checkout>]
 //   node scripts/release/walk-build.mjs version-arg <MAJOR.MINOR.PATCH>
 //
-// `make` prints the copy as one JSON line (dir, desktopDir, keysJson, commit, keyIds, links); `--repo` defaults to the
-// checkout this script lives in. The module exports the same: `makeScratchCopy`, `removeScratchCopy` and
+// `make` prints the copy as one JSON line (id, dir, desktopDir, keysJson, commit, keyIds, links); `--repo` defaults to
+// the checkout this script lives in. The module exports the same: `makeScratchCopy`, `removeScratchCopy` and
 // `versionOverride` (the build version `<v>-e2e` and its electron-builder argument, `-c.extraMetadata.version=<v>-e2e`).
+// The command line runs when node's program is this file, compared as real paths (node reaches a script through a
+// link by its real path, and on macOS every path under /tmp and /var is one); a program node names as its entry that
+// the comparison does not match exits 1 with one line, never 0 with nothing done.
 //
-// The copy: `git worktree add --detach <root>/<name> <commit>`, so no branch is made and none tracks anything. For the
-// source's HEAD commit the copy's node_modules (the root one, and apps/desktop's when the source has one) are links
-// (junctions on Windows) to the source's, refused when the source's package-lock.json is not HEAD's (a junction would
-// then build with other packages); a copy of any other commit gets none (a tag's copy runs its own `npm ci`, §10.4).
-// keys.json is then rewritten to hold exactly the given keys in the record's form (`key_set` = the marker, a colon, the
-// keys joined by `,`; two-space indent, LF line ends, an LF at the end) and read back through the file readers'
-// function (`readKeysFile`, updates/bundle-check.ts, with the one parser behind it), loaded from this checkout through
-// Node's own type stripping. The marker is taken from the revision's own keys.json, never spelled here.
+// The copy: `git worktree add --detach <root>/<name> <commit>`, so no branch is made and none tracks anything. It is
+// marked at once with its id (32 hex, random): the line `walk-build copy <id>` in `.walk-build-copy` at the copy's top
+// and in `walk-build-copy` in its private git folder (`<common git folder>/worktrees/<entry>/`, which git deletes with
+// the entry). Neither is a file the repository tracks: a revision whose top folder tracks that name (any letter case) is
+// refused, and the private one is in git's own folder. For the source's HEAD commit the copy's node_modules (the root
+// one, and apps/desktop's when the source has one) are links (junctions on Windows) to the source's, refused when the
+// source's package-lock.json is not HEAD's (a junction would then build with other packages); a copy of any other
+// commit gets none (a tag's copy runs its own `npm ci`, §10.4). keys.json is then rewritten to hold exactly the given
+// keys in the record's form (`key_set` = the marker, a colon, the keys joined by `,`; two-space indent, LF line ends, an
+// LF at the end) and read back through the file readers' function (`readKeysFile`, updates/bundle-check.ts, with the
+// one parser behind it), loaded from this checkout through Node's own type stripping. The key-set marker is taken from
+// the revision's own keys.json, never spelled here.
 //
 // It takes public keys only (plan C8, C15): base64 text of an Ed25519 key's SPKI bytes, 1 to 16 of them, each one key
 // that the one parser reads; it never makes, reads or writes a private key (one handed in does not read as a public key
 // and is refused). It refuses, each with one fixed line and before anything is written: a source that is no checkout's
 // top; a copy name that is no plain folder name; a scratch root that is no existing folder, is not inside the OS temp
 // folder, or is inside any checkout, worktree or git folder; a copy folder that exists; a revision that names no
-// commit; a revision whose keys.json is no regular file in its tree (a link, or a file under a linked folder) or does
-// not read; keys that do not read as a set; at HEAD, a source without node_modules or with another lockfile. After the
-// checkout it refuses a keys.json path that holds a link (git makes none from a tree whose keys.json is a regular file;
-// a second check, no test reaches it) and removes the copy again on any failure.
+// commit; a revision that tracks the copy marker's name, or whose keys.json is no regular file in its tree (a link, or a
+// file under a linked folder) or does not read; keys that do not read as a set; at HEAD, a source without node_modules
+// or with another lockfile. After the checkout it refuses a keys.json path that holds a link (git makes none from a tree
+// whose keys.json is a regular file; a second check, no test reaches it) and removes the copy again on any failure.
 //
-// The removal (`remove()`, `removeScratchCopy`, `remove`): only a detached worktree of the repository, strictly inside
-// the OS temp folder. Every link in the copy is removed by its own name first (`cmd /c rmdir <link>` on Windows,
-// `unlink` elsewhere; the target is never touched): its own package links, and any other link whose target is inside
-// the copy or gone (npm's workspace links in a tag's copy). A link to anything outside the copy that the walk did not
-// make is refused, and nothing is removed. Then `git worktree remove --force`, never `git worktree prune` (that would
-// drop other sessions' stale entries); afterwards the folder must be gone and the worktree list must be the list before
-// it without the copy. Git for Windows neither follows a junction when it removes a worktree nor removes it: it leaves
-// the junction and its folder behind and reports success, so the links go first.
+// The removal (`remove()`, `removeScratchCopy`, `remove`) acts only on a copy the walk made, strictly inside the OS
+// temp folder, and never on the given path when it is itself a link. A copy git still lists must be detached and carry
+// the private marker (another worktree, the main one included, has none: refused before anything is removed); a folder
+// git no longer lists (a git removal that failed part way) must carry the marker at its top. It checks every link in
+// the copy before it removes one (all or nothing): its own package links, and any other link whose target is inside the
+// copy or gone (npm's workspace links in a tag's copy); a link to anything outside the copy that the walk did not make
+// is refused, and nothing is removed. Then each link goes by its own name (`rmdir` of the link itself on Windows, which
+// takes a junction and never its target, `unlink` elsewhere; no shell, so no name is ever expanded), and the rest of the
+// folder by a walk that lstats every entry and never follows a link (it stops at one), the copy's .git file and its
+// marker last, so a removal stopped part way (a process that still uses a folder of the copy) keeps the entry and
+// both markers and a second `remove` finishes it. Only then `git worktree remove --force` drops the copy's own entry
+// (git drops an entry whose folder is gone, as for a copy deleted by hand); never `git worktree prune`, which would
+// drop other sessions' stale entries. Afterwards the folder must be gone and the worktree list must be the list before
+// it without the copy.
+//
+// Every git call runs without the variables that point git at another repository, index or object store, or change
+// how it finds one (`GIT_ENV_DROPPED`: git's own list of the variables local to a repository, which git clears itself
+// before it runs in another one, the two that steer discovery, GIT_CEILING_DIRECTORIES and
+// GIT_DISCOVERY_ACROSS_FILESYSTEM, and GIT_NAMESPACE; any letter case on Windows), with its messages in English.
 //
 // What it does not check: what the build or a later step does with the copy; that the revision's tree is the code a
 // release was made from (T7.7a checks a tag's lockfile); a scratch root that the OS temp folder's own setting points
-// somewhere unusual (the temp folder is what the OS reports).
+// somewhere unusual (the temp folder is what the OS reports); that nothing uses the copy while it is removed (end every
+// process of the copy first: a removal it stops is finished by the next one).
 //
 // Exit codes: 0 done · 1 refused or failed (one line) · 2 usage.
 
 import { spawnSync } from 'node:child_process'
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { lstatSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { registerTsSiblingImports } from '../lib/ts-sibling-imports.mjs'
 
@@ -60,6 +80,34 @@ const UPDATES = join(REPO_ROOT, 'apps', 'desktop', 'src', 'main', 'services', 'u
 export const KEYS_JSON = 'apps/desktop/src/main/services/updates/keys.json'
 /** The package folders a copy of HEAD links to the source's, '/'-separated. */
 export const LINKED_PACKAGES = ['node_modules', 'apps/desktop/node_modules']
+/** The marker at the copy's top, and the one in its private git folder (see the header). */
+export const COPY_MARKER = '.walk-build-copy'
+export const PRIVATE_MARKER = 'walk-build-copy'
+/** A marker's one line. */
+const markerText = (id) => `walk-build copy ${id}\n`
+const MARKER_LINE = /^walk-build copy ([0-9a-f]{32})\n$/
+/** What every git call runs without: git's `local_repo_env` (environment.c; git clears these itself before it runs in
+ *  another repository), the two variables that steer its discovery, and GIT_NAMESPACE (which refs it sees). */
+export const GIT_ENV_DROPPED = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CONFIG',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_COUNT',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_IMPLICIT_WORK_TREE',
+  'GIT_GRAFT_FILE',
+  'GIT_INDEX_FILE',
+  'GIT_NO_REPLACE_OBJECTS',
+  'GIT_REPLACE_REF_BASE',
+  'GIT_PREFIX',
+  'GIT_SHALLOW_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_NAMESPACE'
+]
 const IS_WINDOWS = process.platform === 'win32'
 const USAGE = `walk-build: usage: node scripts/release/walk-build.mjs make --rev <revision> --root <scratch root> --key <public key> [--key ...] [--name <folder>] [--repo <checkout>]
        node scripts/release/walk-build.mjs remove --dir <copy> [--repo <checkout>]
@@ -81,26 +129,31 @@ const ROOT_IN_CHECKOUT = 'the scratch root is inside a checkout or worktree'
 const ROOT_UNKNOWN = 'git could not tell whether the scratch root is inside a checkout'
 const TARGET_EXISTS = 'the copy folder already exists'
 const NOT_A_COMMIT = 'the revision does not name a commit'
+const MARKER_TRACKED = "the revision tracks a file at the copy marker's path"
 const KEYS_NOT_REGULAR = "the revision's keys.json is not a regular file"
 const NO_PACKAGES = 'the source has no node_modules to link'
 const OTHER_LOCKFILE = "the source's package-lock.json differs from the revision's"
 const KEYS_PATH_LINK = "the copy's keys.json path holds a link"
 const NOT_READ_BACK = "the copy's keys.json did not read back as written"
+const NO_PRIVATE_FOLDER = "git's private folder of the copy was not found"
 const NOT_A_COPY = 'the folder is not a detached worktree of the repository inside the temp folder'
+const NO_MARKER = 'the worktree carries no walk-build copy marker; nothing removed'
 const FOREIGN_LINK = 'the copy holds a link out of it that it did not make; nothing removed'
 const NOT_UNLINKED = 'a link could not be removed by its name'
+const LINK_IN_WALK = 'a link appeared in the copy while it was removed'
+const notCleared = (code) => `the copy could not be removed completely (${code}); end every process that uses it, then run remove again`
 const LEFT_BEHIND = 'the copy folder is still there after the removal'
 const LIST_CHANGED = 'the worktree list after the removal is not the list before it'
 const BAD_VERSION = 'the version is not MAJOR.MINOR.PATCH'
 
 // ---- git, paths
 
-/** git's environment: the caller's, without what points git at another repository or index, and git's messages in
- *  English (one refusal reads git's "not a git repository"). */
+/** git's environment: the caller's without `GIT_ENV_DROPPED` (by name in any letter case on Windows, where the
+ *  environment ignores case), and git's messages in English (one refusal reads git's "not a git repository"). */
 function gitEnv() {
   const env = { ...process.env, LC_ALL: 'C' }
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE']) {
-    delete env[k]
+  for (const name of Object.keys(env)) {
+    if (GIT_ENV_DROPPED.includes(IS_WINDOWS ? name.toUpperCase() : name)) delete env[name]
   }
   return env
 }
@@ -166,6 +219,39 @@ function worktrees(repo) {
     .map((lines) => ({ path: lines[0].slice('worktree '.length), lines }))
 }
 
+/** The folder git keeps for the worktree at `path`: `<common git folder>/worktrees/<entry>`, whose `gitdir` file names
+ *  `<path>/.git` (gitrepository-layout; absolute, or relative to that folder). Read from git's layout, so it is found
+ *  when the worktree's own folder is gone too; null when there is none (the main worktree has none). */
+function privateFolderOf(source, path) {
+  const common = git(source, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (common.status !== 0) refuse(`git could not name the repository's git folder (exit ${common.status})`)
+  const entries = join(common.stdout.trim(), 'worktrees')
+  let names = []
+  try {
+    names = readdirSync(entries)
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err
+  }
+  for (const name of names) {
+    const folder = join(entries, name)
+    let named
+    try {
+      named = readFileSync(join(folder, 'gitdir'), 'utf8').trim()
+    } catch {
+      continue // not an entry git can read either
+    }
+    if (named !== '' && comparable(dirname(resolve(folder, named))) === comparable(path)) return folder
+  }
+  return null
+}
+
+/** The id in the marker file `file` (a regular file, not a link, holding the marker's one line), or null. */
+function markerId(file) {
+  const found = lstatOrNull(file)
+  if (found === null || !found.isFile()) return null
+  return MARKER_LINE.exec(readFileSync(file, 'utf8'))?.[1] ?? null
+}
+
 // ---- the key reader (this checkout's own, through Node's type stripping)
 
 let readers = null
@@ -217,6 +303,14 @@ function committedKeysJson(source, commit) {
   return blob.stdout
 }
 
+/** Whether the commit's top folder tracks an entry named like the copy marker, letter case ignored (a folder that
+ *  ignores case would hand the tracked file to the marker's name). */
+function tracksMarker(source, commit) {
+  const listed = git(source, ['ls-tree', '-z', '--name-only', commit])
+  if (listed.status !== 0) refuse(`git could not list the revision's tree (exit ${listed.status})`)
+  return listed.stdout.split('\0').some((entry) => entry.toLowerCase() === COPY_MARKER)
+}
+
 /** Whether the source's package-lock.json is the commit's (as `git add` would store it), both absent included. */
 function sameLockfile(source, commit) {
   const committed = git(source, ['rev-parse', '--verify', '--quiet', `${commit}:package-lock.json`])
@@ -238,8 +332,8 @@ function assertNoLinkOnPath(dir, rel) {
 
 /**
  * A scratch copy of `repo` at `rev` in `<root>/<name>` (name `walk-<12 hex of the commit>` by default) whose keys.json
- * holds exactly `publicKeys` (see the header). Resolves to its paths, the commit, the keys' ids (lower-case hex
- * SHA-256 of their SPKI bytes), its links ({ path, target }) and `remove()`.
+ * holds exactly `publicKeys` (see the header). Resolves to its id (the markers' text), its paths, the commit, the keys'
+ * ids (lower-case hex SHA-256 of their SPKI bytes), its links ({ path, target }) and `remove()`.
  */
 export async function makeScratchCopy({ repo, rev, root, publicKeys, name } = {}) {
   const { readKeysFile, maxKeys } = await keyReaders()
@@ -252,6 +346,7 @@ export async function makeScratchCopy({ repo, rev, root, publicKeys, name } = {}
   const commit = commitOf(source, rev)
   const dir = join(realRoot, name ?? `walk-${commit.slice(0, 12)}`)
   if (lstatOrNull(dir) !== null) refuse(TARGET_EXISTS)
+  if (tracksMarker(source, commit)) refuse(MARKER_TRACKED)
 
   const committed = readKeysFile(committedKeysJson(source, commit))
   if (!committed.valid) refuse(`the revision's keys.json does not read (${committed.fault})`)
@@ -276,7 +371,13 @@ export async function makeScratchCopy({ repo, rev, root, publicKeys, name } = {}
   // Everything below writes, inside the copy only.
   const added = git(source, ['worktree', 'add', '--detach', dir, commit])
   if (added.status !== 0) refuse(`git could not add the worktree (exit ${added.status})`)
+  const id = randomBytes(16).toString('hex')
   try {
+    // The marks first: the removal (below on any failure, or a later one) acts only on a copy that carries them.
+    const ownFolder = privateFolderOf(source, dir)
+    if (ownFolder === null) refuse(NO_PRIVATE_FOLDER)
+    writeFileSync(join(ownFolder, PRIVATE_MARKER), markerText(id), { flag: 'wx' })
+    writeFileSync(join(dir, COPY_MARKER), markerText(id), { flag: 'wx' })
     const links = []
     for (const link of packages) {
       symlinkSync(link.target, link.path, 'junction')
@@ -287,7 +388,7 @@ export async function makeScratchCopy({ repo, rev, root, publicKeys, name } = {}
     writeFileSync(keysJson, text)
     const back = readKeysFile(readFileSync(keysJson))
     if (!back.valid || back.value !== value || back.keys.map((key) => key.id).join() !== keyIds.join()) refuse(NOT_READ_BACK)
-    return { dir, desktopDir: join(dir, 'apps', 'desktop'), keysJson, commit, keyIds, links, remove: () => removeScratchCopy({ repo: source, dir }) }
+    return { id, dir, desktopDir: join(dir, 'apps', 'desktop'), keysJson, commit, keyIds, links, remove: () => removeScratchCopy({ repo: source, dir }) }
   } catch (err) {
     try {
       removeScratchCopy({ repo: source, dir })
@@ -300,7 +401,7 @@ export async function makeScratchCopy({ repo, rev, root, publicKeys, name } = {}
 
 // ---- the removal
 
-/** Every link under `dir`, links never followed. */
+/** Every link under `dir`, links never followed; sorted, so a removal always meets them in one order. */
 function linksUnder(dir) {
   const found = []
   const folders = [dir]
@@ -312,50 +413,94 @@ function linksUnder(dir) {
       else if (entry.isDirectory()) folders.push(path)
     }
   }
-  return found
+  return found.sort()
 }
 
-/** A link removed by its own name: `rmdir` without /s (a junction or a folder link; a real folder that holds anything
- *  is refused by it), else unlink (a file link). The target is never touched. */
+/** A link removed by its own name, with no shell: `rmdir` of the link itself on Windows (a junction or a folder link;
+ *  the target is never entered), `unlink` for a file link and elsewhere. */
 function unlinkByName(link) {
-  if (IS_WINDOWS) {
-    if (/["%]/.test(link)) refuse(NOT_UNLINKED) // no quoting that cmd keeps literal
-    const removed = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/v:off', '/s', '/c', `"rmdir "${link}""`], {
-      windowsVerbatimArguments: true,
-      windowsHide: true,
-      stdio: 'ignore'
-    })
-    if (removed.status !== 0 && lstatOrNull(link)?.isSymbolicLink()) unlinkSync(link)
-  } else unlinkSync(link)
+  try {
+    if (IS_WINDOWS) {
+      try {
+        rmdirSync(link)
+      } catch (err) {
+        if (!lstatOrNull(link)?.isSymbolicLink()) throw err
+        unlinkSync(link) // a file link
+      }
+    } else unlinkSync(link)
+  } catch (err) {
+    refuse(`${NOT_UNLINKED} (${err?.code ?? 'error'})`)
+  }
   if (lstatOrNull(link) !== null) refuse(NOT_UNLINKED)
 }
 
-/** Remove a scratch copy (see the header): only a detached worktree of `repo` strictly inside the OS temp folder. */
+/** `path` and all it holds, each entry lstat'ed: a file unlinked, a folder emptied and removed; a link is never
+ *  followed (the walk stops at one: every link went by its name before). */
+function removeTree(path) {
+  const found = lstatSync(path)
+  if (found.isSymbolicLink()) refuse(LINK_IN_WALK)
+  if (!found.isDirectory()) return unlinkSync(path)
+  for (const name of readdirSync(path).sort()) removeTree(join(path, name))
+  rmdirSync(path)
+}
+
+/** The copy's folder removed by the walk: its .git file and its marker last, then the folder itself. */
+function clearCopy(path) {
+  const last = ['.git', COPY_MARKER]
+  try {
+    for (const name of readdirSync(path).sort()) if (!last.includes(name)) removeTree(join(path, name))
+    for (const name of last) if (lstatOrNull(join(path, name)) !== null) removeTree(join(path, name))
+    rmdirSync(path)
+  } catch (err) {
+    if (err instanceof WalkBuildError) throw err
+    refuse(notCleared(err?.code ?? 'error'))
+  }
+}
+
+/** Remove a scratch copy (see the header): only one the walk made, strictly inside the OS temp folder. */
 export function removeScratchCopy({ repo, dir } = {}) {
   const source = checkoutTop(repo)
-  const real = typeof dir === 'string' && isAbsolute(dir) ? realFolder(dir) : null
+  // The copy's path as git and the file system spell it, its folder present or gone; never a link itself.
+  const given = typeof dir === 'string' && isAbsolute(dir) ? lstatOrNull(dir) : undefined
+  const parent = given === undefined || given?.isSymbolicLink() ? null : realFolder(dirname(dir))
+  const path = parent === null ? null : given === null ? join(parent, basename(dir)) : realFolder(dir)
+  if (path === null || !inside(realTemp(), path)) refuse(NOT_A_COPY)
+  const present = given !== null
   const listed = worktrees(source)
-  const mine = real === null ? undefined : listed.find((w) => realFolder(w.path) !== null && comparable(realFolder(w.path)) === comparable(real))
-  if (mine === undefined || !mine.lines.includes('detached') || !inside(realTemp(), real)) refuse(NOT_A_COPY)
+  const mine = listed.find((w) => comparable(realFolder(w.path) ?? w.path) === comparable(path))
+  // Its origin, before anything is removed: a listed copy by the marker in its private git folder, a folder git no
+  // longer lists by the marker at its top.
+  if (mine !== undefined) {
+    if (!mine.lines.includes('detached')) refuse(NOT_A_COPY)
+    const ownFolder = privateFolderOf(source, path)
+    if (ownFolder === null || markerId(join(ownFolder, PRIVATE_MARKER)) === null) refuse(NO_MARKER)
+  } else if (!present || markerId(join(path, COPY_MARKER)) === null) refuse(NOT_A_COPY)
 
-  const own = new Set(LINKED_PACKAGES.map((rel) => comparable(join(real, ...rel.split('/')))))
-  const links = linksUnder(real)
-  for (const link of links) {
-    if (own.has(comparable(link))) continue
-    let target = null
-    try {
-      target = realpathSync.native(link)
-    } catch {
-      target = null // a link to nothing: removing it by name is all there is
+  if (present) {
+    // Every link checked before the first one goes (all or nothing), then each by its name, then the rest by the walk.
+    const own = new Set(LINKED_PACKAGES.map((rel) => comparable(join(path, ...rel.split('/')))))
+    const links = linksUnder(path)
+    for (const link of links) {
+      if (own.has(comparable(link))) continue
+      let target = null
+      try {
+        target = realpathSync.native(link)
+      } catch {
+        target = null // a link to nothing: removing it by name is all there is
+      }
+      if (target !== null && !inside(path, target)) refuse(FOREIGN_LINK)
     }
-    if (target !== null && !inside(real, target)) refuse(FOREIGN_LINK)
+    for (const link of links) unlinkByName(link)
+    clearCopy(path)
   }
-  for (const link of links) unlinkByName(link)
 
   const before = listed.filter((w) => w !== mine).map((w) => comparable(w.path))
-  const removed = git(source, ['worktree', 'remove', '--force', real])
-  if (removed.status !== 0) refuse(`git could not remove the worktree (exit ${removed.status})`)
-  if (lstatOrNull(real) !== null) refuse(LEFT_BEHIND)
+  if (mine !== undefined) {
+    // The copy's own entry, its folder gone: git drops just that entry (and its private folder); never a prune.
+    const removed = git(source, ['worktree', 'remove', '--force', path])
+    if (removed.status !== 0) refuse(`git could not remove the worktree (exit ${removed.status})`)
+  }
+  if (lstatOrNull(path) !== null) refuse(LEFT_BEHIND)
   const after = worktrees(source).map((w) => comparable(w.path))
   if (after.join('\n') !== before.join('\n')) refuse(LIST_CHANGED)
 }
@@ -414,6 +559,20 @@ async function main(argv) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  process.exitCode = await main(process.argv.slice(2))
+/** Whether node's program is this file: `argv[1]` and this module compared as real paths (node runs a script reached
+ *  through a link from its real path, so the spellings differ then). */
+function isProgram() {
+  if (!process.argv[1]) return false
+  try {
+    return comparable(realpathSync.native(resolve(process.argv[1]))) === comparable(realpathSync.native(fileURLToPath(import.meta.url)))
+  } catch {
+    return false
+  }
+}
+
+if (isProgram()) process.exitCode = await main(process.argv.slice(2))
+else if (import.meta.main === true) {
+  // Node names this module its entry, yet the paths did not compare: never exit 0 with nothing done.
+  console.error('walk-build: could not tell that it runs as the program; nothing done')
+  process.exitCode = 1
 }
