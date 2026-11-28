@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
+  checkBundleBuildDate,
   checkBundleKeys,
   findMarker,
+  occurrences,
   readKeysFile,
+  type BundleBuildDateResult,
   type BundleFile,
   type BundleKeysResult
 } from '../../src/main/services/updates/bundle-check'
@@ -29,6 +32,11 @@ import { testBudgetMs } from '../helpers/hang-budget'
 //
 // Keys (plan C8, record §2.7): every key below is made here at run time and only its public half is used; nothing is
 // committed. Expected ids are computed here with SHA-256 over the SPKI bytes, not read back from the parser.
+//
+// T6.4a adds the build date (record §5.10, "The guard's build-date check"; CF-48 (3)): the release commit's committer
+// date, git's %cI written as UTC to the second, stands exactly once in the main bundle, in a code file, as one quoted
+// literal. The packed row checks both; the out/main row checks the keys only, since a developer's tree with changes
+// builds no date (record §5.10, "The build-date step").
 
 /** The key-set marker with its colon: fine in a test, never spelled in src/ (record §2.7, "The embedded form"). */
 const MARKER = 'hilbertraum-key-set-1:'
@@ -249,8 +257,128 @@ describe('checkBundleKeys: where the embedded value ends, and what else the bund
   })
 })
 
+// ---- the build date (T6.4a; record §5.10, "The guard's build-date check")
+
+/** The date in the form the build writes the build-date file's import (`const commit_date = "…";`). */
+const DATE = '2027-03-15T09:30:00Z'
+/** git's %cI for that instant, as a committer in UTC+01:00 has it. */
+const COMMITTED = '2027-03-15T10:30:00+01:00'
+const dateText = (literal: string): string => `const before = 1;\nconst commit_date = ${literal};\nconst buildDate = {\n  commit_date\n};\nexport { buildDate };\n`
+const dated = (date = DATE, path = 'index.mjs'): BundleFile => file(path, dateText(`"${date}"`))
+const dateOk = (date = DATE, path = 'index.mjs'): BundleBuildDateResult => ({ ok: true, path, date })
+/** A result as one comparable line: `ok`, or the failure (so a red row prints why). */
+const dateVerdict = (r: BundleBuildDateResult): string => (r.ok ? 'ok' : JSON.stringify(r.failure))
+
+describe("checkBundleBuildDate: the expected text is the release commit's %cI as UTC to the second (record §5.10)", () => {
+  it('the date in the bundle and the committer date in UTC+01:00: ok, the UTC text', () => {
+    expect(checkBundleBuildDate([dated()], COMMITTED)).toEqual(dateOk())
+  })
+
+  // Written by hand: the offset is subtracted, across an hour, a day, a year and a leap day.
+  it.each<[string, string, string]>([
+    ['an offset of +00:00', '2027-03-15T09:30:00+00:00', DATE],
+    ['a Z', '2027-03-15T09:30:00Z', DATE],
+    ['an offset of -05:30', '2027-03-15T04:00:00-05:30', DATE],
+    ['a positive offset past midnight', '2027-03-16T01:15:00+14:00', '2027-03-15T11:15:00Z'],
+    ['a negative offset into the next year', '2027-12-31T23:30:00-01:00', '2028-01-01T00:30:00Z'],
+    ['a negative offset onto a leap day', '2028-02-28T23:00:00-02:00', '2028-02-29T01:00:00Z']
+  ])('%s: %s is %s', (_label, committed, utc) => {
+    expect(checkBundleBuildDate([dated(utc)], committed)).toEqual(dateOk(utc))
+  })
+
+  // No release date can be looked for: the check fails first, whatever the bundle holds.
+  it.each<[string, string]>([
+    ['nothing', ''],
+    ['no date', 'not a date'],
+    ['no zone', '2027-03-15T10:30:00'],
+    ["git's %ci form", '2027-03-15 10:30:00 +0100'],
+    ['a trailing line end (the caller trims)', `${COMMITTED}\n`],
+    ['a fraction of a second', '2027-03-15T10:30:00.000+01:00'],
+    ['30 February', '2027-02-30T10:30:00+01:00'],
+    ['hour 24', '2027-03-15T24:00:00+00:00'],
+    ['an offset of +01:60', '2027-03-15T10:30:00+01:60'],
+    ['a time in 1999', '1999-12-31T23:59:59+00:00'],
+    ['a time in 2000 that is 1999 in UTC', '2000-01-01T00:30:00+01:00']
+  ])('%s: expected-unreadable', (_label, committed) => {
+    expect(checkBundleBuildDate([dated()], committed)).toEqual({ ok: false, failure: { check: 'build-date', reason: 'expected-unreadable' } })
+  })
+})
+
+describe('checkBundleBuildDate: the date is found exactly once across out/main, in a code file, quoted (record §5.10)', () => {
+  const failure = (reason: string, extra: Record<string, unknown> = {}): BundleBuildDateResult =>
+    ({ ok: false, failure: { check: 'build-date', reason, expected: DATE, ...extra } }) as BundleBuildDateResult
+
+  // A build that has no release date (a tree with changes) embeds null: the guard stops on the safe side.
+  it.each<[string, BundleFile[]]>([
+    ['the build embeds null (no release date)', [file('index.mjs', dateText('null'))]],
+    ['the build embeds another date', [dated('2027-03-15T09:30:01Z')]],
+    ['the date only without its Z', [file('index.mjs', dateText(`"${DATE.slice(0, -1)}"`))]],
+    ['no file at all', []]
+  ])('%s: date-not-found', (_label, files) => {
+    expect(checkBundleBuildDate(files, COMMITTED)).toEqual(failure('date-not-found'))
+  })
+
+  it.each<[string, BundleFile[], string[]]>([
+    ['twice in one file', [file('index.mjs', `${dateText(`"${DATE}"`)}const again = "${DATE}";\n`)], ['index.mjs', 'index.mjs']],
+    ['in index.mjs and in a chunk', [dated(), dated(DATE, 'chunks/date-a1b2.mjs')], ['index.mjs', 'chunks/date-a1b2.mjs']],
+    ['in index.mjs and in its .map', [dated(), file('index.mjs.map', JSON.stringify({ version: 3, sourcesContent: [`{"commit_date":"${DATE}"}\n`] }))], ['index.mjs', 'index.mjs.map']]
+  ])('%s: date-repeated, each occurrence named', (_label, files, paths) => {
+    expect(checkBundleBuildDate(files, COMMITTED)).toEqual(failure('date-repeated', { paths }))
+  })
+
+  it.each<[string, BundleFile]>([
+    ['a .map', file('index.mjs.map', JSON.stringify({ version: 3, sourcesContent: [`{"commit_date":"${DATE}"}\n`] }))],
+    ['a JSON file', file('build-date-1a2b.json', `{"commit_date":"${DATE}"}\n`)],
+    ['a file without an extension', file('chunks/date', dateText(`"${DATE}"`))]
+  ])('once, only in %s: date-not-in-code', (_label, only) => {
+    expect(checkBundleBuildDate([file('index.mjs', 'export {};\n'), only], COMMITTED)).toEqual(failure('date-not-in-code', { path: only.path }))
+  })
+
+  it.each(['INDEX.MJS', 'chunks/date-1a2b.JS', 'chunks/date-3c4d.Cjs'])('once, in %s (the extension in another letter case): ok', (path) => {
+    expect(checkBundleBuildDate([dated(DATE, path)], COMMITTED)).toEqual(dateOk(DATE, path))
+  })
+
+  it.each<[string, string]>([
+    ['a double quote', `"${DATE}"`],
+    ['a single quote', `'${DATE}'`],
+    ['a backtick', `\`${DATE}\``]
+  ])('opened and closed by %s: ok', (_label, literal) => {
+    expect(checkBundleBuildDate([file('index.mjs', dateText(literal))], COMMITTED)).toEqual(dateOk())
+  })
+
+  // The string the app reads must be the 20 characters and nothing more (the key check's rule, review R-1).
+  it.each<[string, string]>([
+    ['another quote at its end', `const commit_date = "${DATE}';\n`],
+    ['the escaped quotes of a JSON.parse string', `const buildDate = JSON.parse("{\\"commit_date\\":\\"${DATE}\\"}");\n`],
+    ['a character after it inside the string', `const commit_date = "${DATE}0";\n`],
+    ['a character before it inside the string', `const commit_date = "x${DATE}";\n`],
+    ['no quote at all (a comment)', `// built ${DATE}\nexport {};\n`],
+    ['the same character on both sides that is no quote', `/* ${DATE} */ export {};\n`],
+    ['the start of the file', `${DATE}";\n`],
+    ['the end of the file', `const commit_date = "${DATE}`]
+  ])('the date with %s: date-not-quoted', (_label, text) => {
+    expect(checkBundleBuildDate([file('index.mjs', text)], COMMITTED)).toEqual(failure('date-not-quoted', { path: 'index.mjs' }))
+  })
+
+  it('a bundle holding the key set and the date passes both checks, each on its own literal', () => {
+    const both = file('index.mjs', `${bundleText(MARKER)}${dateText(`"${DATE}"`)}`)
+    expect({ keys: verdict(checkBundleKeys([both], keysJson(MARKER))), date: dateVerdict(checkBundleBuildDate([both], COMMITTED)) }).toEqual({ keys: 'ok', date: 'ok' })
+  })
+})
+
 describe('findMarker and readKeysFile, the parts P5 and T6.4a reuse', () => {
   const digit = (b: number): boolean => b >= 0x30 && b <= 0x39
+
+  // CF-48 (3): the occurrence reader, exported with the byte before each hit and the byte after its run; -1 at the
+  // file's start or end. Offsets counted by hand: `"m:12" m:` holds `m:` at bytes 1 and 7.
+  it('occurrences: each hit with the byte before it and the byte after its run, -1 at either end of the file', () => {
+    expect(occurrences([file('a.mjs', '"m:12" m:')], 'm:', digit)).toEqual([
+      { path: 'a.mjs', offset: 1, value: '12', before: 0x22, after: 0x22 },
+      { path: 'a.mjs', offset: 7, value: '', before: 0x20, after: -1 }
+    ])
+    expect(occurrences([file('b.mjs', 'm:')], 'm:', digit)).toEqual([{ path: 'b.mjs', offset: 0, value: '', before: -1, after: -1 }])
+  })
+
   // Offsets counted by hand: `xx m:12;m:3` holds `m:` at bytes 3 and 8.
   it('findMarker: every occurrence, in file order, with its offset and the run of value bytes after it', () => {
     expect(findMarker([file('a.mjs', 'xx m:12;m:3'), file('b.mjs', 'none'), file('c.mjs', 'm:')], 'm:', digit)).toEqual([
@@ -357,13 +485,20 @@ describe('the main bundle in out/main', () => {
 })
 
 // release.yml's build-win, build-mac and build-linux each name the app.asar they just packaged (packaging.test.ts reads the
-// three steps). A named file that is missing fails here, never skips.
+// three steps). A named file that is missing fails here, never skips. T6.4a: the same row checks the build date against
+// this checkout's release commit (record §5.10, "The guard's build-date check"): git's %cI of HEAD, read here, apart
+// from the build step's own reading (%ct). A leg whose tree a step changed before the build embeds null and fails here
+// with date-not-found; the leg's git status line before its build shows why.
 const packed = packedArtifact().asar
 describe('the packed app.asar a release build leg names', () => {
-  it.skipIf(packed === undefined)(`its out/main embeds this checkout's keys.json once, byte for byte (${PACKED_ENV.asar})`, () => {
+  it.skipIf(packed === undefined)(`its out/main embeds this checkout's keys.json once, byte for byte, and its release commit's date once (${PACKED_ENV.asar})`, () => {
     expect(packedPathExists(packed), `${PACKED_ENV.asar} names ${packed}`).toBe(true)
     const files = asarFilesUnder(packed!, 'out/main')
     expect(files.map((f) => f.path)).toContain('index.mjs')
-    expect(verdict(checkBundleKeys(files, readFileSync(KEYS_JSON)))).toBe('ok')
+    const committed = execFileSync('git', ['-C', DESKTOP_ROOT, 'log', '-1', '--format=%cI'], { encoding: 'utf8' }).trim()
+    expect({ keys: verdict(checkBundleKeys(files, readFileSync(KEYS_JSON))), date: dateVerdict(checkBundleBuildDate(files, committed)) }).toEqual({
+      keys: 'ok',
+      date: 'ok'
+    })
   })
 })

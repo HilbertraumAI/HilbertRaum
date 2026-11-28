@@ -10,7 +10,8 @@ import type { BrowserWindow, OpenDialogOptions, OpenDialogReturnValue, WebConten
 //   file, the two filters, no default folder, titled in main's language at each call; one path or closed;
 // - the computer (CF-50): the system, its version (Windows, macOS), the runtime glibc (Linux only, read once per process
 //   from Node's diagnostic report, never a throw), main's UI language;
-// - the clock, the drive's own readers, the update.log appender and node:fs, by identity; no build date yet (T6.4a);
+// - the clock, the drive's own readers, the update.log appender and node:fs, by identity; the build date, the
+//   build-date reader's value (T6.4a; record §5.10);
 // - the version this app runs as, and the keys: fail closed when the version does not parse (T6.3 sheet answer 4);
 // - nothing else: no P7 start hook, no audit sink.
 // That the service then uses these as recorded is updates-service.test.ts's and updates-ipc.test.ts's.
@@ -33,6 +34,11 @@ vi.mock('../../src/main/services/updates/keys', async () => {
   const read = parseKeySet(MARKER + keys.join(','))
   return { embeddedKeySet: { keys: read.valid ? read.keys : [], valid: read.valid } }
 })
+
+// A build that carries a date: in a test run build-date.json is absent or a developer's leftover (record §5.10, "The
+// build date's reader"), so the reader's value stands in with one, and "the date" cannot be told apart from "none".
+const BUILD_DATE = '2027-03-15T09:30:00Z'
+vi.mock('../../src/main/services/updates/build-date', () => ({ embeddedBuildDate: '2027-03-15T09:30:00Z' }))
 
 import { updateServiceDepsFor, type UpdateServiceEnv } from '../../src/main/update-service-deps'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
@@ -212,13 +218,13 @@ describe('update-service-deps: the clock, the drive\u{2019}s readers, the append
     expect([clock.now(), clock.monotonic()]).toEqual([1_764_201_600_000, 4242.5])
   })
 
-  it('the reads are the drive\u{2019}s own readers, and no build date until T6.4a\u{2019}s reader lands', () => {
+  it('the reads are the drive\u{2019}s own readers, and the build date is the build-date reader\u{2019}s (T6.4a)', () => {
     const { reads } = updateServiceDepsFor(envOf().env)(null)
     expect(reads.policy).toBe(readUpdatePolicy)
     expect(reads.driveRelease).toBe(readDriveRelease)
     expect(reads.rootApps).toBe(rootApps)
     expect(reads.kitSupport).toBe(readKitSupport)
-    expect(reads.buildDate()).toBeNull()
+    expect(reads.buildDate()).toBe(BUILD_DATE)
   })
 
   it('update.log lines go through the one appender, and the files through node:fs as the service and staging export it', () => {

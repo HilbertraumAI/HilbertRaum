@@ -2,6 +2,7 @@ import type { App, BrowserWindow, Dialog, OpenDialogOptions, WebContents } from 
 import { mainUiLanguage, tMain } from './services/i18n'
 import { log } from './services/logging'
 import { readUpdatePolicy } from './services/policy'
+import { embeddedBuildDate } from './services/updates/build-date'
 import { readDriveRelease, rootApps } from './services/updates/drive-release'
 import { embeddedKeySet } from './services/updates/keys'
 import { readKitSupport } from './services/updates/kit-support'
@@ -42,9 +43,9 @@ type GlibcUnread = 'no-report' | 'no-get-report' | 'report-threw' | 'no-glibc-fi
  * The service's dependencies for a layout, from Electron's parts. Made once per process (index.ts, module scope), so
  * the glibc hook it holds reads once per process. For each layout: the embedded key set and this app's version (a
  * version that does not parse fails closed: no key, so every update file answers UPD-NOT-AVAILABLE, and one fixed
- * app.log line; T6.3 sheet answer 4), the computer (CF-50), the clock, the drive's own readers, main's dialog, the
- * update.log appender and node:fs. Not handed: a build date (T6.4a's reader replaces the null), P7's start hook, and
- * an audit sink (PR-6b's T6.10b sets that on the service). Never throws.
+ * app.log line; T6.3 sheet answer 4), the computer (CF-50), the clock, the drive's own readers, the build date this
+ * build embeds (build-date.ts, record §5.10; `updates:status` answers it), main's dialog, the update.log appender and
+ * node:fs. Not handed: P7's start hook, and an audit sink (PR-6b's T6.10b sets that on the service). Never throws.
  */
 export function updateServiceDepsFor(env: UpdateServiceEnv): (layout: ResolvedPaths | null) => UpdateServiceDeps {
   const glibc = runtimeGlibcHook(env.process, glibcUnread)
@@ -62,7 +63,7 @@ export function updateServiceDepsFor(env: UpdateServiceEnv): (layout: ResolvedPa
         uiLanguage: mainUiLanguage
       },
       clock: { now: () => Date.now(), monotonic: () => performance.now() },
-      reads: { policy: readUpdatePolicy, driveRelease: readDriveRelease, rootApps, kitSupport: readKitSupport, buildDate: () => null },
+      reads: { policy: readUpdatePolicy, driveRelease: readDriveRelease, rootApps, kitSupport: readKitSupport, buildDate: () => embeddedBuildDate },
       chooseFile: (caller) => chooseUpdateFile(env, caller),
       appendLog: appendUpdateLogLine,
       fs: { bundle: NODE_BUNDLE_FS, staging: NODE_STAGING_FS, start: NODE_START_FS }
