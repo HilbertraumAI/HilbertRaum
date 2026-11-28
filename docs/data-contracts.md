@@ -2489,7 +2489,8 @@ the shape.
   and not at all while a run or a discard goes; `staged`, `notice` and `sweeping` are the service's own state. Off a
   prepared drive, or in a failure state with no layout, `status` answers `{ kind: 'none' }`, `discardStaged` refuses
   `UPD-NOT-A-DRIVE`, and `importFile` refuses `UPD-NOT-A-DRIVE` (in a build that embeds no key, `UPD-NOT-AVAILABLE`
-  instead, which it checks first), reading and writing nothing under the root (F-21).
+  instead, which it checks first; a call that carries a `confirmToken` answers `expired` before either, since no token
+  is ever live there), reading and writing nothing under the root (F-21).
 ✅ **`services/updates/bundle.ts`** — the update file's reader (F-16's reader side, frozen; golden
 `tests/fixtures/updates/golden.hrupdate`, `golden-win32-only.hrupdate` and `import/cases.json`, record §10.8).
 `readUpdateFile(path, options)` → `{ kind: 'checked', file }` or a `ContainerEnd` (`refused` with its
