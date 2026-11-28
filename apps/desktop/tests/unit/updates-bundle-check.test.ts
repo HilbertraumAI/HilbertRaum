@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -298,7 +298,15 @@ describe("checkBundleBuildDate: the expected text is the release commit's %cI as
     ['hour 24', '2027-03-15T24:00:00+00:00'],
     ['an offset of +01:60', '2027-03-15T10:30:00+01:60'],
     ['a time in 1999', '1999-12-31T23:59:59+00:00'],
-    ['a time in 2000 that is 1999 in UTC', '2000-01-01T00:30:00+01:00']
+    ['a time in 2000 that is 1999 in UTC', '2000-01-01T00:30:00+01:00'],
+    // T6.4a review B (uncovered): every bound of the real local time and of the UTC year.
+    ['an offset of +24:00', '2027-03-15T10:30:00+24:00'],
+    ['minute 60', '2027-03-15T10:60:00+01:00'],
+    ['second 60', '2027-03-15T10:30:60+01:00'],
+    ['month 00', '2027-00-15T10:30:00+01:00'],
+    ['month 13', '2027-13-15T10:30:00+01:00'],
+    ['day 00', '2027-03-00T10:30:00+01:00'],
+    ['a time in 9999 that is 10000 in UTC', '9999-12-31T23:59:59-00:01']
   ])('%s: expected-unreadable', (_label, committed) => {
     expect(checkBundleBuildDate([dated()], committed)).toEqual({ ok: false, failure: { check: 'build-date', reason: 'expected-unreadable' } })
   })
@@ -484,18 +492,83 @@ describe('the main bundle in out/main', () => {
   })
 })
 
+/**
+ * git's %cI of HEAD in `dir`, as the packed row below reads it for its expected date: the commit's own date, whatever a
+ * replace ref or a log.showSignature setting says (git's --no-replace-objects and --no-show-signature, as the build step;
+ * record §5.10, "The guard's build-date check"; T6.4a review B m-2, m-3).
+ */
+function releaseCommitDate(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return execFileSync('git', ['--no-replace-objects', '-C', dir, 'log', '-1', '--no-show-signature', '--format=%cI'], { encoding: 'utf8', env }).trim()
+}
+
+// The packed row's expected date runs only on a release leg, so its git call is held here on throw-away repositories
+// (no global or system git configuration; no key of any kind: the signature header is made-up text in SSH armour, for
+// which git finds no allowed signers and starts no program).
+describe("the packed row's release commit date is the commit's own (record §5.10, \"The guard's build-date check\")", () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'hilbertraum-bundle-check-git-'))
+  writeFileSync(join(scratch, 'gitconfig'), '')
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: join(scratch, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[name]
+  const IDENT = 'bundle-check-test <bundle-check-test@example.invalid>'
+  const gitIn = (cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}, input?: string): string =>
+    execFileSync('git', ['-c', `user.name=bundle-check-test`, '-c', 'user.email=bundle-check-test@example.invalid', ...args], {
+      cwd,
+      env: { ...env, GIT_COMMITTER_DATE: COMMITTED, GIT_AUTHOR_DATE: COMMITTED, ...extra },
+      encoding: 'utf8',
+      input,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
+    })
+  /** A repository with one commit dated COMMITTED. */
+  const repo = (label: string): string => {
+    const dir = mkdtempSync(join(scratch, `${label}-`))
+    writeFileSync(join(dir, 'README.md'), 'one\n')
+    gitIn(dir, ['init', '-q'])
+    gitIn(dir, ['add', '-A'])
+    gitIn(dir, ['commit', '-q', '-m', 'one'])
+    return dir
+  }
+
+  it("a replace ref on HEAD (another commit, dated 2031): the commit's own %cI", () => {
+    const dir = repo('replace')
+    const head = gitIn(dir, ['rev-parse', 'HEAD']).trim()
+    const other = gitIn(dir, ['commit-tree', `${head}^{tree}`, '-m', 'other'], { GIT_COMMITTER_DATE: '2031-01-01T00:00:00+00:00' }).trim()
+    gitIn(dir, ['replace', head, other])
+    expect(releaseCommitDate(dir, env)).toBe(COMMITTED)
+  })
+
+  it('log.showSignature and a HEAD whose commit carries a signature header: the %cI alone, no other line', () => {
+    const dir = repo('signed')
+    const tree = gitIn(dir, ['rev-parse', 'HEAD^{tree}']).trim()
+    const commit = [
+      `tree ${tree}`,
+      `author ${IDENT} 1805103000 +0100`,
+      `committer ${IDENT} 1805103000 +0100`,
+      'gpgsig -----BEGIN SSH SIGNATURE-----',
+      ' bWFkZS11cCB0ZXh0LCBubyBrZXk=',
+      ' -----END SSH SIGNATURE-----',
+      '',
+      'signed',
+      ''
+    ].join('\n')
+    gitIn(dir, ['update-ref', 'HEAD', gitIn(dir, ['hash-object', '-t', 'commit', '-w', '--stdin'], {}, commit).trim()])
+    gitIn(dir, ['config', 'log.showSignature', 'true'])
+    gitIn(dir, ['config', 'gpg.ssh.program', join(scratch, 'no-such-program').split(sep).join('/')])
+    expect(releaseCommitDate(dir, env)).toBe(COMMITTED)
+  })
+})
+
 // release.yml's build-win, build-mac and build-linux each name the app.asar they just packaged (packaging.test.ts reads the
 // three steps). A named file that is missing fails here, never skips. T6.4a: the same row checks the build date against
-// this checkout's release commit (record §5.10, "The guard's build-date check"): git's %cI of HEAD, read here, apart
-// from the build step's own reading (%ct). A leg whose tree a step changed before the build embeds null and fails here
-// with date-not-found; the leg's git status line before its build shows why.
+// this checkout's release commit (record §5.10, "The guard's build-date check"): git's %cI of HEAD, read here
+// (releaseCommitDate, above), apart from the build step's own reading (%ct). A leg whose tree a step changed before the
+// build embeds null and fails here with date-not-found; the leg's git status line before its build shows why.
 const packed = packedArtifact().asar
 describe('the packed app.asar a release build leg names', () => {
   it.skipIf(packed === undefined)(`its out/main embeds this checkout's keys.json once, byte for byte, and its release commit's date once (${PACKED_ENV.asar})`, () => {
     expect(packedPathExists(packed), `${PACKED_ENV.asar} names ${packed}`).toBe(true)
     const files = asarFilesUnder(packed!, 'out/main')
     expect(files.map((f) => f.path)).toContain('index.mjs')
-    const committed = execFileSync('git', ['-C', DESKTOP_ROOT, 'log', '-1', '--format=%cI'], { encoding: 'utf8' }).trim()
+    const committed = releaseCommitDate(DESKTOP_ROOT)
     expect({ keys: verdict(checkBundleKeys(files, readFileSync(KEYS_JSON))), date: dateVerdict(checkBundleBuildDate(files, committed)) }).toEqual({
       keys: 'ok',
       date: 'ok'

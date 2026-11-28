@@ -9,8 +9,9 @@
 // suppressed; a dismissal hides only the notice dismissed, for 6 months.
 //
 // Pure: it imports nothing and takes everything as arguments. It reads no clock, no file and no storage, so the renderer
-// and main may both call it. What does not read counts as null, never as an error, and it never throws. It parses no
-// stamp file itself: the caller hands it readKitSupport's month (CF-37).
+// and main may both call it. What does not read counts as null, never as an error, and it never throws, whatever it is
+// handed (an argument whose reading throws counts as null too). It reads no stamp file itself: the caller hands it
+// readKitSupport's month (CF-37), whose form it checks again.
 
 /** The three notice codes (record §5.8). */
 export type SupportNoticeCode = 'UPD-AGE-REMINDER' | 'UPD-SUPPORT-ENDED' | 'UPD-SUPPORT-ENDED-LONG-AGO'
@@ -162,13 +163,18 @@ function noticeFor(input: Record<string, unknown>, today: Day): SupportNotice | 
  * `UPD-AGE-REMINDER`; (5) none. Then the notice found is hidden while its own code's dismissal date is not after today
  * and today is before 6 months after it; another code's dismissal hides nothing, and a dismissal dated after today
  * hides nothing. A today that is no real date gives none; a dismissal that is no real date, or a `dismissed` that is no
- * plain object, counts as none. Never throws.
+ * plain object, counts as none. Never throws, for any argument at all: an argument whose reading throws (a getter, a
+ * Proxy that throws or is revoked) gives none (record §8.4 "The function").
  */
 export function supportNotice(input: SupportInput): SupportNotice | null {
-  if (!isObject(input)) return null
-  const today = realDate(own(input, 'today'))
-  if (today === null) return null
-  const notice = noticeFor(input, today)
-  if (notice === null || hiddenByDismissal(notice.code, own(input, 'dismissed'), today)) return null
-  return notice
+  try {
+    if (!isObject(input)) return null
+    const today = realDate(own(input, 'today'))
+    if (today === null) return null
+    const notice = noticeFor(input, today)
+    if (notice === null || hiddenByDismissal(notice.code, own(input, 'dismissed'), today)) return null
+    return notice
+  } catch {
+    return null
+  }
 }

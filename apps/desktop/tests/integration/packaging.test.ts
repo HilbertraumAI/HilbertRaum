@@ -827,9 +827,10 @@ describe("release.yml's three build legs check the packed app's embedded update 
 
 // App-update W-17 (T6.4a, L1-m-7; docs/app-updates.md §5.10, "The build-date step"): a build whose tree has tracked
 // changes embeds no release date, and the key check's step then fails with date-not-found. So each build leg prints git's
-// own list of tracked changes before its first build, where the log shows why. A plain command step: no new npx form
-// (#1067, #1068), no if:, nothing that could stop the leg on its own. The order is read here on every PR, since a workflow
-// change first runs at a dispatch or a tag.
+// own list of tracked changes directly before its first build, where the log shows why (a step between the two could
+// change a tracked file the print never saw; T6.4a review B m-7). A plain command step: no new npx form (#1067, #1068),
+// no if:, nothing that could stop the leg on its own. The order is read here on every PR, since a workflow change first
+// runs at a dispatch or a tag.
 describe("release.yml's three build legs print their tracked changes before the build (app-update W-17)", () => {
   interface Step {
     run?: string
@@ -838,7 +839,7 @@ describe("release.yml's three build legs print their tracked changes before the 
   const STATUS = 'git status --porcelain --untracked-files=no'
   const jobs = (parseYaml(repoText('.github', 'workflows', 'release.yml')) as { jobs: Record<string, { steps: Step[] }> }).jobs
 
-  it.each(['build-win', 'build-mac', 'build-linux'])('%s prints them once, after the checkout and before every electron-vite build', (job) => {
+  it.each(['build-win', 'build-mac', 'build-linux'])('%s prints them once, after the checkout, before every electron-vite build and directly before the first', (job) => {
     const steps = jobs[job]!.steps
     const found = steps.filter((s) => s.run === STATUS)
     expect(found, `${job} has one step that runs exactly ${STATUS}`).toHaveLength(1)
@@ -847,6 +848,10 @@ describe("release.yml's three build legs print their tracked changes before the 
     const checkoutAt = steps.findIndex((s) => (s.uses ?? '').startsWith('actions/checkout@'))
     const builds = steps.map((s, i) => (/\bnpm run (?:build|package)\b/.test(s.run ?? '') ? i : -1)).filter((i) => i >= 0)
     expect(builds.length, `${job} builds`).toBeGreaterThan(0)
-    expect({ afterCheckout: at > checkoutAt && checkoutAt >= 0, beforeEveryBuild: builds.every((i) => at < i) }).toEqual({ afterCheckout: true, beforeEveryBuild: true })
+    expect({ afterCheckout: at > checkoutAt && checkoutAt >= 0, beforeEveryBuild: builds.every((i) => at < i), directlyBeforeTheFirstBuild: builds[0] === at + 1 }).toEqual({
+      afterCheckout: true,
+      beforeEveryBuild: true,
+      directlyBeforeTheFirstBuild: true
+    })
   })
 })
