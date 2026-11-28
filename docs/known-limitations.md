@@ -4909,23 +4909,24 @@ reviews and measurements accepted as built, each limit also stated in the record
   must remove an `.incoming-<v>/` of thousands of members (an import of a file near the 4,096-member cap,
   cut by a kill) took 33.6 s for 4,096 members on an exFAT USB 3 stick; a drive someone filled with 2,000
   folders that each look staged took 41 s (they survive and are read again at every start) to 96 s (they
-  are removed), with the main process's memory up by 164 to 210 MB for a while. Meanwhile the import and
+  are removed), with the main process's memory up by 163 to 210 MB for a while. Meanwhile the import and
   the discard of a staged update answer "busy" (the status reports `sweeping`, which PR-6b's screens show),
   and each status read reaches the drive behind the removals, holding the main process up to 67 ms as
-  measured. A genuine drive (up to 400 members) finished in 2.4 to 3.5 s, inside the wait
+  measured (by a 1 ms interval; 88.8 ms by the event-loop delay monitor). A genuine drive (up to 400 members) finished in 2.4 to 3.5 s, inside the wait
   ([`app-updates.md`](app-updates.md) §4.5 "The start step", §11.3).
 - **A probe leftover that another program holds on exFAT reads as a read-only drive.** exFAT keeps a
   deleted file's name until the program holding it lets go, so the import's one-byte write check waits
   out its retry (about 12 s on Windows) and then says the drive is read-only: a misleading message for a
   stuck scanner, never a write through a link ([`app-updates.md`](app-updates.md) §4.2, the probe's row).
 - **An update file held by a cloud provider or a lease is not measured.** On macOS and Linux the file is
-  opened without waiting on a pipe, which does not cover every regular file: should such an open wait,
-  it waits off the main process and the import stays at "checking" until it returns
+  opened without waiting on a pipe, which does not cover every regular file, and on any system a read of
+  such a file can wait for it: such a call waits off the main process, the import stays where it was
+  ("checking", or copying) until it returns, and meanwhile another import or a discard answers "busy"
   ([`app-updates.md`](app-updates.md) §4.5 "The update file's open").
 - **Staging's order holds for a kill, not for a power cut.** A drive pulled, or a power cut, before the
   system has written its cache can lose a just-staged update or bring back a discarded one (never one
-  this version did not verify); on macOS and Linux a folder sync that fails after the commit marker's
-  rename refuses the commit while the marker stands, so when the clean-up after it fails too, the next
+  this version did not verify); on macOS and Linux a folder sync, or the folder's open for it, that fails
+  after the commit marker's rename refuses the commit while the marker stands, so when the clean-up after it fails too, the next
   start offers an update the import reported as refused. The folder sync on exFAT under macOS and Linux
   is first run on real media before release 1 ([`app-updates.md`](app-updates.md) §4.5 "The commit",
   §11.3).

@@ -31,7 +31,8 @@
 // What it does not do: the key set, the policy, the order of a run's checks, the dialog, the reader, the old-file
 // stop, the status, the start step's synchronous part, its wait and every update.log line are the update service's
 // (T6.2 part 2); the channels are T6.3's. It writes nothing outside `updates/`, and before the data pass nothing there
-// but `updates/` itself when it is missing and the probe's own name, which the probe deletes again. It does not see a
+// but `updates/` itself when it is missing and the probe's own name, which the probe deletes again unless another
+// program holds it (table A.1's row). It does not see a
 // mount point under `updates/` (a bind mount, a FUSE mount or a disk image attached there reads as a plain folder, and
 // some of these need no root; T6.9 security L-2), and on Windows, which has no O_NOFOLLOW, a link planted between an lstat
 // and an open is caught only by the descriptor's check. It takes the file-system calls from its caller (NODE_STAGING_FS: node's own,

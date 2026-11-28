@@ -813,7 +813,8 @@ class Service implements UpdateService {
   }
 
   /** A run may have removed the staged update: none is claimed from here (null while the drive still holds it is the
-   *  safe direction; the next start reads again). The run's end ends the drive reads (§3.5). */
+   *  safe direction; the next start reads again). It sets `staged` to null and nothing else; the run's drive reads end
+   *  where importFile ends the run, in its `finally`, and after a commit (§3.5). */
   private stagedMayBeGone(): void {
     this.staged = null
   }

@@ -57,7 +57,8 @@
 // folder of the copy) keeps the entry and both markers and a second `remove` finishes it. Only then
 // `git worktree remove --force` drops the copy's own entry (git drops an entry whose folder is gone, as for a copy
 // deleted by hand); never `git worktree prune`, which would drop other sessions' stale entries. Afterwards the folder
-// must be gone and the worktree list must be the list before it without the copy.
+// must be gone and the worktree list must still hold every entry of the list before it but the copy's: an entry another
+// session added meanwhile is no failure, one dropped meanwhile (a prune) is.
 //
 // Every git call runs without the variables that point git at another repository, index or object store, or change
 // how it finds one (`GIT_ENV_DROPPED`: git's own list of the variables local to a repository, which git clears itself
@@ -149,7 +150,7 @@ const NOT_UNLINKED = 'a link could not be removed by its name'
 const LINK_IN_WALK = 'a link appeared in the copy while it was removed'
 const notCleared = (code) => `the copy could not be removed completely (${code}); end every process that uses it, then run remove again`
 const LEFT_BEHIND = 'the copy folder is still there after the removal'
-const LIST_CHANGED = 'the worktree list after the removal is not the list before it'
+const ENTRY_DROPPED = "the worktree list after the removal lacks an entry other than the copy's"
 const BAD_VERSION = 'the version is not MAJOR.MINOR.PATCH'
 
 // ---- git, paths
@@ -545,8 +546,10 @@ export function removeScratchCopy({ repo, dir } = {}) {
     if (removed.status !== 0) refuse(`git could not remove the worktree (exit ${removed.status})`)
   }
   if (lstatOrNull(path) !== null) refuse(LEFT_BEHIND)
-  const after = worktrees(source).map((w) => comparable(w.path))
-  if (after.join('\n') !== before.join('\n')) refuse(LIST_CHANGED)
+  // What this check is for: no entry but the copy's was dropped. Another session of the checkout may add a worktree
+  // meanwhile, which is no failure; an entry gone meanwhile (a prune, a removal) is refused, as the walk drops none.
+  const after = new Set(worktrees(source).map((w) => comparable(w.path)))
+  if (before.some((entry) => !after.has(entry))) refuse(ENTRY_DROPPED)
 }
 
 // ---- the build version (T7.7a)

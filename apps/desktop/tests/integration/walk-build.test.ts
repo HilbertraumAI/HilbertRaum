@@ -37,6 +37,8 @@ import { REPO_ROOT } from '../helpers/repo-files'
 // Fix round 1 (review M-1, m-1 to m-4): each copy carries the walk's marker, the removal acts only on a marked copy
 // and finishes one that a removal left half done, git runs without the variables that steer it to another repository,
 // and the command line works when node reaches it through a link.
+// PR-6a's exit fix round (code review L-1): the removal's last check refuses only when the worktree list after it lacks
+// an entry other than the copy's, since another session of the checkout may add a worktree meanwhile.
 
 interface ScratchLink {
   readonly path: string
@@ -1024,6 +1026,75 @@ describe('the command line (plain Node: the key reader loads through type stripp
     expect(readdirSync(root)).toEqual([])
     expect(run('make', '--rev', 'HEAD').status).toBe(2)
     expect(run().status).toBe(2)
+  })
+
+  // PR-6a exit (code review L-1): another session of the checkout changes the source's worktree list while a walk
+  // removes its copy (a `git worktree add`, or a `gc --auto` that prunes a stale entry). The script runs unchanged;
+  // node loads a preload first that runs the other session's git call once, right after the copy's own
+  // `git worktree remove`, which is between the removal's two listings.
+  /** The preload: `action` run by git in `repo` (this file's git config) after the script's `worktree remove`, its exit
+   *  status appended to `log`. */
+  function anotherSession(label: string, repo: string, action: readonly string[]): { preload: string; log: string } {
+    const dir = scratch(label)
+    const preload = join(dir, 'another-session.cjs')
+    const log = join(dir, 'another-session.txt')
+    const text = [
+      "'use strict'",
+      "const childProcess = require('node:child_process')",
+      "const { appendFileSync } = require('node:fs')",
+      "const { syncBuiltinESMExports } = require('node:module')",
+      `const [repo, action, log, config] = ${JSON.stringify([repo, action, log, emptyConfig])}`,
+      'const real = childProcess.spawnSync',
+      'childProcess.spawnSync = function (command, args, options) {',
+      '  const answer = real.call(this, command, args, options)',
+      "  if (command === 'git' && Array.isArray(args) && args[2] === 'worktree' && args[3] === 'remove') {",
+      "    const env = { ...process.env, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' }",
+      "    for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[name]",
+      "    const done = real('git', ['-C', repo, ...action], { env, stdio: 'ignore', windowsHide: true })",
+      "    appendFileSync(log, String(done.status) + '\\n')",
+      '  }',
+      '  return answer',
+      '}',
+      'syncBuiltinESMExports()',
+      ''
+    ].join('\n')
+    writeFileSync(preload, text)
+    return { preload, log }
+  }
+  const removeWith = (preload: string, repo: string, dir: string): ReturnType<typeof spawnSync> =>
+    spawnSync(process.execPath, ['--require', preload, SCRIPT, 'remove', '--repo', repo, '--dir', dir], { encoding: 'utf8' })
+
+  it('remove exits 0 when another session adds a worktree during the removal: the copy gone, the added worktree kept', async () => {
+    const src = makeSource('l1-added')
+    const copy = await (await walkBuild()).makeScratchCopy({ repo: src.repo, rev: 'HEAD', root: scratch('l1-added-root'), publicKeys: [publicKey()] })
+    const theirs = join(scratch('l1-added-theirs'), 'theirs')
+    const session = anotherSession('l1-added-session', src.repo, ['worktree', 'add', '-q', '--detach', theirs, src.first])
+    const removed = removeWith(session.preload, src.repo, copy.dir)
+    expect(readFileSync(session.log, 'utf8')).toBe('0\n') // the other session's add ran, once, between the two listings
+    expect([removed.status, ownLines(removed.stderr)]).toEqual([0, []])
+    expect(existsSync(copy.dir)).toBe(false)
+    expect(worktreeBlock(src, copy.dir)).toBeUndefined()
+    expect(worktreeBlock(src, theirs)?.split('\n')).toContain('detached')
+    expect(readFileSync(join(theirs, 'README.md'), 'utf8')).toBe('one\n')
+    expect(readdirSync(join(src.repo, 'node_modules'))).toEqual(['sentinel.txt'])
+    expect(readdirSync(join(src.repo, 'apps', 'desktop', 'node_modules'))).toEqual(['sentinel.txt'])
+  })
+
+  it("remove exits 1 with its one line when another session's prune drops a stale entry during the removal (the copy is gone all the same)", async () => {
+    const src = makeSource('l1-dropped')
+    const stale = join(scratch('l1-dropped-stale'), 'w')
+    src.git('worktree', 'add', '-q', '--detach', stale, src.first)
+    rmSync(stale, { recursive: true, force: true }) // a worktree of the first commit holds no link
+    expect(worktreeBlock(src, stale)).toMatch(/\nprunable /)
+    const copy = await (await walkBuild()).makeScratchCopy({ repo: src.repo, rev: 'HEAD', root: scratch('l1-dropped-root'), publicKeys: [publicKey()] })
+    const session = anotherSession('l1-dropped-session', src.repo, ['worktree', 'prune'])
+    const removed = removeWith(session.preload, src.repo, copy.dir)
+    expect(readFileSync(session.log, 'utf8')).toBe('0\n')
+    expect([removed.status, ownLines(removed.stderr)]).toEqual([1, ["walk-build: the worktree list after the removal lacks an entry other than the copy's"]])
+    expect(existsSync(copy.dir)).toBe(false)
+    expect(worktreeBlock(src, copy.dir)).toBeUndefined()
+    expect(worktreeBlock(src, stale)).toBeUndefined()
+    expect(readdirSync(join(src.repo, 'node_modules'))).toEqual(['sentinel.txt'])
   })
 
   // Fix F3: node runs a script reached through a link from its real path, so a check that compared the two spellings

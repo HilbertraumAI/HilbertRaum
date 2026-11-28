@@ -13,10 +13,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // privilege needed) and, where this machine allows one, a symbolic link; a symbolic link to a file needs Windows'
 // symbolic-link privilege, so those cases run where it can be made (CI's ubuntu and macOS legs at least).
 //
-// Two seams, both module imports replaced by vi.mock and nothing else: node:timers/promises' setTimeout (the retry waits
-// of fs-retry.ts's schedule and of the probe return at once and are recorded) and node:crypto's randomBytes (a queue of
-// scripted answers for the cleared line's token, the real function once the queue is empty).
-const seams = vi.hoisted(() => ({ waits: [] as number[], tokens: [] as Buffer[] }))
+// Three seams, each a module import replaced by vi.mock and nothing else: node:timers/promises' setTimeout (the retry
+// waits of fs-retry.ts's schedule and of the probe return at once and are recorded), node:crypto's randomBytes (a queue of
+// scripted answers for the cleared line's token, the real function once the queue is empty) and node:fs/promises'
+// rename (a queue of scripted refusals for fs-retry.ts's renameWithRetry in the row that compares its waits with
+// staging's, the real function once the queue is empty).
+const seams = vi.hoisted(() => ({ waits: [] as number[], tokens: [] as Buffer[], renameRefusals: [] as string[] }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:fs/promises')>()
+  const rename = (async (from, to) => {
+    const code = seams.renameRefusals.shift()
+    if (code !== undefined) throw Object.assign(new Error(`scripted ${code}`), { code, syscall: 'rename' })
+    return orig.rename(from, to)
+  }) as typeof orig.rename
+  const mocked = { ...orig, rename }
+  return { ...mocked, default: mocked }
+})
 vi.mock('node:timers/promises', async (importOriginal) => {
   const orig = await importOriginal<typeof import('node:timers/promises')>()
   const mocked = {
@@ -40,6 +52,7 @@ import { appendFileSync, constants, linkSync, lstatSync, mkdirSync, mkdtempSync,
 import { open as openFile, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
+import { renameWithRetry } from '../../src/main/services/fs-retry'
 import { readUpdateFile, type BundleFileSystem, type CheckedUpdateFile } from '../../src/main/services/updates/bundle'
 import type { UpdateKey } from '../../src/main/services/updates/envelope'
 import { formatRegisteredLine } from '../../src/main/services/updates/update-log'
@@ -79,6 +92,7 @@ const TEST_KEYS = keySet([signers.test.spki.toString('base64')])
 afterEach(() => {
   seams.waits = []
   seams.tokens = []
+  seams.renameRefusals = []
 })
 
 // ---- the case table's host (cases.json `schema.host`) and the payload check's input: the shared inputs of
@@ -982,6 +996,42 @@ describe('Windows retries a held name; macOS and Linux do not (record §4.2, §4
     expect(await carryOutSweep(ctx, plan)).toEqual([{ reason: 'incoming', cause: { code: 'EBUSY', syscall: 'unlink' } }])
     expect(seams.waits).toEqual([])
     expect(isAbsent(drive.at('updates/staging/.incoming-1.1.0/a.exe'))).toBe(false)
+  })
+
+  // PR-6a exit (code review L-2): fs-retry.ts exports renameWithRetry's budget but not its waits (50 ms doubling to 1 s),
+  // so staging.ts types them again for each call it retries "as §4.5's moves are" (table A.1's probe, the data pass's
+  // mkdir in §4.5 "Moves"). Each such call held throughout on Windows must wait as a held move does, wait for wait, so a
+  // change on either side turns this row red.
+  it('every call staging retries as the moves are, held throughout on Windows, waits as renameWithRetry\u{2019}s held move does, wait for wait', async () => {
+    seams.renameRefusals = Array.from({ length: 100 }, () => 'EBUSY')
+    await expect(renameWithRetry(join(tmpdir(), 'hr-held-from'), join(tmpdir(), 'hr-held-to'), 'win32')).rejects.toMatchObject({ code: 'EBUSY' })
+    expect(seams.renameRefusals.length).toBeGreaterThan(0) // the move gave up with refusals left: held throughout
+    seams.renameRefusals = []
+    const move = seams.waits.splice(0)
+    expect(move.length).toBeGreaterThan(5)
+    const waitsOf = async (run: () => Promise<unknown>): Promise<number[]> => {
+      seams.waits = []
+      await run()
+      return seams.waits.splice(0)
+    }
+    /** The probe (table A.1) on Windows with one of its calls held throughout; `leftover`: a file at its name first. */
+    const probeWith = (rule: Rule, leftover: boolean) => async (): Promise<unknown> => {
+      const drive = freshDrive()
+      mkdirSync(drive.at('updates'))
+      if (leftover) writeFileSync(drive.at('updates/.write-probe'), 'old')
+      return checkDriveBeforeDialog(contextOf(drive, recorded(drive, [rule]), 'win32'))
+    }
+    const mkdirHeld = async (): Promise<unknown> => {
+      const drive = freshDrive()
+      plantStaged(drive, '1.1.0', 'std')
+      return reimportStart(drive, recorded(drive, [{ ...mkdirOfVersion('EBUSY'), times: Infinity }]), 'win32')
+    }
+    expect({
+      removal: await waitsOf(probeWith(held('unlink', Infinity), true)),
+      open: await waitsOf(probeWith(held('open', Infinity), false)),
+      finalDelete: await waitsOf(probeWith(held('unlink', Infinity), false)),
+      mkdir: await waitsOf(mkdirHeld)
+    }).toEqual({ removal: move, open: move, finalDelete: move, mkdir: move })
   })
 })
 

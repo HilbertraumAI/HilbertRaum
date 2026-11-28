@@ -4499,21 +4499,24 @@ none calls `requireUnlocked()` or asks the lock state. What keeps them narrow in
   old-file question, minted in main and bound to the picked file); of `updates:discardStaged`'s only an
   own string `version`, compared byte for byte with the staged version and never used to build a path.
 - **What each may read and write**, and only on a prepared drive (on any other root, and in a failure
-  state with no layout, `status` answers "no drive" and the import and the discard refuse
-  `UPD-NOT-A-DRIVE`, reading and writing nothing under the root or the user-data folder; F-21):
+  state with no layout, `status` answers "no drive", the discard refuses `UPD-NOT-A-DRIVE` and the
+  import refuses `UPD-NOT-A-DRIVE` (in a build that embeds no key, `UPD-NOT-AVAILABLE` instead, which
+  it checks first), reading and writing nothing under the root or the user-data folder; F-21):
   - `updates:importFile` reads the picked file through one read-only descriptor, `config/policy.json`'s
     update keys, `config/drive-release.json` and the drive root's listing (for the version rule), what
     is under `updates/` (`staging/`, `applying/`, `last-result.txt`, `last-result.seen`) and the free
-    space; it writes only under `updates/`: `updates/` itself when it is missing, the one-byte probe
-    `.write-probe` (deleted again), `staging/` and its folders, the `cleared` line of
+    space, and at its start what `updates:status` reads (`config/kit-support.txt` among it); it writes
+    only under `updates/`: `updates/` itself when it is missing, the one-byte probe `.write-probe`
+    (deleted again unless another program holds it), `staging/` and its folders, the `cleared` line of
     `last-result.txt`, and its `update.log` line;
-  - `updates:status` reads `updates/` and `updates/applying/` (by listing and `lstat`),
-    `config/policy.json`'s update keys and `config/kit-support.txt`, at most once per 250 ms and nothing
-    while a run or a discard goes, and writes nothing;
+  - `updates:status` reads the drive root's listing, `updates/` (`lstat` and the real-folder test) and
+    `updates/applying/` (one `lstat`), `config/policy.json`'s update keys and `config/kit-support.txt`,
+    at most once per 250 ms and nothing while a run or a discard goes, and writes nothing;
   - `updates:cancel` reads and writes nothing on the drive; the run it stops removes its own staging
     folders;
-  - `updates:discardStaged` removes one `updates/staging/<v>/` (its `staged.json` first) and writes its
-    `update.log` line;
+  - `updates:discardStaged` reads at its start what `updates:status` reads, lists the root, `updates/`
+    and `updates/staging/` and `lstat`s `updates/applying/`, then removes one `updates/staging/<v>/`
+    (its `staged.json` first) and writes its `update.log` line;
   - none reads or writes anything under `workspace/`, and nothing is written outside `updates/`. The
     start step's sweep, at every start of a prepared drive and so before any unlock, reads
     `updates/staging/` and removes what record §4.5 decides, by awaited calls that never hold the main
@@ -4525,11 +4528,13 @@ none calls `requireUnlocked()` or asks the lock state. What keeps them narrow in
   When the failure state cannot register the update part (all or none), every update channel answers
   Electron's own refusal, which names only the channel.
 
-**What an update file meets** (record §4.3–§4.5). Nothing of the file is used before its envelope
-verifies: the reader opens it once, read-only (`O_NONBLOCK` on macOS and Linux, so a named pipe cannot
-hold the open; a regular file by `fstat` on the descriptor), reads member 0 whole (at most 4 MiB),
-verifies it with the embedded keys and checks the payload on the verified bytes, then walks the headers
-(no member data) before anything is written. A member name is used only once it equals a signed
+**What an update file meets** (record §4.3–§4.5). Nothing after member 0 is read, and nothing is
+written or taken as true, before the envelope verifies: of the unverified file the reader uses only its
+length and its first 512-byte block (member 0's header), to refuse it or to read member 0. It opens the
+file once, read-only (`O_NONBLOCK` on macOS and Linux, so a named pipe cannot hold the open; a regular
+file by `fstat` on the descriptor), reads member 0 whole (at most 4 MiB), verifies it with the embedded
+keys and checks the payload on the verified bytes, then walks the headers (no member data) before
+anything is written. A member name is used only once it equals a signed
 `files[]` name byte for byte, so it keeps the member-name rule (no separator, no `..`), and each member is
 written only into the two folders staging made for it, hashed while it is written and moved only when its
 hash matches. The verification runs on the main process's thread, with no worker (CF-47): a hostile file
@@ -4538,8 +4543,8 @@ listed, read, written or removed through a link, a junction or a folder found el
 limit, not a boundary** (whoever can plant a link there can already write the drive), which narrows the
 window between a test and the call after it without closing it, and which does not see a mount point
 (a bind mount, a FUSE mount or a disk image attached there; some need no root). A refusal before the
-data pass creates nothing under `updates/` but the probe's own name, deleted again; a refusal or a
-cancel from the data pass on removes what it wrote.
+data pass creates nothing under `updates/` but the probe's own name, deleted again unless another
+program holds it; a refusal or a cancel from the data pass on removes what it wrote.
 
 **The import's lines in the plaintext `update.log`** (F-11; "The one plaintext log on the drive"
 above). The five import events are registered in `UPDATE_LOG_EVENTS` like the others, each key with

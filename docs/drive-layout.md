@@ -57,7 +57,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   │   │                  #   staged.json (the commit marker); each written as <name>.tmp + a rename
 │   │   └── .incoming-<v>/ #   the members of <v> while they are written and hashed; removed by the
 │   │                      #   commit, a refusal, a cancel or the next start's sweep
-│   ├── .write-probe       #   transient: each import writes one byte here and deletes it again
+│   ├── .write-probe       #   transient: an import's write check writes one byte here and deletes it
+│   │                      #   again (a file another program holds may stay until the next import)
 │   └── last-result.txt    #   the update attempts' outcome lines (the apply, the start files and the app
 │                          #   write them, P7); an import's commit appends `cleared <v> <token>` when the
 │                          #   file still marks <v> (app-updates.md §4.5, §5.3)
@@ -160,7 +161,8 @@ HILBERTRAUM/
 │                                                #   files/, hilbertraum-release.dsse.json, staged.txt and, last,
 │                                                #   staged.json, at most one; .incoming-<v>/ while its members are
 │                                                #   written and hashed; app-updates.md §4.2, §4.5); .write-probe (an
-│                                                #   import's one-byte check, deleted again); last-result.txt (P7's;
+│                                                #   import's one-byte check, deleted again unless another program
+│                                                #   holds it); last-result.txt (P7's;
 │                                                #   an import's commit appends its `cleared` line) — none on a sold drive: the sell
 │                                                #   gate refuses any entry in it, an empty folder included (a Kit
 │                                                #   that was started; app-update W-33, T3.8); an empty updates/
