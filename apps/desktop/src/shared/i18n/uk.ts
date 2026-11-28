@@ -3113,8 +3113,8 @@ export const uk: UiCatalog<'uk'> = {
   'main.dialog.exportLog': 'Зберегти журнали діагностики',
   'main.dialog.filterDocuments': 'Документи',
   'main.dialog.filterAll': 'Усі файли',
-  'main.dialog.importUpdate': 'Install update from a file',
-  'main.dialog.filterUpdate': 'Update file',
+  'main.dialog.importUpdate': 'Встановити оновлення з файлу',
+  'main.dialog.filterUpdate': 'Файл оновлення',
   'main.zim.unavailable': 'Пакети знань недоступні в цьому сеансі.',
   'main.zim.articleUnavailable':
     'Ця стаття зараз недоступна, тому її не вдалося зберегти. Можливо, пакет вимкнено, прибрано ' +

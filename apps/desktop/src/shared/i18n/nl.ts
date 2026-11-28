@@ -3071,8 +3071,8 @@ export const nl: UiCatalog<'nl'> = {
   'main.dialog.exportLog': 'Logbestanden voor diagnose opslaan',
   'main.dialog.filterDocuments': 'Documenten',
   'main.dialog.filterAll': 'Alle bestanden',
-  'main.dialog.importUpdate': 'Install update from a file',
-  'main.dialog.filterUpdate': 'Update file',
+  'main.dialog.importUpdate': 'Update installeren vanuit bestand',
+  'main.dialog.filterUpdate': 'Updatebestand',
   'main.zim.unavailable': 'Kennispakketten zijn in deze sessie niet beschikbaar.',
   'main.zim.articleUnavailable':
     'Dit artikel is nu niet beschikbaar, dus het kon niet worden opgeslagen. Mogelijk is het ' +

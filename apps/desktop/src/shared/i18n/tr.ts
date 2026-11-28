@@ -2916,8 +2916,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.dialog.exportLog': 'Tanılama günlüklerini kaydet',
   'main.dialog.filterDocuments': 'Belgeler',
   'main.dialog.filterAll': 'Tüm dosyalar',
-  'main.dialog.importUpdate': 'Install update from a file',
-  'main.dialog.filterUpdate': 'Update file',
+  'main.dialog.importUpdate': 'Dosyadan güncelleme kur',
+  'main.dialog.filterUpdate': 'Güncelleme dosyası',
   'main.zim.unavailable': 'Bilgi paketleri bu oturumda kullanılamıyor.',
   'main.zim.articleUnavailable':
     'Bu makale şu anda kullanılamadığı için kaydedilemedi. Paket devre dışı bırakılmış, ' +
