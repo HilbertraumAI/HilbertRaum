@@ -42,7 +42,7 @@ vi.mock('../../src/main/services/updates/build-date', () => ({ embeddedBuildDate
 
 import { updateServiceDepsFor, type UpdateServiceEnv } from '../../src/main/update-service-deps'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
-import { initLogging, readLogTail } from '../../src/main/services/logging'
+import { initLogging, log, readLogTail } from '../../src/main/services/logging'
 import { readUpdatePolicy } from '../../src/main/services/policy'
 import { readDriveRelease, rootApps } from '../../src/main/services/updates/drive-release'
 import { embeddedKeySet } from '../../src/main/services/updates/keys'
@@ -266,6 +266,16 @@ describe('update-service-deps: the version this app runs as, and the keys (T6.3 
     expect(linesOf(VERSION_LINE)).toEqual(['']) // the reason alone: no version text, no field
     depsFor(null)
     expect(linesOf(VERSION_LINE)).toEqual(['', ''])
+  })
+
+  // T6.9 lens 3 note: the module never throws, so the start and the failure state both get their service; the line is
+  // best-effort, as the glibc hook's is.
+  it('a logger that throws on that line changes nothing: the deps are built, no key, 0.0.0', () => {
+    vi.spyOn(log, 'warn').mockImplementation(() => {
+      throw new Error('the log is gone')
+    })
+    const deps = updateServiceDepsFor(envOf({ version: 'not-a-version' }).env)(null)
+    expect({ keys: deps.keys, runningVersion: deps.runningVersion }).toEqual({ keys: [], runningVersion: parseSemver('0.0.0') })
   })
 })
 

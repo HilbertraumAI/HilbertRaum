@@ -702,11 +702,12 @@ class Service implements UpdateService {
 
   async cancel(): Promise<CancelAnswer> {
     await this.wait
+    // Every cancel spends the live confirmation token (§3.5 updates:cancel, "The old-file confirmation"; T6.9 lens 3 m-1,
+    // m-2): a run cancelled before its dialog leaves no earlier one to redeem, and a run past its last check point that
+    // answers confirm after a `stopping` hands on a spent one.
+    this.token = null
     const run = this.run
-    if (run === null) {
-      this.token = null
-      return { kind: 'idle' }
-    }
+    if (run === null) return { kind: 'idle' }
     if (run.status.state === 'committing') return { kind: 'committing' }
     run.cancel = true
     return { kind: 'stopping' }

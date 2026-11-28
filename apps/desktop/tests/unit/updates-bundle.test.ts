@@ -59,6 +59,8 @@ const injected = (code: string, syscall: string): Error => Object.assign(new Err
 interface Faults {
   openUpdateFile?: unknown
   stat?: unknown
+  /** The descriptor's stat answers "not a regular file" (as a pipe's, a device's or a folder's would), its size kept. */
+  statNotAFile?: boolean
   afterStat?: () => void
   /** Called after each read of the update file, with where it read and how much it got. */
   afterRead?: (position: number, bytesRead: number) => void
@@ -109,7 +111,7 @@ function recorder(faults: Faults = {}): Recorder {
       if (faults.stat !== undefined) throw faults.stat
       const stats = await real.stat()
       faults.afterStat?.()
-      return stats
+      return faults.statNotAFile ? { isFile: () => false, size: stats.size } : stats
     },
     async read(buffer, offset, length, position) {
       if (rec.dataPass && faults.readInDataPass !== undefined && rec.reads.filter((r) => r.dataPass).length >= (faults.readInDataPassAfter ?? 0)) throw faults.readInDataPass
@@ -716,6 +718,18 @@ describe('a file-system call that fails is a typed verdict, never a throw (recor
     const run = await faultedRun({ unlink: injected('EPERM', 'unlink') }, 'data-hash-mismatch')
     expect(verdict(run.stage)).toEqual({ kind: 'refused', code: 'UPD-FILE-DAMAGED', params: {}, cause: null })
     expect(readdirSync(run.staging!.filesDir)).not.toContain('notes.txt')
+  })
+})
+
+// T6.9 lens 1 m-4: the case table's open-named-pipe holds this branch with a real FIFO (and the open's O_NONBLOCK) on
+// macOS and Linux only, so on Windows no row held it. Here the descriptor's own stat answers "not a regular file" for the
+// standard case's file, on every system; O_NONBLOCK stays that POSIX row's.
+describe('a descriptor that is no regular file is UPD-NOT-AN-UPDATE before a byte is read, on every system (record §4.5 "The update file\u{2019}s open")', () => {
+  it('the fstat of the opened file answers "not a regular file": refused UPD-NOT-AN-UPDATE, nothing read, the handle closed, nothing written', async () => {
+    const run = await faultedRun({ statNotAFile: true })
+    expect(verdict(run.read)).toEqual({ kind: 'refused', code: 'UPD-NOT-AN-UPDATE', params: {}, cause: null })
+    expect({ reads: run.rec.reads, opened: run.rec.opened, drivePaths: run.rec.drivePaths }).toEqual({ reads: [], opened: 1, drivePaths: [] })
+    expect(run.read.kind === 'refused' ? { payload: run.read.payload, stale: run.read.staleDriveVersion } : null).toEqual({ payload: null, stale: null })
   })
 })
 

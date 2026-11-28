@@ -229,12 +229,13 @@ export const START_FILE_NAMES: readonly string[] = ['Start HilbertRaum.cmd', 'St
  * Release 1's root globs for app files (record §4.4), each with its own start file's case rule (T6.2, CF-33): the
  * segment between prefix and suffix is the carried version. `foldCase`: the Windows start file's `for` glob matches
  * without case on the file systems a Kit uses, so its name is compared after an ASCII fold of the glob's fixed parts
- * (the glob below is written folded); the macOS and Linux start files are bash globs, which match byte for byte.
+ * (the glob below is written folded); the macOS and Linux start files are bash globs, which match byte for byte. The
+ * star matches any characters, line ends included, as cmd's and bash's `*` do (the `s` flag; T6.9 lens 1 m-2).
  */
 const APP_FILE_NAMES: ReadonlyArray<readonly [DriveSystem, RegExp, boolean]> = [
-  ['win32', /^hilbertraum-(.*)-portable\.exe$/, true],
-  ['darwin', /^HilbertRaum-(.*)-mac-arm64\.app\.zip$/, false],
-  ['linux', /^HilbertRaum-(.*)\.AppImage$/, false]
+  ['win32', /^hilbertraum-(.*)-portable\.exe$/s, true],
+  ['darwin', /^HilbertRaum-(.*)-mac-arm64\.app\.zip$/s, false],
+  ['linux', /^HilbertRaum-(.*)\.AppImage$/s, false]
 ]
 
 /** The globs' common prefix, `HilbertRaum-`: where each name's version segment starts. */

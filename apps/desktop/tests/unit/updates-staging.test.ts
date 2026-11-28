@@ -924,6 +924,54 @@ describe('Windows retries a held name; macOS and Linux do not (record §4.2, §4
     }
   })
 
+  // T6.9 lens 2 m-1 (record §4.5 "Moves": "On Windows the data pass's mkdir of a folder takes the same retry for those
+  // codes (EEXIST still answers at once)"): exFAT keeps a removed folder's name pending while another program holds it,
+  // so a re-import's mkdir right after its removal can answer EPERM for a moment. Each attempt stays one plain mkdir.
+  /** A re-import of 1.1.0 (staged before) through staging's steps to the data pass's start, on `platform`. */
+  async function reimportStart(drive: Drive, rec: Recorded, platform: NodeJS.Platform) {
+    const ctx = contextOf(drive, rec, platform)
+    const pre = await checkDriveBeforeDialog(ctx)
+    if (pre.kind !== 'ready') throw new Error(JSON.stringify(pre))
+    const post = await checkBeforeDataPass(ctx, pre.drive, { version: '1.1.0', present: [{ name: 'apply.cmd', size: 22 }] })
+    if (post.kind !== 'ready') throw new Error(JSON.stringify(post))
+    return startDataPass(ctx, pre.drive, post.targets, '1.1.0')
+  }
+  const mkdirOfVersion = (code: string): Rule => ({ call: 'mkdir', when: (rel) => rel === 'updates/staging/1.1.0', error: injected(code, 'mkdir'), times: 1 })
+
+  it('a re-import whose mkdir of <v>/ right after its removal answers EPERM once, on Windows: tried again as the moves are, then staged', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [mkdirOfVersion('EPERM')])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toMatchObject({ kind: 'committed' })
+    } finally {
+      await file.close()
+    }
+    expect(seams.waits).toEqual([50])
+    expect(rec.calls.filter((call) => call === 'mkdir updates/staging/1.1.0')).toHaveLength(2)
+    expect(readFileSync(drive.at('updates/staging/1.1.0/staged.json'), 'latin1')).toBe(ACCEPT_STD().after!.stagedJson)
+  })
+
+  it('the same EPERM on macOS and Linux is final at once: UPD-CANT-WRITE-DRIVE with its cause, no wait, neither folder left', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [mkdirOfVersion('EPERM')])
+    expect(await reimportStart(drive, rec, 'linux')).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EPERM', syscall: 'mkdir' }, link: null })
+    expect(seams.waits).toEqual([])
+    expect(rec.calls.filter((call) => call === 'mkdir updates/staging/1.1.0')).toHaveLength(1)
+    expect({ incoming: isAbsent(drive.at('updates/staging/.incoming-1.1.0')), version: isAbsent(drive.at('updates/staging/1.1.0')) }).toEqual({ incoming: true, version: true })
+  })
+
+  it('a mkdir of <v>/ that answers EEXIST on Windows is final at once: UPD-CANT-WRITE-DRIVE link=version, no wait, one mkdir', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const rec = recorded(drive, [mkdirOfVersion('EEXIST')])
+    expect(await reimportStart(drive, rec, 'win32')).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EEXIST', syscall: 'mkdir' }, link: 'version' })
+    expect(seams.waits).toEqual([])
+    expect(rec.calls.filter((call) => call === 'mkdir updates/staging/1.1.0')).toHaveLength(1)
+  })
+
   it('the start step\u{2019}s removals take no retry: a held entry is left for the next start and reported', async () => {
     const drive = freshDrive()
     mkdirSync(drive.at('updates/staging/.incoming-1.1.0'), { recursive: true })
@@ -970,6 +1018,22 @@ describe('the sweep\u{2019}s readings the table holds no case for (record §4.5 
     const ctx = contextOf(drive, rec)
     const plan = await planSweep(ctx, drive.at('updates'))
     expect({ staged: plan.staged, notice: plan.notice, lines: sweptLogFields(plan) }).toEqual({ staged: null, notice: null, lines: [] })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(snapshot(drive.at('updates/staging'))).toEqual(tree)
+    expect(rec.calls.some((call) => call.startsWith('readdir updates/staging'))).toBe(false)
+  })
+
+  // T6.9 lens 2 m-5 (M10): the sweep keeps that rule itself (the service's start step decides it first, by its own
+  // synchronous lstat), and "present" is an lstat that does not answer ENOENT, so a stat that fails otherwise counts.
+  it('a stat of updates/applying/ that fails EIO counts as present: nothing is swept and nothing is the staged update', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    mkdirSync(drive.at('updates/staging/.incoming-1.2.0'))
+    const tree = snapshot(drive.at('updates/staging'))
+    const rec = recorded(drive, [{ call: 'lstat', when: (rel) => rel === 'updates/applying', error: injected('EIO', 'lstat') }])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts, lines: sweptLogFields(plan) }).toEqual({ staged: null, notice: null, counts: NO_COUNTS, lines: [] })
     expect(await carryOutSweep(ctx, plan)).toEqual([])
     expect(snapshot(drive.at('updates/staging'))).toEqual(tree)
     expect(rec.calls.some((call) => call.startsWith('readdir updates/staging'))).toBe(false)
@@ -1424,6 +1488,22 @@ describe('the commit tests <v>/ again before it writes, leaves what it cannot pr
     expect(readdirSync(drive.at('updates/staging/1.1.0')).sort()).toEqual(['files', 'hilbertraum-release.dsse.json', 'staged.json', 'staged.txt'])
   })
 
+  // T6.9 lens 2 m-5 (M22; record §4.5 "Links under updates/": the markers' .tmp names "by openWriteTemp's rule (whatever is
+  // at the name removed by its name, then wx)"): an entry that appears at the name after that removal is never written
+  // through: the wx open answers EEXIST, and the commit is refused as an error while staging.
+  it('an entry that appears at staged.json.tmp after its removal and before the open: EEXIST, refused UPD-CANT-WRITE-DRIVE, the entry untouched, staged.json never made', async () => {
+    const drive = freshDrive()
+    const rec = recorded(drive, [{ call: 'open', when: (rel) => rel === 'updates/staging/1.1.0/staged.json.tmp', before: (path) => writeFileSync(path, 'planted'), times: 1 }])
+    const { ctx, folders, file, files } = await untilCommit(drive, rec)
+    try {
+      expect(await commitStaged(ctx, folders, { envelope: file.envelope, files })).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EEXIST', syscall: 'open' }, link: null })
+    } finally {
+      await file.close()
+    }
+    expect(readFileSync(drive.at('updates/staging/1.1.0/staged.json.tmp'), 'latin1')).toBe('planted')
+    expect(isAbsent(drive.at('updates/staging/1.1.0/staged.json'))).toBe(true)
+  })
+
   it('a short write of a marker (7 bytes) is completed by the next writes: staged.json as accept-std\u{2019}s, byte for byte (review A A04)', async () => {
     const drive = freshDrive()
     const rec = recorded(drive, [{ call: 'write', when: (rel) => rel === 'updates/staging/1.1.0/staged.json.tmp', short: 7, times: 1 }])
@@ -1521,6 +1601,63 @@ describe('the sweep: a read that proves nothing leaves the entry, a missing file
     expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts, removals: plan.removals.length }).toEqual({ staged: null, notice: null, counts: NO_COUNTS, removals: 0 })
     expect(await carryOutSweep(ctx, plan)).toEqual([])
     expect(snapshot(drive.at('updates/staging/1.1.0'))).toEqual(tree)
+  })
+
+  // T6.9 lens 2 m-6 (record §4.5 "The start-up sweep": "an ENOENT that would decide a removal (no-marker,
+  // member-missing) is confirmed by one more lstat of <w>/ as a real folder, and when that fails or proves nothing the
+  // entry counts as unknown too"): a drive that drops out answers ENOENT as well. From the read named on, every lstat and
+  // realpath on the drive answers as a drive that is gone (ENOENT) or failing (EIO); it is back for the removals. A
+  // genuine missing marker or member stays no-marker or member-missing: the case table's start-no-marker and
+  // start-member-missing, and the files/ row below.
+  it.each([
+    ['the lstat of staged.json answers ENOENT, then <w>/ is gone', 'lstat', 'updates/staging/1.1.0/staged.json', 'ENOENT'],
+    ['the lstat of staged.json answers ENOENT, then <w>/ fails EIO', 'lstat', 'updates/staging/1.1.0/staged.json', 'EIO'],
+    ['the open of staged.json answers ENOENT, then <w>/ is gone', 'open', 'updates/staging/1.1.0/staged.json', 'ENOENT'],
+    ['the lstat of files/ answers ENOENT, then <w>/ is gone', 'lstat', 'updates/staging/1.1.0/files', 'ENOENT'],
+    ['a listed member\u{2019}s lstat answers ENOENT, then <w>/ is gone', 'lstat', 'updates/staging/1.1.0/files/notes.txt', 'ENOENT']
+  ] as const)('a drive that drops out while the sweep reads (%s): left, never the staged update, no notice, nothing removed once it is back', async (_label, trigger, at, code) => {
+    let away = false
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const tree = snapshot(drive.at('updates/staging/1.1.0'))
+    const rec = recorded(drive, [
+      { call: trigger, when: (rel) => !away && rel === at, before: () => void (away = true), error: injected('ENOENT', trigger) },
+      { call: 'lstat', when: () => away, error: injected(code, 'lstat') },
+      { call: 'realpath', when: () => away, error: injected(code, 'realpath') }
+    ])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect(away, 'the drive dropped out at the read named').toBe(true)
+    away = false
+    expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts, removals: plan.removals.length, lines: sweptLogFields(plan) }).toEqual({
+      staged: null,
+      notice: null,
+      counts: NO_COUNTS,
+      removals: 0,
+      lines: []
+    })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(snapshot(drive.at('updates/staging/1.1.0'))).toEqual(tree)
+  })
+
+  // The same confirmation when `<w>/` is no real folder any more (a link swapped in at its name after the marker's read):
+  // the test fails, so the entry is unknown too, and nothing is removed or followed.
+  it('the lstat of staged.json answers ENOENT, then <w>/ is a folder link: left, never followed, nothing counted', async () => {
+    const drive = freshDrive()
+    plantStaged(drive, '1.1.0', 'std')
+    const tree = snapshot(drive.at('updates/staging/1.1.0'))
+    const moved = join(drive.outside, 'moved-1.1.0')
+    const swap = (marker: string): void => {
+      renameSync(dirname(marker), moved)
+      DEFAULT_FOLDER_LINK(moved, dirname(marker))
+    }
+    const rec = recorded(drive, [{ call: 'lstat', when: (rel) => rel === 'updates/staging/1.1.0/staged.json', before: swap, error: injected('ENOENT', 'lstat'), times: 1 }])
+    const ctx = contextOf(drive, rec)
+    const plan = await planSweep(ctx, drive.at('updates'))
+    expect({ staged: plan.staged, notice: plan.notice, counts: plan.counts, removals: plan.removals.length }).toEqual({ staged: null, notice: null, counts: NO_COUNTS, removals: 0 })
+    expect(await carryOutSweep(ctx, plan)).toEqual([])
+    expect(snapshot(moved)).toEqual(tree)
+    expect(lstatSync(drive.at('updates/staging/1.1.0')).isSymbolicLink()).toBe(true)
   })
 
   // A14: "a files/ that is not a real folder counts as every member missing" (§4.5), an absent one included.
@@ -1626,6 +1763,17 @@ describe('the probe\u{2019}s readings (record §4.2 table A.1; notes-1 reading 2
     mkdirSync(drive.at('updates'))
     const rec = recorded(drive, [rule as Rule])
     expect(await checkDriveBeforeDialog(contextOf(drive, rec, 'linux'))).toEqual({ kind: 'refused', refusal, cause, link: null })
+  })
+
+  // T6.9 lens 2 m-5 (M23; table A.1: "UPD-CANT-WRITE-DRIVE for a name still occupied"): the probe's own name is opened wx
+  // after its removal step, so an entry that appears there meanwhile is never written through and never removed.
+  it('an entry that appears at its name after the removal step and before the open: EEXIST at once, UPD-CANT-WRITE-DRIVE link=probe, the entry untouched', async () => {
+    const drive = freshDrive()
+    mkdirSync(drive.at('updates'))
+    const rec = recorded(drive, [{ call: 'open', when: isProbe, before: (path) => writeFileSync(path, 'planted'), times: 1 }])
+    expect(await checkDriveBeforeDialog(contextOf(drive, rec, 'win32'))).toEqual({ kind: 'refused', refusal: CANT_WRITE, cause: { code: 'EEXIST', syscall: 'open' }, link: 'probe' })
+    expect(readFileSync(drive.at('updates/.write-probe'), 'latin1')).toBe('planted')
+    expect(seams.waits).toEqual([])
   })
 })
 

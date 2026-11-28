@@ -21,8 +21,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // of docs/app-updates.md §4.4, row by row. Release 1 applies the rule to every name in a signed payload's `files[]`
 // (a name that breaks it is UPD-TOO-NEW, §4.4 "A name that breaks the rule"; the payload's rows are in
 // updates-payload.test.ts) and, from P6 on, to every header name and to `staged.json` (P6 adds its staging rows here).
-// The root globs (`rootArtifactOf`) are not this rule: drive-release.test.ts holds their names, and the case rule per
-// system is F-18's root-glob half (its rows below, T6.2 part 1b). Non-ASCII test strings are written as `\u{…}` escapes.
+// The root globs (`rootArtifactOf`) are not this rule: drive-release.test.ts holds their names, and the case rule and the
+// star per system are F-18's root-glob half (their rows below, T6.2 part 1b, T6.9). Non-ASCII test strings are written as
+// `\u{…}` escapes.
 
 describe('isMemberName: the characters (table A.3, "Characters")', () => {
   it.each([
@@ -248,6 +249,30 @@ describe('the root globs\u{2019} case rule, per system (record §4.4; F-18, CF-3
     ['linux, the prefix in another case', 'HILBERTRAUM-1.4.0.AppImage', 'file', null],
     ['linux, the suffix in another case', 'HilbertRaum-1.4.0.APPIMAGE', 'file', null]
   ])('%s: %s', (_label, name, kind, artifact) => {
+    expect(rootArtifactOf(name, kind)).toStrictEqual(artifact)
+  })
+})
+
+// The star of each glob (T6.9 lens 1 m-2; record §4.4 "The root globs release 1 reads": "The star matches any characters,
+// line ends included (U+000A, U+000D, U+2028, U+2029), as cmd's and bash's `*` do"): the Windows start file's `for` finds
+// a name with a line end in the star (measured on NTFS), and bash's `*` matches any character. Each of the four line ends
+// in the star of each system's glob, so a star that skips one on one system shows. The segment that holds it is no
+// version, so the app counts with no known version.
+const LINE_ENDS = [
+  ['U+000A', '\u{A}'],
+  ['U+000D', '\u{D}'],
+  ['U+2028', '\u{2028}'],
+  ['U+2029', '\u{2029}']
+] as const
+describe('the root globs\u{2019} star matches any characters, line ends included, per system (record §4.4; F-18, T6.9 lens 1 m-2)', () => {
+  it.each<[string, string, string, RootEntryKind, RootArtifact]>(
+    LINE_ENDS.flatMap(([label, end]): Array<[string, string, string, RootEntryKind, RootArtifact]> => [
+      ['win32 HilbertRaum-*-portable.exe', label, `HilbertRaum-7.0.0${end}-portable.exe`, 'file', { system: 'win32', version: null }],
+      ['darwin HilbertRaum-*-mac-arm64.app.zip', label, `HilbertRaum-7.0.0${end}-mac-arm64.app.zip`, 'file', { system: 'darwin', version: null }],
+      ['darwin *.app (a folder)', label, `Any${end}.app`, 'folder', { system: 'darwin', version: null }],
+      ['linux HilbertRaum-*.AppImage', label, `HilbertRaum-7.0.0${end}.AppImage`, 'file', { system: 'linux', version: null }]
+    ])
+  )('%s with %s in the star', (_glob, _label, name, kind, artifact) => {
     expect(rootArtifactOf(name, kind)).toStrictEqual(artifact)
   })
 })

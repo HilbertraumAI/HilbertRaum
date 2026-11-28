@@ -17,13 +17,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Three seams, each a module import replaced by vi.mock and nothing else: node:timers/promises' setTimeout (the retry
 // waits of fs-retry.ts's schedule and of the probe return at once), and bundle.ts's readUpdateFile, which calls the real
 // reader and records the options the service hands it and each checked file's `stage` and `close` calls (T6.1 review m-3,
-// m-5). No key is written: the signers are made in memory (update-bundles.ts), and the golden key set is public.
-// Non-ASCII test strings are written as `\u{...}` escapes.
+// m-5); where a row sets them, it awaits a hook before the real data pass or the real close, and hands on a refusal with
+// a cause of the row's (T6.9). No key is written: the signers are made in memory (update-bundles.ts), and the golden key
+// set is public. Non-ASCII test strings are written as `\u{...}` escapes.
 const seams = vi.hoisted(() => ({
   reads: [] as Array<{ cancelled: () => boolean }>,
   files: [] as Array<{ stage: number; close: number; order: string[]; options: { cancelled: () => boolean; progress: (done: number) => void } | null }>,
   /** Awaited before the real data pass starts, when a row sets it. */
-  beforeStage: null as (() => Promise<void>) | null
+  beforeStage: null as (() => Promise<void>) | null,
+  /** Awaited before a checked file's real close, when a row sets it. */
+  beforeClose: null as (() => Promise<void>) | null,
+  /** When a row sets it, a refusal the reader answers is handed on with this cause. */
+  refusalCause: null as { code: string | null; syscall: string | null } | null
 }))
 vi.mock('node:timers/promises', async (importOriginal) => {
   const orig = await importOriginal<typeof import('node:timers/promises')>()
@@ -35,6 +40,7 @@ vi.mock('../../src/main/services/updates/bundle', async (importOriginal) => {
   const readUpdateFile: typeof orig.readUpdateFile = async (path, options) => {
     seams.reads.push(options)
     const read = await orig.readUpdateFile(path, options)
+    if (read.kind === 'refused' && seams.refusalCause !== null) return { ...read, cause: seams.refusalCause }
     if (read.kind !== 'checked') return read
     const calls = { stage: 0, close: 0, order: [] as string[], options: null as (typeof seams.files)[number]['options'] }
     seams.files.push(calls)
@@ -56,6 +62,7 @@ vi.mock('../../src/main/services/updates/bundle', async (importOriginal) => {
         close: async () => {
           calls.close++
           calls.order.push('close')
+          await seams.beforeClose?.()
           return file.close()
         }
       }
@@ -110,6 +117,8 @@ beforeEach(() => {
   seams.reads = []
   seams.files = []
   seams.beforeStage = null
+  seams.beforeClose = null
+  seams.refusalCause = null
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -1914,5 +1923,129 @@ describe('the start step\u{2019}s branches without a row before (record §4.5 "T
     expect(h.dialog.opened).toBe(0)
     expect(await h.service.importFile()).toEqual({ kind: 'closed' })
     expect({ dialog: h.dialog.opened, bundle: h.bundle.calls, lines: h.lines() }).toEqual({ dialog: 1, bundle: [], lines: [] })
+  })
+})
+
+// ---- fix round 1 of the T6.9 reviews (impl/p6/T6.9/review-disposition.md F5, F6, F7): the confirmation token in every
+// branch of a cancel, its bounds the case table holds no case for, and two orders of answers no row held. Expected values
+// from the record row each names, and the case table's lines.
+
+/** The case table's old file (issued 365 days and one second before the clock), version 1.1.0, and its line. */
+const OLD_CASE = 'pay-issued-365d-1s-confirmed'
+const OLD_FILE_LINE = (): string => onThisSystem((caseOf(OLD_CASE).expect as Expect).lines![0]!)
+const confirmTokenOf = (answer: Awaited<ReturnType<UpdateService['importFile']>>): string => {
+  expect(answer.kind, JSON.stringify(answer)).toBe('confirm')
+  return answer.kind === 'confirm' ? answer.token : ''
+}
+
+describe('every updates:cancel spends the live confirmation token (record §3.5 updates:cancel, "The old-file confirmation"; T6.9 lens 3 m-1, m-2)', () => {
+  // Lens 3 probe A: the run has passed its last check point and minted the token; the cancel lands while the checked file
+  // is closed, so the run answers confirm all the same, with a token the cancel spent.
+  it('a cancel while the checked file is closed after the old-file stop: stopping, the run answers confirm, and its token answers expired', async () => {
+    const h = harness(WIN32, [], { build: caseOf(OLD_CASE).build, dialog: ['file'] })
+    let atCancel: unknown = null
+    seams.beforeClose = async () => {
+      seams.beforeClose = null
+      atCancel = { state: (await h.service.status()).import.state, answer: await h.service.cancel() }
+    }
+    const token = confirmTokenOf(await h.service.importFile())
+    expect(atCancel).toEqual({ state: 'checking', answer: { kind: 'stopping' } })
+    expect(await h.service.importFile({ confirmToken: token })).toEqual({ kind: 'expired' })
+    expect({ dialog: h.dialog.opened, staged: stagedVersions(h.drive), lines: h.lines() }).toEqual({ dialog: 1, staged: [], lines: [OLD_FILE_LINE()] })
+  })
+
+  // Lens 3 probe B: a later run cancelled before its dialog (its probe held) leaves no earlier confirmation to redeem.
+  it('a cancel of a later run before its dialog: stopping, that run answers cancelled, and the earlier token answers expired', async () => {
+    let arm = false
+    const probe = gate()
+    const h = harness(WIN32, [], {
+      build: caseOf(OLD_CASE).build,
+      dialog: ['file', 'file'],
+      stagingRules: [{ call: 'open', when: (rel) => arm && rel === 'updates/.write-probe', hold: probe }]
+    })
+    const token = confirmTokenOf(await h.service.importFile())
+    arm = true
+    const second = tracked(h.service.importFile())
+    await probe.reached
+    expect((await h.service.status()).import.state).toBe('checking')
+    expect(await h.service.cancel()).toEqual({ kind: 'stopping' })
+    probe.release()
+    expect(await second.promise).toEqual({ kind: 'cancelled' })
+    arm = false
+    expect(await h.service.importFile({ confirmToken: token })).toEqual({ kind: 'expired' })
+    expect({ dialog: h.dialog.opened, staged: stagedVersions(h.drive), lines: h.lines() }).toEqual({ dialog: 1, staged: [], lines: [OLD_FILE_LINE()] })
+  })
+})
+
+describe('the confirmation token\u{2019}s bounds the case table holds no case for (record §3.5 "The old-file confirmation", §4.5 "Order of an import"; T6.9 lens 3 g-1, g-2, g-3)', () => {
+  // g-1, §4.5's order: "busy (no code, no line; a confirmToken in that call is not looked at and stays as it was)". The
+  // case table's busy-second-call hands a token while none is live.
+  it('a live token handed to a call answered busy (a discard goes) stays live: once the discard ends it redeems, staged', async () => {
+    let arm = false
+    const discarding = gate()
+    const h = harness(WIN32, [], {
+      build: caseOf(OLD_CASE).build,
+      dialog: ['file'],
+      stagingRules: [{ call: 'readdir', when: (rel) => arm && rel === '.', hold: discarding }]
+    })
+    const token = confirmTokenOf(await h.service.importFile())
+    arm = true
+    const discard = tracked(h.service.discardStaged({ version: '1.1.0' }))
+    await discarding.reached
+    expect(await h.service.importFile({ confirmToken: token })).toEqual({ kind: 'busy' })
+    arm = false
+    discarding.release()
+    expect(await discard.promise).toEqual({ kind: 'not-staged' })
+    expect(await h.service.importFile({ confirmToken: token })).toMatchObject({ kind: 'staged' })
+    expect({ dialog: h.dialog.opened, staged: stagedVersions(h.drive) }).toEqual({ dialog: 1, staged: ['1.1.0'] })
+  })
+
+  // g-2: the token is "bound in main to the picked file and to the payload's version and issued text"; the case table's
+  // token-redeem-file-now-another-version holds the version. Here the version stays and the issued text changes.
+  it('the picked file swapped for one of the same version and another issued: a new confirm with a new token, never staged', async () => {
+    const h = harness(WIN32, [], { build: caseOf(OLD_CASE).build, dialog: ['file'] })
+    const token = confirmTokenOf(await h.service.importFile())
+    const issued = '2025-06-01T00:00:00Z'
+    const payload = (table.payloads['issued-365d-1s'] as string).replace('"issued":"2025-11-27T09:59:59Z"', `"issued":"${issued}"`)
+    expect(payload).toContain(`"issued":"${issued}"`)
+    writeFileSync(h.file!, buildCaseFile({ ...table, payloads: { ...table.payloads, 'issued-older': payload } }, { payload: 'issued-older', members: 'std' }, signers).bytes)
+    const second = await h.service.importFile({ confirmToken: token })
+    expect(confirmTokenOf(second), 'a new token').not.toBe(token)
+    expect(second).toMatchObject({ kind: 'confirm', update: { version: '1.1.0', issued }, notice: { code: 'UPD-OLD-FILE', params: { issued } } })
+    expect({ dialog: h.dialog.opened, staged: stagedVersions(h.drive) }).toEqual({ dialog: 1, staged: [] })
+  })
+
+  // g-3: "A token that is not live (spent, replaced, unknown, not a string) answers expired"; such a call redeems nothing,
+  // so the live token stays. The case table's token-unknown hands 7 while none is live.
+  it('the live token inside an array ({ confirmToken: [T] }) answers expired and spends nothing: T then redeems, staged', async () => {
+    const h = harness(WIN32, [], { build: caseOf(OLD_CASE).build, dialog: ['file'] })
+    const token = confirmTokenOf(await h.service.importFile())
+    expect(await h.service.importFile({ confirmToken: [token] })).toEqual({ kind: 'expired' })
+    expect(await h.service.importFile({ confirmToken: token })).toMatchObject({ kind: 'staged' })
+    expect({ dialog: h.dialog.opened, staged: stagedVersions(h.drive) }).toEqual({ dialog: 1, staged: ['1.1.0'] })
+  })
+})
+
+describe('two orders of answers no row held (record §3.5 updates:discardStaged, §4.5\u{2019}s events; T6.9 lens 2 m-5 S1, S9)', () => {
+  // S1: "The first answer that applies: a root that is no prepared drive → refused UPD-NOT-A-DRIVE; a run going … → busy".
+  // Off a prepared drive an import is inside the service within one turn of the event loop only, so the calls are made in
+  // the same turn: the second import's busy shows that the first was going when the discard answered.
+  it('off a prepared drive, a discard while an import is inside the service answers UPD-NOT-A-DRIVE, never busy', async () => {
+    const h = harness({ ...WIN32, prepared: false })
+    const notADrive = { kind: 'refused', refusal: { code: 'UPD-NOT-A-DRIVE', params: { runningVersion: '1.0.0' } } }
+    const [first, discard, second] = await Promise.all([h.service.importFile(), h.service.discardStaged({ version: '1.1.0' }), h.service.importFile()])
+    expect({ first, discard, second }).toEqual({ first: notADrive, discard: notADrive, second: { kind: 'busy' } })
+    expect({ start: h.start.calls, staging: h.staging.calls, reads: h.reads, appended: h.appended }).toEqual({ start: [], staging: [], reads: [], appended: [] })
+  })
+
+  // S9: §4.5's events give `err` and `syscall` to the lines of the codes an I/O error gives only. No refusal of another
+  // code carries a cause from the reader or staging today; this one is handed on with one (the reader's seam above), so the
+  // line shows the service's own rule: the case's line as the table writes it, without err and syscall.
+  it('a refusal of a code no I/O error gives, handed on with a cause, writes its line without err and syscall', async () => {
+    const c = caseOf('m0-checksum-off-by-one')
+    const h = harness(hostOf(c), c.drive ?? [], { build: c.build, dialog: ['file'] })
+    seams.refusalCause = { code: 'EIO', syscall: 'read' }
+    expect(await h.service.importFile()).toEqual({ kind: 'refused', refusal: { code: 'UPD-FILE-DAMAGED', params: {} } })
+    expect(h.lines()).toEqual([onThisSystem((c.expect as Expect).log!.line)])
   })
 })

@@ -32,8 +32,9 @@
 // stop, the status, the start step's synchronous part, its wait and every update.log line are the update service's
 // (T6.2 part 2); the channels are T6.3's. It writes nothing outside `updates/`, and before the data pass nothing there
 // but `updates/` itself when it is missing and the probe's own name, which the probe deletes again. It does not see a
-// Linux bind mount (it needs root), and on Windows, which has no O_NOFOLLOW, a link planted between an lstat and an open
-// is caught only by the descriptor's check. It takes the file-system calls from its caller (NODE_STAGING_FS: node's own,
+// mount point under `updates/` (a bind mount, a FUSE mount or a disk image attached there reads as a plain folder, and
+// some of these need no root; T6.9 security L-2), and on Windows, which has no O_NOFOLLOW, a link planted between an lstat
+// and an open is caught only by the descriptor's check. It takes the file-system calls from its caller (NODE_STAGING_FS: node's own,
 // with fs-retry.ts's rename), and the system it applies Windows' rules for (`platform`).
 
 import { constants } from 'node:fs'
@@ -656,10 +657,13 @@ export interface StagingFolders {
   readonly filesDir: string
 }
 
-/** One plain mkdir of a folder staging makes, then the real-folder test before anything is written into it. */
+/** One plain mkdir of a folder staging makes, then the real-folder test before anything is written into it. On Windows
+ *  the mkdir is tried again as the moves are while a held name refuses it (§4.5 "Moves": exFAT keeps a removed folder's
+ *  name pending while another program holds it, so a re-import's mkdir right after its removal can answer EPERM for a
+ *  moment; T6.9 lens 2 m-1); EEXIST answers at once, and each attempt stays one plain mkdir. */
 async function makeFolder(ctx: StagingContext, path: string, link: StagingLinkName, memo: Memo): Promise<StagingRefused | null> {
   try {
-    await ctx.fs.mkdir(path)
+    await asMovesAre(ctx, () => ctx.fs.mkdir(path))
   } catch (error) {
     const cause = causeOf(error)
     return cause.code === 'EEXIST' ? cantWrite(link, cause) : writeError(cause)
@@ -671,7 +675,8 @@ async function makeFolder(ctx: StagingContext, path: string, link: StagingLinkNa
 /**
  * The data pass's start: `updates/staging/<v>/` and `.incoming-<v>/` (the names `checkBeforeDataPass` found) removed by
  * the removal walk, with Windows' retries; then `updates/staging/` made when it was missing, `.incoming-<v>/`, `<v>/` and
- * `<v>/files/`, each with one plain mkdir and tested. A failure answers as an error while staging (§4.5), once both
+ * `<v>/files/`, each with one plain mkdir (on Windows tried again as the moves are) and tested. A failure answers as an
+ * error while staging (§4.5), once both
  * folders are removed as far as they can be (a removal that failed was tried on both names; what a failed mkdir left is
  * removed by removeStagingFolders, which leaves a link it meets). Never throws.
  */
@@ -921,15 +926,22 @@ export interface SweepPlan extends SweepFacts {
   readonly removals: readonly SweepRemoval[]
 }
 
-/** What one `<w>/` with a `staged.json` is (§4.5 "The start-up sweep"): a survivor, a reason, or unknown (left). */
+/** What one `<w>/` with a `staged.json` is (§4.5 "The start-up sweep"): a survivor, a reason, or unknown (left). An
+ *  ENOENT that would decide a removal (`no-marker`, `member-missing`) is confirmed by one more real-folder test of `<w>/`
+ *  (a drive that drops out answers ENOENT too): when that test fails or proves nothing, the entry is unknown (T6.9 lens 2
+ *  m-6). */
 async function judgeStaged(ctx: StagingContext, dir: string, name: string, memo: Memo): Promise<'valid' | 'no-marker' | 'invalid-marker' | 'member-missing' | 'unknown'> {
+  const confirmed = async (reason: 'no-marker' | 'member-missing'): Promise<'no-marker' | 'member-missing' | 'unknown'> =>
+    (await testFolder(ctx, dir, memo)).kind === 'real' ? reason : 'unknown'
   const read = await readMarker(ctx, join(dir, STAGED_JSON), memo)
+  // readMarker answers no-marker for an ENOENT only (of the lstat or of the open).
+  if (read.kind === 'no-marker') return confirmed('no-marker')
   if (read.kind !== 'bytes') return read.kind
   const listed = validMarker(read.bytes, name)
   if (listed === null) return 'invalid-marker'
   const files = join(dir, FILES_FOLDER)
   const test = await testFolder(ctx, files, memo)
-  if (test.kind === 'unknown') return test.cause?.code === 'ENOENT' ? 'member-missing' : 'unknown'
+  if (test.kind === 'unknown') return test.cause?.code === 'ENOENT' ? confirmed('member-missing') : 'unknown'
   if (test.kind === 'not-real') return 'member-missing'
   for (const member of listed) {
     await nextTurn()
@@ -937,7 +949,7 @@ async function judgeStaged(ctx: StagingContext, dir: string, name: string, memo:
     try {
       info = await ctx.fs.lstat(join(files, member.name))
     } catch (error) {
-      if (codeOf(error) === 'ENOENT') return 'member-missing'
+      if (codeOf(error) === 'ENOENT') return confirmed('member-missing')
       return 'unknown'
     }
     if (!info.isFile() || info.size !== BigInt(member.size)) return 'member-missing'
@@ -954,8 +966,9 @@ const noCounts = (): Record<SweepReason, number> => ({ incoming: 0, 'no-marker':
  * link (or a folder found elsewhere) is left (`link`); neither a folder nor a link is unlinked (`not-a-folder`); an
  * `.incoming-*` folder is removed (`incoming`); a `<w>/` without `staged.json`, with one that is not valid, or with a
  * listed file under `files/` missing, of another size or no regular file, is removed (`no-marker`, `invalid-marker`,
- * `member-missing`, which sets the one-time notice); a stat, a read or a real-folder test that proves nothing leaves the
- * entry, counted under no reason. `updates/staging/` not a real folder: nothing is swept (`link`, 1). The staged update
+ * `member-missing`, which sets the one-time notice; an ENOENT that decides one of these two only once a further test
+ * finds `<w>/` still a real folder); a stat, a read or a real-folder test that proves nothing leaves the entry, counted
+ * under no reason. `updates/staging/` not a real folder: nothing is swept (`link`, 1). The staged update
  * is the highest survivor in F-4's order. Reads only; never throws.
  */
 export async function planSweep(ctx: StagingContext, updatesDir: string): Promise<SweepPlan> {

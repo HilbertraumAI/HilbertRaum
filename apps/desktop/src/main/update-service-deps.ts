@@ -51,7 +51,13 @@ export function updateServiceDepsFor(env: UpdateServiceEnv): (layout: ResolvedPa
   const glibc = runtimeGlibcHook(env.process, glibcUnread)
   return (layout) => {
     const running = parseSemver(env.app.getVersion())
-    if (running === null) log.warn('Update service: the app version does not parse, so no update file is accepted')
+    if (running === null) {
+      try {
+        log.warn('Update service: the app version does not parse, so no update file is accepted')
+      } catch {
+        /* the log is best-effort: the start and the failure state get their service all the same (T6.9 lens 3) */
+      }
+    }
     return {
       paths: layout,
       keys: running === null ? [] : embeddedKeySet.keys,
