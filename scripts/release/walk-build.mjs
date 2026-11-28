@@ -40,19 +40,24 @@
 // whose keys.json is a regular file; a second check, no test reaches it) and removes the copy again on any failure.
 //
 // The removal (`remove()`, `removeScratchCopy`, `remove`) acts only on a copy the walk made, strictly inside the OS
-// temp folder, and never on the given path when it is itself a link. A copy git still lists must be detached and carry
-// the private marker (another worktree, the main one included, has none: refused before anything is removed); a folder
-// git no longer lists (a git removal that failed part way) must carry the marker at its top. It checks every link in
-// the copy before it removes one (all or nothing): its own package links, and any other link whose target is inside the
-// copy or gone (npm's workspace links in a tag's copy); a link to anything outside the copy that the walk did not make
-// is refused, and nothing is removed. Then each link goes by its own name (`rmdir` of the link itself on Windows, which
-// takes a junction and never its target, `unlink` elsewhere; no shell, so no name is ever expanded), and the rest of the
-// folder by a walk that lstats every entry and never follows a link (it stops at one), the copy's .git file and its
-// marker last, so a removal stopped part way (a process that still uses a folder of the copy) keeps the entry and
-// both markers and a second `remove` finishes it. Only then `git worktree remove --force` drops the copy's own entry
-// (git drops an entry whose folder is gone, as for a copy deleted by hand); never `git worktree prune`, which would
-// drop other sessions' stale entries. Afterwards the folder must be gone and the worktree list must be the list before
-// it without the copy.
+// temp folder, and never on the given path when it is itself a link. A copy git still keeps (it lists it, or a private
+// folder of the source names it) must be listed, detached and carry the private marker (another worktree, the main one
+// included, has none: refused before anything is removed). A folder git keeps no more (its entry dropped while the
+// folder was away) must carry the marker at its top and a .git that is a regular file, not a link, whose `gitdir:`
+// names a folder in this source's `<common git folder>/worktrees/` that no longer exists, compared as real paths
+// (letter case folded on Windows); anything else is refused before anything is removed: a plain folder, a checkout (its
+// .git is a folder), a copy of another repository (it names another git folder), a folder holding a kept copy's .git
+// (the folder it names exists), and a folder whose .git is gone (a git removal stopped part way; delete it by hand once
+// nothing uses it). It checks every link in the copy before it removes one (all or nothing): its own package links,
+// and any other link whose target is inside the copy or gone (npm's workspace links in a tag's copy); a link to anything
+// outside the copy that the walk did not make is refused, and nothing is removed. Then each link goes by its own name
+// (`rmdir` of the link itself on Windows, which takes a junction and never its target, `unlink` elsewhere; no shell, so
+// no name is ever expanded), and the rest of the folder by a walk that lstats every entry and never follows a link (it
+// stops at one), the copy's .git file and its marker last, so a removal stopped part way (a process that still uses a
+// folder of the copy) keeps the entry and both markers and a second `remove` finishes it. Only then
+// `git worktree remove --force` drops the copy's own entry (git drops an entry whose folder is gone, as for a copy
+// deleted by hand); never `git worktree prune`, which would drop other sessions' stale entries. Afterwards the folder
+// must be gone and the worktree list must be the list before it without the copy.
 //
 // Every git call runs without the variables that point git at another repository, index or object store, or change
 // how it finds one (`GIT_ENV_DROPPED`: git's own list of the variables local to a repository, which git clears itself
@@ -138,6 +143,7 @@ const NOT_READ_BACK = "the copy's keys.json did not read back as written"
 const NO_PRIVATE_FOLDER = "git's private folder of the copy was not found"
 const NOT_A_COPY = 'the folder is not a detached worktree of the repository inside the temp folder'
 const NO_MARKER = 'the worktree carries no walk-build copy marker; nothing removed'
+const NOT_OWN_LEFTOVER = 'the folder holds no .git file that names a removed worktree of this repository; nothing removed'
 const FOREIGN_LINK = 'the copy holds a link out of it that it did not make; nothing removed'
 const NOT_UNLINKED = 'a link could not be removed by its name'
 const LINK_IN_WALK = 'a link appeared in the copy while it was removed'
@@ -188,6 +194,20 @@ function lstatOrNull(path) {
   }
 }
 
+/** `path` as compared when it may be gone: its longest existing head as the real path (links followed), the rest as
+ *  spelled. */
+function realAsFarAsItExists(path) {
+  const rest = []
+  for (let head = resolve(path); ; head = dirname(head)) {
+    try {
+      return join(realpathSync.native(head), ...rest)
+    } catch {
+      if (dirname(head) === head) return resolve(path)
+      rest.unshift(basename(head))
+    }
+  }
+}
+
 /** The real path of an existing folder (links followed), or null. */
 function realFolder(path) {
   try {
@@ -219,13 +239,18 @@ function worktrees(repo) {
     .map((lines) => ({ path: lines[0].slice('worktree '.length), lines }))
 }
 
+/** The source's common git folder (the main worktree's `.git`), as an absolute path. */
+function commonGitDir(source) {
+  const common = git(source, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (common.status !== 0) refuse(`git could not name the repository's git folder (exit ${common.status})`)
+  return common.stdout.trim()
+}
+
 /** The folder git keeps for the worktree at `path`: `<common git folder>/worktrees/<entry>`, whose `gitdir` file names
  *  `<path>/.git` (gitrepository-layout; absolute, or relative to that folder). Read from git's layout, so it is found
  *  when the worktree's own folder is gone too; null when there is none (the main worktree has none). */
 function privateFolderOf(source, path) {
-  const common = git(source, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
-  if (common.status !== 0) refuse(`git could not name the repository's git folder (exit ${common.status})`)
-  const entries = join(common.stdout.trim(), 'worktrees')
+  const entries = join(commonGitDir(source), 'worktrees')
   let names = []
   try {
     names = readdirSync(entries)
@@ -243,6 +268,15 @@ function privateFolderOf(source, path) {
     if (named !== '' && comparable(dirname(resolve(folder, named))) === comparable(path)) return folder
   }
   return null
+}
+
+/** The folder that the `.git` file at the top of `dir` names (`gitdir: <path>`, absolute or relative to `dir`, as git
+ *  reads it), or null when that `.git` is no regular file (missing, a folder, a link) or holds no such line. */
+function gitdirNamed(dir) {
+  const file = join(dir, '.git')
+  if (!lstatOrNull(file)?.isFile()) return null
+  const line = /^gitdir: ([^\0\r\n]+)[\r\n]*$/.exec(readFileSync(file, 'utf8'))
+  return line === null ? null : resolve(dir, line[1])
 }
 
 /** The id in the marker file `file` (a regular file, not a link, holding the marker's one line), or null. */
@@ -468,13 +502,23 @@ export function removeScratchCopy({ repo, dir } = {}) {
   const present = given !== null
   const listed = worktrees(source)
   const mine = listed.find((w) => comparable(realFolder(w.path) ?? w.path) === comparable(path))
-  // Its origin, before anything is removed: a listed copy by the marker in its private git folder, a folder git no
-  // longer lists by the marker at its top.
-  if (mine !== undefined) {
-    if (!mine.lines.includes('detached')) refuse(NOT_A_COPY)
-    const ownFolder = privateFolderOf(source, path)
+  // Its origin, before anything is removed: a copy git still keeps (listed, or a private folder of the source naming
+  // it) by the marker in its private git folder; a folder git keeps no more by the marker at its top and a .git file
+  // that names a folder of the source's worktrees/ that is gone (a plain folder, a checkout, a copy of another
+  // repository and a copy git keeps elsewhere fail that).
+  const ownFolder = privateFolderOf(source, path)
+  if (mine !== undefined || ownFolder !== null) {
+    if (mine === undefined || !mine.lines.includes('detached')) refuse(NOT_A_COPY)
     if (ownFolder === null || markerId(join(ownFolder, PRIVATE_MARKER)) === null) refuse(NO_MARKER)
-  } else if (!present || markerId(join(path, COPY_MARKER)) === null) refuse(NOT_A_COPY)
+  } else {
+    if (!present || markerId(join(path, COPY_MARKER)) === null) refuse(NOT_A_COPY)
+    const named = gitdirNamed(path)
+    if (named === null) refuse(NOT_OWN_LEFTOVER)
+    const entries = realAsFarAsItExists(join(commonGitDir(source), 'worktrees'))
+    if (comparable(realAsFarAsItExists(dirname(named))) !== comparable(entries)) refuse(NOT_OWN_LEFTOVER)
+    // Still there: git keeps it for another folder (were it this one's, `ownFolder` would have found it).
+    if (lstatOrNull(named) !== null) refuse(NOT_OWN_LEFTOVER)
+  }
 
   if (present) {
     // Every link checked before the first one goes (all or nothing), then each by its name, then the rest by the walk.

@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -18,7 +19,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readKeysFile } from '../../src/main/services/updates/bundle-check'
 import { parseSemver } from '../../src/main/services/updates/version'
@@ -68,6 +69,13 @@ interface WalkBuild {
 const SCRIPT = join(REPO_ROOT, 'scripts', 'release', 'walk-build.mjs')
 /** The script is plain ESM without a declaration file: loaded by URL, typed above. */
 const walkBuild = async (): Promise<WalkBuild> => (await import(pathToFileURL(SCRIPT).href)) as WalkBuild
+/** The script run as the program by plain Node. */
+const runScript = (...args: string[]): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' })
+/** The script's own lines on stderr (Node may add its own warning lines, such as a module type). */
+const ownLines = (stderr: unknown): string[] =>
+  String(stderr)
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('walk-build'))
 
 const KEYS_PATH = ['apps', 'desktop', 'src', 'main', 'services', 'updates', 'keys.json']
 const KEYS_REL = KEYS_PATH.join('/')
@@ -572,6 +580,157 @@ describe('the removal acts only on a marked copy and finishes one that a removal
   })
 })
 
+// Fix round 2 (re-check N-1): for a folder git does not list, the top marker alone proved nothing (a plain folder,
+// another repository's checkout or a copy of another repository can hold its line). Such a folder is removed only
+// when its .git is a regular file whose gitdir names a folder in this source's <common git folder>/worktrees/ that no
+// longer exists; the row "a folder left after its entry is gone" above is the case that still completes.
+const NOT_OWN_LEFTOVER = 'walk-build: the folder holds no .git file that names a removed worktree of this repository; nothing removed'
+
+describe('a folder git no longer lists goes only when its .git file names a removed worktree of this source (T6.11 fix round 2)', () => {
+  it('refuses a plain folder that holds a copied marker, and leaves it', async () => {
+    const src = makeSource('n1-plain')
+    const { makeScratchCopy, removeScratchCopy } = await walkBuild()
+    const copy = await makeScratchCopy({ repo: src.repo, rev: src.first, root: scratch('n1-plain-root'), publicKeys: [publicKey()] })
+    try {
+      const plain = join(scratch('n1-plain-folder'), 'plain')
+      mkdirSync(plain)
+      writeFileSync(join(plain, 'work.txt'), 'work\n')
+      copyFileSync(join(copy.dir, COPY_MARKER), join(plain, COPY_MARKER))
+      const before = src.git('worktree', 'list', '--porcelain')
+      expect(() => removeScratchCopy({ repo: src.repo, dir: plain })).toThrow(NOT_OWN_LEFTOVER)
+      expect(readdirSync(plain).sort()).toEqual([COPY_MARKER, 'work.txt'])
+      expect(readFileSync(join(plain, 'work.txt'), 'utf8')).toBe('work\n')
+      expect(src.git('worktree', 'list', '--porcelain')).toBe(before)
+    } finally {
+      copy.remove()
+    }
+  })
+
+  it("refuses a folder that holds a live copy's marker and .git file (the git folder it names is still that copy's), and leaves both", async () => {
+    const src = makeSource('n1-live')
+    const { makeScratchCopy, removeScratchCopy } = await walkBuild()
+    const copy = await makeScratchCopy({ repo: src.repo, rev: src.first, root: scratch('n1-live-root'), publicKeys: [publicKey()] })
+    try {
+      const decoy = join(scratch('n1-live-folder'), 'decoy')
+      mkdirSync(decoy)
+      writeFileSync(join(decoy, 'work.txt'), 'work\n')
+      for (const name of [COPY_MARKER, '.git']) copyFileSync(join(copy.dir, name), join(decoy, name))
+      const files = readdirSync(decoy).sort()
+      const before = src.git('worktree', 'list', '--porcelain')
+      expect(() => removeScratchCopy({ repo: src.repo, dir: decoy })).toThrow(NOT_OWN_LEFTOVER)
+      expect(readdirSync(decoy).sort()).toEqual(files)
+      expect(src.git('worktree', 'list', '--porcelain')).toBe(before)
+      expect(worktreeBlock(src, copy.dir)?.split('\n')).toContain('detached')
+      const gitDir = gitIn(copy.dir, ['rev-parse', '--absolute-git-dir']).trim()
+      expect(readFileSync(join(gitDir, PRIVATE_MARKER), 'utf8')).toBe(markerText(copy.id))
+    } finally {
+      copy.remove()
+    }
+  })
+
+  it('refuses the checkout of another repository that tracks a marker, and removes nothing, its inner link included', async () => {
+    const src = makeSource('n1-own')
+    const other = makeSource('n1-other')
+    const { makeScratchCopy, removeScratchCopy } = await walkBuild()
+    const copy = await makeScratchCopy({ repo: src.repo, rev: src.first, root: scratch('n1-other-root'), publicKeys: [publicKey()] })
+    // What npm leaves in a checkout: a workspace link in node_modules that leads back into it.
+    const inner = join(other.repo, 'node_modules', '@scope', 'desktop')
+    try {
+      copyFileSync(join(copy.dir, COPY_MARKER), join(other.repo, COPY_MARKER))
+      other.git('add', '--', COPY_MARKER)
+      other.git('commit', '-q', '-m', 'marker')
+      mkdirSync(dirname(inner), { recursive: true })
+      symlinkSync(join(other.repo, 'apps', 'desktop'), inner, 'junction')
+      const otherBefore = snapshot(other, other.repo)
+      const before = src.git('worktree', 'list', '--porcelain')
+      expect(() => removeScratchCopy({ repo: src.repo, dir: other.repo })).toThrow(NOT_OWN_LEFTOVER)
+      expect(lstatSync(inner).isSymbolicLink()).toBe(true)
+      expect(lstatSync(join(other.repo, '.git')).isDirectory()).toBe(true)
+      expect(snapshot(other, other.repo)).toEqual(otherBefore)
+      expect(src.git('worktree', 'list', '--porcelain')).toBe(before)
+    } finally {
+      if (lstatSync(inner, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkByName(inner)
+      copy.remove()
+    }
+  })
+
+  it("refuses with --repo of one repository a copy of another, and removes nothing (its entry there kept); --repo of the copy's own repository removes it", async () => {
+    const a = makeSource('n1-repo-a')
+    const b = makeSource('n1-repo-b')
+    const aBefore = a.git('worktree', 'list', '--porcelain')
+    const bBefore = b.git('worktree', 'list', '--porcelain')
+    const copy = await (await walkBuild()).makeScratchCopy({ repo: b.repo, rev: 'HEAD', root: scratch('n1-repo-root'), publicKeys: [publicKey()] })
+    const listed = b.git('worktree', 'list', '--porcelain')
+    const files = readdirSync(copy.dir).sort()
+    const refused = runScript('remove', '--repo', a.repo, '--dir', copy.dir)
+    expect([refused.status, ownLines(refused.stderr)]).toEqual([1, [NOT_OWN_LEFTOVER]])
+    expect(readdirSync(copy.dir).sort()).toEqual(files)
+    for (const link of copy.links) expect(lstatSync(link.path).isSymbolicLink(), link.path).toBe(true)
+    expect(readFileSync(join(copy.dir, COPY_MARKER), 'utf8')).toBe(markerText(copy.id))
+    expect(b.git('worktree', 'list', '--porcelain')).toBe(listed)
+    expect(worktreeBlock(b, copy.dir)?.split('\n')).toContain('detached')
+    expect(a.git('worktree', 'list', '--porcelain')).toBe(aBefore)
+    const removed = runScript('remove', '--repo', b.repo, '--dir', copy.dir)
+    expect(removed.status, String(removed.stderr)).toBe(0)
+    expect(existsSync(copy.dir)).toBe(false)
+    expect(b.git('worktree', 'list', '--porcelain')).toBe(bBefore)
+    expect(readdirSync(join(b.repo, 'node_modules'))).toEqual(['sentinel.txt'])
+    expect(readdirSync(join(b.repo, 'apps', 'desktop', 'node_modules'))).toEqual(['sentinel.txt'])
+  })
+
+  it('refuses with the repository of one checkout a copy of another whose own repository keeps it no more either, and removes nothing; its own repository removes it', async () => {
+    const a = makeSource('n1-gone-a')
+    const b = makeSource('n1-gone-b')
+    const aBefore = a.git('worktree', 'list', '--porcelain')
+    const bBefore = b.git('worktree', 'list', '--porcelain')
+    const { makeScratchCopy, removeScratchCopy } = await walkBuild()
+    const copy = await makeScratchCopy({ repo: b.repo, rev: 'HEAD', root: scratch('n1-gone-root'), publicKeys: [publicKey()] })
+    // The entry dropped in its own repository too, while the folder was away (git drops an entry whose folder is missing).
+    const away = `${copy.dir}-away`
+    renameSync(copy.dir, away)
+    b.git('worktree', 'remove', '--force', copy.dir)
+    renameSync(away, copy.dir)
+    expect(b.git('worktree', 'list', '--porcelain')).toBe(bBefore)
+    const files = readdirSync(copy.dir).sort()
+    expect(() => removeScratchCopy({ repo: a.repo, dir: copy.dir })).toThrow(NOT_OWN_LEFTOVER)
+    expect(readdirSync(copy.dir).sort()).toEqual(files)
+    for (const link of copy.links) expect(lstatSync(link.path).isSymbolicLink(), link.path).toBe(true)
+    expect(a.git('worktree', 'list', '--porcelain')).toBe(aBefore)
+    removeScratchCopy({ repo: b.repo, dir: copy.dir })
+    expect(existsSync(copy.dir)).toBe(false)
+    expect(b.git('worktree', 'list', '--porcelain')).toBe(bBefore)
+    expect(readdirSync(join(b.repo, 'node_modules'))).toEqual(['sentinel.txt'])
+  })
+
+  // git writes a relative gitdir under worktree.useRelativePaths; the link makes the spelling differ from the real path.
+  it('a folder left after its entry is gone whose .git file names the git folder relatively and through a link: compared as real paths, it is removed', async () => {
+    const src = makeSource('n1-via-link')
+    const before = src.git('worktree', 'list', '--porcelain')
+    const { makeScratchCopy } = await walkBuild()
+    const copy = await makeScratchCopy({ repo: src.repo, rev: src.first, root: scratch('n1-via-link-root'), publicKeys: [publicKey()], name: 'w' })
+    const entry = basename(/^gitdir: (.+?)\r?\n?$/.exec(readFileSync(join(copy.dir, '.git'), 'utf8'))![1]!)
+    const away = `${copy.dir}-away`
+    renameSync(copy.dir, away)
+    src.git('worktree', 'remove', '--force', copy.dir)
+    renameSync(away, copy.dir)
+    expect(worktreeBlock(src, copy.dir)).toBeUndefined()
+    const via = join(scratch('n1-via-link-alias'), 'repo')
+    symlinkSync(src.repo, via, 'junction')
+    try {
+      const named = relative(copy.dir, join(via, '.git', 'worktrees', entry)).split(sep).join('/')
+      unlinkSync(join(copy.dir, '.git')) // Git for Windows marks it hidden, which a plain overwrite refuses (EPERM)
+      writeFileSync(join(copy.dir, '.git'), `gitdir: ${named}\n`)
+      copy.remove()
+      expect(existsSync(copy.dir)).toBe(false)
+      expect(lstatSync(via).isSymbolicLink()).toBe(true)
+      expect(src.git('worktree', 'list', '--porcelain')).toBe(before)
+      expect(readFileSync(join(src.repo, ...KEYS_PATH))).toEqual(COMMITTED_KEYS)
+    } finally {
+      unlinkByName(via)
+    }
+  })
+})
+
 describe('the removal checks every link before it removes one, and never hands a name to cmd (T6.11 fix F4)', () => {
   it('a scratch root whose name holds what cmd treats specially (% ! ^ & ( ) , ; = and spaces) and non-ASCII letters: make and remove work, the links by their names, their targets intact', async () => {
     const src = makeSource('cmd-names')
@@ -832,7 +991,7 @@ describe('versionOverride: the build version of a walk build (T6.11, for T7.7a)'
 })
 
 describe('the command line (plain Node: the key reader loads through type stripping) (T6.11)', () => {
-  const run = (...args: string[]): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' })
+  const run = runScript
 
   it('make prints the copy as one JSON line, and remove removes it, the worktree list as before', () => {
     const src = makeSource('cli')
