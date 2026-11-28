@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Plugin } from 'vite'
 import config from '../../electron.vite.config'
-import { buildDateFileText, buildDatePlugin, commitDate, utcSecondText } from '../../build-date-plugin'
+import { APP_IN_HEAD, buildDateFileText, buildDatePlugin, commitDate, utcSecondText } from '../../build-date-plugin'
 import { parseBuildDate } from '../../src/main/services/updates/build-date'
 import { tempRoot } from '../helpers/db-fixtures'
 import { REPO_ROOT } from '../helpers/repo-files'
@@ -20,8 +20,9 @@ import { REPO_ROOT } from '../helpers/repo-files'
 // built through Vite is tests/integration/build-date-reader.test.ts's, and that the value reaches the bundle is the
 // release guard's packed row (updates-bundle-check.test.ts, checkBundleBuildDate) and the task's build proof.
 //
-// execFileSync is the real one, watched: the rows read the environment each git call of the step is handed (what the
-// child process gets), and two rows hand the step a git answer no real git gives here (CR LF line ends, a time limit).
+// execFileSync is the real one, watched: rows read the environment and options each git call of the step is handed
+// (what the child process gets), and some rows hand the step a git answer no real git gives here (CR LF line ends, a
+// time limit, a failing `show`).
 
 vi.mock('node:child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:child_process')>()
@@ -133,21 +134,39 @@ function writeHead(c: Checkout, lines: readonly string[]): void {
   c.git('update-ref', 'HEAD', sha)
 }
 
-/** A shell script that appends a line to `mark` each time it starts (and passes its input through, for a filter). */
+/** A shell script that appends a line to `mark` each time it starts (and passes its input through, for a filter).
+ *  Git is told to run it as `sh "<script>"`, so it needs no execute permission (nor a temp folder that grants one). */
 function marker(label: string): { script: string; mark: string } {
   const dir = tempRoot(`build-date-${label}`)
   const mark = join(dir, 'started.txt')
   const script = join(dir, 'probe.sh')
   writeFileSync(script, `#!/bin/sh\necho started >> "${slashed(mark)}"\ncat\n`)
-  chmodSync(script, 0o755)
   return { script, mark }
+}
+
+/** The options the step handed each git call since the last clear, one per call (this file's own git has no -C). */
+function stepGitCalls(): { env?: NodeJS.ProcessEnv; timeout?: number; stdio?: unknown }[] {
+  const calls = vi.mocked(execFileSync).mock.calls as unknown as [string, readonly string[], { env?: NodeJS.ProcessEnv; timeout?: number; stdio?: unknown }][]
+  return calls.filter(([file, args]) => file === 'git' && args.includes('-C')).map(([, , options]) => options)
 }
 
 /** The environments the step handed git since the last clear: one per git call. */
 function stepGitEnvs(): NodeJS.ProcessEnv[] {
-  const calls = vi.mocked(execFileSync).mock.calls as unknown as [string, readonly string[], { env?: NodeJS.ProcessEnv }][]
-  return calls.filter(([file, args]) => file === 'git' && args.includes('-C')).map(([, , options]) => options.env ?? {})
+  return stepGitCalls().map((options) => options.env ?? {})
 }
+
+/** Git 2.45 and later honour GIT_NO_LAZY_FETCH; an older git ignores it (record §5.10 states the limit). */
+const gitHonoursNoLazyFetch = ((): boolean => {
+  try {
+    const version = /^git version ([0-9]+)\.([0-9]+)/.exec(String(realExecFileSync('git', ['--version'], { encoding: 'utf8' })))
+    return version !== null && (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 45))
+  } catch {
+    return false
+  }
+})()
+
+/** How many packs a repository's object store holds: one more means git fetched. */
+const packsIn = (repo: string): number => readdirSync(join(repo, '.git', 'objects', 'pack')).filter((name) => name.endsWith('.pack')).length
 
 /** For the next git calls, the answer `change` makes of each real one (or throws instead). */
 function gitAnswers(change: (args: readonly string[], real: () => string) => string): void {
@@ -155,6 +174,20 @@ function gitAnswers(change: (args: readonly string[], real: () => string) => str
     const real = (): string => realExecFileSync(file, args, options) as unknown as string
     return file === 'git' ? change(args, real) : real()
   }) as unknown as typeof execFileSync)
+}
+
+/** A git call past its time limit, as node's execFileSync reports one (code ETIMEDOUT). */
+const timeLimit = (): Error => Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT', signal: 'SIGTERM' })
+
+/** A clean checkout's app folder. The next git calls are real, except the one with `subcommand`, which throws
+ *  `error()` instead. */
+function failingAt(label: string, subcommand: string, error: () => Error): string {
+  const c = checkout(label)
+  gitAnswers((args, real) => {
+    if (args.includes(subcommand)) throw error()
+    return real()
+  })
+  return c.desktop
 }
 
 afterEach(() => {
@@ -200,6 +233,29 @@ describe('the build-date step: the committer date of HEAD, in UTC to the second 
   // The same archive unpacked at that repository's own apps/desktop passes the prefix check (T6.4a review B M-2).
   it("this app unpacked, untracked, at apps/desktop of another repository (HEAD\u{2019}s tree holds no apps/desktop/build-date-plugin.ts): null", () => {
     expect(commitDate(foreignCheckout('foreign').desktop)).toBeNull()
+  })
+
+  // The HEAD check names this file by a constant: a rename or move of the file that leaves the constant as it is would
+  // give every build of this repository no release date, which only a release run would show (T6.4a re-check minor 5).
+  // Read without git, so a source archive passes too: the module at the path the constant names, below the repository's
+  // root, is the step this file imports.
+  it('the path the HEAD check names, below the repository root, is this tree\u{2019}s own build-date step', async () => {
+    const [rev, path] = APP_IN_HEAD.split(':')
+    const named = join(REPO_ROOT, ...(path ?? '').split('/'))
+    // Only a file is imported: a folder would load its package's main entry.
+    const isFile = existsSync(named) && statSync(named).isFile()
+    const step = isFile && ((await import(pathToFileURL(named).href)) as { buildDatePlugin?: unknown }).buildDatePlugin === buildDatePlugin
+    expect({ rev, isFile, step }).toEqual({ rev: 'HEAD', isFile: true, step: true })
+  })
+
+  // Record §5.10: a time limit of 30 s per call, and no git text in the build's output (stderr dropped). On a clean
+  // checkout every check runs.
+  it('every git call of the step has the 30 s time limit and drops git\u{2019}s stderr', () => {
+    const c = checkout('call-options')
+    vi.mocked(execFileSync).mockClear()
+    expect(commitDate(c.desktop)).toBe(COMMITTED_UTC)
+    const calls = stepGitCalls().map(({ timeout, stdio }) => ({ timeout, stderr: Array.isArray(stdio) ? (stdio as unknown[])[2] : stdio }))
+    expect({ calls: calls.length > 0, others: calls.filter((o) => o.timeout !== 30_000 || o.stderr !== 'ignore') }).toEqual({ calls: true, others: [] })
   })
 
   it('no git on PATH: null', () => {
@@ -255,11 +311,12 @@ describe('the build-date step: the committer date of HEAD, in UTC to the second 
   })
 
   // Record §5.10: `status` runs with core.fsmonitor off and without optional locks (T6.4a review B m-6). The plain status
-  // after the step is the control: it shows the program would start, and the index would be written.
+  // after the step is the control: it shows the program would start, and the index would be written. Git runs the
+  // fsmonitor value through a shell, so `sh "<script>"` starts it as the filter rows do (T6.4a re-check minor 7).
   it('a core.fsmonitor program in the repository configuration: the step never starts it, and still gets the date', () => {
     const c = checkout('fsmonitor')
     const { script, mark } = marker('fsmonitor-probe')
-    c.git('config', 'core.fsmonitor', slashed(script))
+    c.git('config', 'core.fsmonitor', `sh "${slashed(script)}"`)
     isolateGitConfig()
     const date = commitDate(c.desktop)
     const startedByTheStep = existsSync(mark)
@@ -475,6 +532,16 @@ describe('buildDatePlugin: a build with no release date names its condition in o
     }],
     ['the app folder deeper in another checkout', 'wrong prefix', () => checkout('log-prefix', 'vendor/hr/apps/desktop').desktop],
     ['this app at apps/desktop of another repository', 'app not in HEAD', () => foreignCheckout('log-foreign').desktop],
+    // HEAD holds apps/desktop, keys.json and a file of its own there, so only the exact path tells (T6.4a re-check
+    // minor 4).
+    ["a repository whose HEAD holds apps/desktop\u{2019}s keys.json and a file of its own there, but not build-date-plugin.ts (present, untracked)", 'app not in HEAD', () => {
+      const c = checkout('log-not-the-step')
+      c.git('rm', '-q', '--cached', '--', 'apps/desktop/build-date-plugin.ts')
+      writeFileSync(join(c.desktop, 'theirs.txt'), 'their own file\n')
+      c.git('add', '--', 'apps/desktop/theirs.txt')
+      c.git('commit', '-q', '-m', 'theirs')
+      return c.desktop
+    }],
     ['a repository with no commit yet', 'app not in HEAD', () => unbornCheckout('log-unborn')],
     ['a tracked change', 'tracked changes', () => {
       const c = checkout('log-dirty')
@@ -492,7 +559,8 @@ describe('buildDatePlugin: a build with no release date names its condition in o
       return c.desktop
     }],
     // The limit is 30 s per call, too long for a row: node's own error for a call past its `timeout` (code ETIMEDOUT,
-    // as a real one reads: impl/p6/T6.4a/fix-1 notes) stands in for status's.
+    // as a real one reads: impl/p6/T6.4a/fix-1 notes) stands in for status's, and below for rev-parse's and the HEAD
+    // check's (each names the time limit, not the check's own condition; T6.4a re-check minor 6).
     ['a git call past its time limit', 'git time limit', () => {
       const c = checkout('log-time')
       gitAnswers((args, real) => {
@@ -500,10 +568,32 @@ describe('buildDatePlugin: a build with no release date names its condition in o
         return real()
       })
       return c.desktop
-    }]
+    }],
+    ['rev-parse past its time limit', 'git time limit', () => failingAt('log-time-prefix', 'rev-parse', timeLimit)],
+    ['the HEAD check (cat-file) past its time limit', 'git time limit', () => failingAt('log-time-head', 'cat-file', timeLimit)],
+    // A failed `show` after a clean status, as git exiting non-zero reads (no code, status 128).
+    ['show failing after a clean status', 'git failed', () => failingAt('log-show', 'show', () => Object.assign(new Error('Command failed: git show'), { status: 128, signal: null }))]
   ])('%s: null, and the one line names "%s"', (_label, condition, make) => {
     const desktop = make()
     expect(built(desktop)).toEqual({ file: NULL_FILE, lines: [lineFor(condition)] })
+  })
+
+  // Record §5.10: with GIT_NO_LAZY_FETCH=1 a partial clone never makes git fetch during the step. A blobless clone
+  // (from a local folder: no network) with no checkout, the app's files then unpacked, untracked: HEAD names the step's
+  // file, but its object is not in the clone, so the HEAD check fails instead of fetching it (T6.4a re-check minor 1).
+  it.skipIf(!gitHonoursNoLazyFetch)('a blobless clone with no checkout and the app unpacked, untracked: null, the one line names "app not in HEAD", and git fetched nothing', () => {
+    const source = checkout('lazy-source')
+    source.git('config', 'uploadpack.allowFilter', 'true')
+    source.git('config', 'uploadpack.allowAnySHA1InWant', 'true')
+    const clone = tempRoot('build-date-lazy-clone')
+    gitIn(clone, ['clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(source.repo).href, clone])
+    const desktop = join(clone, 'apps', 'desktop')
+    mkdirSync(dirname(fileIn(desktop)), { recursive: true })
+    writeFileSync(join(desktop, 'build-date-plugin.ts'), '// unpacked from a source archive\n')
+    writeFileSync(join(desktop, 'src', 'main', 'services', 'updates', 'keys.json'), '{ "key_set": "x" }\n')
+    const packs = packsIn(clone)
+    isolateGitConfig()
+    expect({ ...built(desktop), packs: packsIn(clone) }).toEqual({ file: NULL_FILE, lines: [lineFor('app not in HEAD')], packs })
   })
 })
 

@@ -104,11 +104,30 @@ describe('supportNotice: the rules beyond the golden dates (record §8.4, rows "
     ['today.month a fraction', { ...good, today: { year: 2028, month: 6.5, day: 20 } }, null],
     ['today.year NaN', { ...good, today: { year: Number.NaN, month: 6, day: 20 } }, null],
     ['today.day Infinity', { ...good, today: { year: 2028, month: 6, day: Number.POSITIVE_INFINITY } }, null],
+    // A string, a Number object or a BigInt is no integer here (record §8.4 "Dates"; T6.4a re-check minor 2).
+    ['today.day a string', { ...good, today: { year: 2028, month: 6, day: '20' } }, null],
+    ['today.year a Number object', { ...good, today: { year: Object(2028) as unknown, month: 6, day: 20 } }, null],
+    ['today.year a BigInt', { ...good, today: { year: 2028n, month: 6, day: 20 } }, null],
     ['today an array carrying year, month and day', { ...good, today: Object.assign([], on(2028, 6, 20)) }, null],
     ["today's fields inherited", { ...good, today: inherited(on(2028, 6, 20)) }, null],
+    // One field inherited, every other own: each field is read as an own property on its own (record §8.4 "Inputs";
+    // T6.4a re-check minor 2).
+    ['today with only its month inherited', { ...good, today: Object.assign(inherited({ month: 6 }), { year: 2028, day: 20 }) }, null],
+    ['today with only its day inherited', { ...good, today: Object.assign(inherited({ day: 20 }), { year: 2028, month: 6 }) }, null],
     // The input: a plain object with own fields; else no notice.
     ['every field of the input inherited', inherited(good), null],
     ['only today inherited, the other fields own', Object.assign(inherited({ today: good.today }), { buildDate: good.buildDate, supportMonth: null, dismissed: {} }), null],
+    ['only buildDate inherited, the other fields own', Object.assign(inherited({ buildDate: good.buildDate }), { supportMonth: null, today: good.today, dismissed: {} }), null],
+    [
+      'only supportMonth inherited, a month long ended (2000-01): no stamp, so the age reminder, not the end notice',
+      Object.assign(inherited({ supportMonth: '2000-01' }), { buildDate: good.buildDate, today: good.today, dismissed: {} }),
+      AGE_15
+    ],
+    [
+      'only dismissed inherited, holding a dismissal of the age reminder that would hide it: no dismissal, so the age reminder',
+      Object.assign(inherited({ dismissed: { 'UPD-AGE-REMINDER': on(2028, 6, 19) } }), { buildDate: good.buildDate, supportMonth: null, today: good.today }),
+      AGE_15
+    ],
     ['the input an array carrying the fields', Object.assign([], good), null],
     // dismissed: a plain object with an own entry under the notice's code, a real date; else that dismissal is none.
     ['the dismissal entry inherited', { ...good, dismissed: inherited({ 'UPD-AGE-REMINDER': on(2028, 6, 19) }) }, AGE_15],
@@ -206,11 +225,40 @@ describe("support.ts's two grammar checks answer as their twins in main (record 
 
 // Record §8.4 "The function": pure, importing nothing, reading no clock, no file and no storage, so the renderer (PR-6b's
 // Home and Settings notices) and main may both call it. Read from the syntax tree: an import declaration, a re-export
-// from a module, an import() call or a require() anywhere in the file breaks the rule, and so does any name of a clock,
-// the host or its storage (T6.4a review A m2): the file needs none of them.
+// from a module, an import() call, a require() or import.meta anywhere in the file breaks the rule (T6.4a review A m2).
+// So does any free name (a name the file uses as a value or a type without declaring it) outside a short allowed list:
+// a clock, the host, its storage or the network can only be reached by such a name (Date, Temporal, process, document,
+// fetch, globalThis, ...), so the row needs no list of them to keep current (T6.4a re-check minor 3). eval and Function
+// run text as code, so they fail whatever the allowed list says. What no name can show: Math.random(), state kept at
+// module level between calls, a constructor reached through a value (the re-check's limits; the file is reviewed on
+// every change).
 describe('support.ts imports nothing and reads no clock, host or storage (record §8.4, "The function")', () => {
-  const HOST_NAMES = new Set(['Date', 'process', 'globalThis', 'window', 'self', 'localStorage', 'sessionStorage', 'navigator', 'Intl', 'performance'])
-  it('holds no import, no export from a module, no import(), no require(), no import.meta and none of Date, process, globalThis, window, self, localStorage, sessionStorage, navigator, Intl, performance', () => {
+  /** The free names support.ts uses as committed: four standard objects, `undefined`, and three standard types. */
+  const ALLOWED: ReadonlySet<string> = new Set(['Array', 'Math', 'Number', 'Object', 'undefined', 'Partial', 'Readonly', 'Record'])
+  /** Text run as code: never allowed. */
+  const NEVER: ReadonlySet<string> = new Set(['eval', 'Function'])
+
+  /** The file's free names, each once: resolved by TypeScript's checker over this file alone (no lib, no import), so a
+   *  name the file declares (in any scope it is used in) is bound and every other one is free. A member's name after a
+   *  dot is no free name; a shorthand property is the value it names. */
+  const freeNames = (source: ts.SourceFile): string[] => {
+    const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] }
+    const host = ts.createCompilerHost(options)
+    host.getSourceFile = () => source
+    const checker = ts.createProgram({ rootNames: [source.fileName], options, host }).getTypeChecker()
+    const free = new Set<string>()
+    const visit = (n: ts.Node): void => {
+      if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(ts.isQualifiedName(n.parent) && n.parent.right === n) && !ts.isMetaProperty(n.parent)) {
+        const symbol = ts.isShorthandPropertyAssignment(n.parent) ? checker.getShorthandAssignmentValueSymbol(n.parent) : checker.getSymbolAtLocation(n)
+        if (!(symbol?.declarations ?? []).some((d) => d.getSourceFile() === source)) free.add(n.text)
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    return [...free].sort()
+  }
+
+  it('holds no import, no export from a module, no import(), no require(), no import.meta, no free name but Array, Math, Number, Object, undefined, Partial, Readonly and Record, and never eval or Function', () => {
     const file = join(DESKTOP_ROOT, 'src', 'shared', 'updates', 'support.ts')
     const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
     const found: string[] = []
@@ -220,10 +268,10 @@ describe('support.ts imports nothing and reads no clock, host or storage (record
       else if (ts.isCallExpression(n) && (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === 'require'))) {
         found.push(n.getText(source))
       } else if (ts.isMetaProperty(n) && n.keywordToken === ts.SyntaxKind.ImportKeyword) found.push(n.getText(source))
-      else if (ts.isIdentifier(n) && HOST_NAMES.has(n.text)) found.push(n.text)
       ts.forEachChild(n, visit)
     }
     visit(source)
+    for (const name of freeNames(source)) if (!ALLOWED.has(name) || NEVER.has(name)) found.push(`free name ${name}`)
     expect(found).toEqual([])
   })
 })
