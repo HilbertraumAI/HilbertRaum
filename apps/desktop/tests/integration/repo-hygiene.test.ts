@@ -1689,14 +1689,17 @@ describe('repo hygiene — no private key under tests/fixtures/ (app-update C8, 
 // row compares the keys themselves, by id (§2.7, "A key's id"). None may be one of RFC 8032 §7.1's five test keys (the
 // RFC prints their private halves; taken from spec/ed25519.json's PUBLIC KEY values), nor a public key a committed
 // vector names: an entry of a `keys` list, of a `keySet` string, or of the `key_set` in a `keysJson` text, at any depth
-// of any .json under tests/fixtures/updates/vectors/. keys.json is read as the file readers read it (`readKeysFile`,
+// of any .json under tests/fixtures/updates/ (T6.0b widened it from updates/vectors/, so the golden update file's key
+// set, updates/golden-keys.json, and any later key-bearing fixture there are covered).
+// keys.json is read as the file readers read it (`readKeysFile`,
 // through the one parser), so a file that does not read fails here too. Not caught: a test key that no committed file
 // names (a key a test makes at run time, the walk's one-time key, §10.4); the key proof and the owner's key count (§2.8)
 // keep those out. The set is empty until the key ceremony, so the second and third rows prove the check on keys of
 // their own.
 describe('repo hygiene — the committed keys.json holds no RFC 8032 test key and no vector key (app-update M-1, C8)', () => {
   const KEYS_JSON = join(DESKTOP_ROOT, 'src', 'main', 'services', 'updates', 'keys.json')
-  const VECTORS = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates', 'vectors')
+  const UPDATES = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates')
+  const VECTORS = join(UPDATES, 'vectors')
   const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex') // record §2.7, "Shape"
   const idOf = (der: Buffer): string => createHash('sha256').update(der).digest('hex')
   const readJson = (...rel: string[]): unknown => JSON.parse(readFileSync(join(VECTORS, ...rel), 'utf8'))
@@ -1735,7 +1738,7 @@ describe('repo hygiene — the committed keys.json holds no RFC 8032 test key an
 
   let known: { readonly rfc: Set<string>; readonly vectors: Set<string> } | undefined
   const knownKeys = (): { readonly rfc: Set<string>; readonly vectors: Set<string> } =>
-    (known ??= { rfc: rfc8032Ids(), vectors: filesUnder(VECTORS, /\.json$/).reduce((ids, path) => keyIdsIn(JSON.parse(readFileSync(path, 'utf8')), ids), new Set<string>()) })
+    (known ??= { rfc: rfc8032Ids(), vectors: filesUnder(UPDATES, /\.json$/).reduce((ids, path) => keyIdsIn(JSON.parse(readFileSync(path, 'utf8')), ids), new Set<string>()) })
 
   /** The test keys among the keys of the keys.json at `path`: one line per finding, in the set's order. */
   const testKeysIn = (path: string): string[] => {
@@ -1759,6 +1762,8 @@ describe('repo hygiene — the committed keys.json holds no RFC 8032 test key an
     const vectorKey = (...rel: string[]): string => (readJson(...rel) as Array<{ keys?: string[] }>).find((v) => (v.keys ?? []).length > 0)!.keys![0]!
     const positive = vectorKey('positive', 'vectors-envelope.json')
     const negative = vectorKey('negative', 'vectors-envelope.json')
+    // The golden update file's key (T6.0b): golden-keys.json lies beside vectors/, not under it.
+    const golden = (JSON.parse(readFileSync(join(UPDATES, 'golden-keys.json'), 'utf8')) as { keys: string[] }).keys[0]!
     const fresh = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')
     const committed = readKeysFile(readFileSync(KEYS_JSON))
     const marker = committed.valid ? committed.value.slice(0, committed.value.indexOf(':') + 1) : ''
@@ -1771,11 +1776,12 @@ describe('repo hygiene — the committed keys.json holds no RFC 8032 test key an
         return join(dir, name)
       }
       const keysJson = (keys: string[]): string => `${JSON.stringify({ key_set: marker + keys.join(',') }, null, 2)}\n`
-      expect(testKeysIn(write('test-keys.json', keysJson([rfc.spki, fresh, positive, negative])))).toEqual([
+      expect(testKeysIn(write('test-keys.json', keysJson([rfc.spki, fresh, positive, negative, golden])))).toEqual([
         `${rfc.keyId}: one of RFC 8032 §7.1's five test keys`,
         named(rfc.spki),
         named(positive),
-        named(negative)
+        named(negative),
+        named(golden)
       ])
       expect(testKeysIn(write('fresh-key.json', keysJson([fresh])))).toEqual([])
       expect(testKeysIn(write('no-set.json', '{}\n'))).toEqual(['keys.json does not read (not-a-string)'])

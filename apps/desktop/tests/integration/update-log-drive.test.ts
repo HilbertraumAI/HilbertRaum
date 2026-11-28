@@ -145,7 +145,9 @@ function preparedRoot(label: string): ResolvedPaths {
 }
 const updatesDir = (p: ResolvedPaths): string => join(p.rootPath, 'updates')
 const logFile = (p: ResolvedPaths): string => join(updatesDir(p), 'update.log')
-const appendFailedStart = (p: ResolvedPaths): void => appendUpdateLogLine(p, 'start-failed', FAILED_START)
+const appendFailedStart = (p: ResolvedPaths): void => {
+  appendUpdateLogLine(p, 'start-failed', FAILED_START)
+}
 
 /** The app.log lines the writer left for support: its fields, parsed. */
 function writerLines(message: string): Array<Record<string, unknown>> {

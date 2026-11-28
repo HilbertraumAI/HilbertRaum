@@ -27,9 +27,9 @@ vi.mock('electron', () => ({
   clipboard: { writeText: () => {} }
 }))
 
-// #1024 review L-4: the failure context is what the update plan's channels (P6) are built from, and nothing in the
-// state reads its `paths` yet, so the registrar's call is watched (calling through to the real registrar) to hold that the
-// runner hands it the layout the start resolved.
+// #1024 review L-4: the failure context is what the update plan's channels (P6, W-82) are built from, so the registrar's
+// call is watched (calling through to the real registrar) to hold that the runner hands it the layout the start
+// resolved, and the app version and the update service's getter.
 const { registerSpy } = vi.hoisted(() => ({ registerSpy: vi.fn() }))
 vi.mock('../../src/main/ipc/registerStartFailureIpc', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/ipc/registerStartFailureIpc')>()
@@ -37,12 +37,28 @@ vi.mock('../../src/main/ipc/registerStartFailureIpc', async (importOriginal) => 
   return { ...actual, registerStartFailureIpc: registerSpy }
 })
 
-import { runBackendStart } from '../../src/main/backend-start'
-import { guardedHandle, releaseGuardedHandlers } from '../../src/main/ipc/guarded-handle'
+// T6.3 review m-1 (fix round 1, F3): the update channels' narrow context in the failure state is what PR-6b's "Copy
+// details for support" channel and P7's hand-off will read the layout and the version from, so the update registrar's
+// call is watched the same way (calling through) to hold what the failure state hands it.
+const { registerUpdatesSpy } = vi.hoisted(() => ({ registerUpdatesSpy: vi.fn() }))
+vi.mock('../../src/main/ipc/registerUpdatesIpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/ipc/registerUpdatesIpc')>()
+  registerUpdatesSpy.mockImplementation(actual.registerUpdatesIpc)
+  return { ...actual, registerUpdatesIpc: registerUpdatesSpy }
+})
+
+import { oneUpdateService, runBackendStart } from '../../src/main/backend-start'
+import { guardedHandle, releaseGuardedHandlers, type TrustedSenders } from '../../src/main/ipc/guarded-handle'
+import { registerUpdatesIpc } from '../../src/main/ipc/registerUpdatesIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
-import { initLogging, readLogTail } from '../../src/main/services/logging'
-import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import { ensureWorkspaceDirs, resolvePaths } from '../../src/main/services/workspace'
+import { initLogging, log, readLogTail } from '../../src/main/services/logging'
+import { DEFAULT_POLICY, readUpdatePolicy } from '../../src/main/services/policy'
+import { readDriveRelease, rootApps } from '../../src/main/services/updates/drive-release'
+import { readKitSupport } from '../../src/main/services/updates/kit-support'
+import { createUpdateService, NODE_BUNDLE_FS, NODE_START_FS, type UpdateService } from '../../src/main/services/updates/service'
+import { NODE_STAGING_FS } from '../../src/main/services/updates/staging'
+import { appendUpdateLogLine } from '../../src/main/services/updates/update-log'
+import { ensureWorkspaceDirs, resolvePaths, type ResolvedPaths } from '../../src/main/services/workspace'
 import { WorkspaceController, vaultPathsFrom } from '../../src/main/services/workspace-vault'
 import type { AppContext } from '../../src/main/services/context'
 import { IPC } from '../../src/shared/ipc'
@@ -51,16 +67,33 @@ import { tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { DESKTOP_ROOT } from '../helpers/repo-files'
 import { denyNewFolders } from '../helpers/unreadable-dir'
+import { hostOf, keySet, semver } from '../helpers/update-inputs'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-/** What the failure state answers on, and nothing more: the gate's state, and the "Copy details for support" pair. */
-const FAILURE_CHANNELS = [IPC.getLogTail, IPC.getWorkspaceState, IPC.writeClipboard].sort()
+const UPDATES_FIXTURES = join(DESKTOP_ROOT, 'tests', 'fixtures', 'updates')
+/** F-14's update channels: PR-6a's four, the golden list T6.0b wrote from the record (updates-ipc.test.ts's R1). */
+const F14_CHANNELS = (JSON.parse(readFileSync(join(UPDATES_FIXTURES, 'import', 'f14-locked-channels.json'), 'utf8')) as { pr6a: string[] }).pr6a
+/** The gate's state and the "Copy details for support" pair. */
+const GATE_CHANNELS = [IPC.getLogTail, IPC.getWorkspaceState, IPC.writeClipboard]
+
+/** What the failure state answers on, and nothing more: the gate's channels, and F-14's update channels (app-update
+ *  W-82), so a release that cannot start can still take the update that repairs it. */
+const FAILURE_CHANNELS = [...GATE_CHANNELS, ...F14_CHANNELS].sort()
+
+/** The update service where a row is not about it: fixed answers, no drive read. */
+const STAND_IN_SERVICE: UpdateService = {
+  importFile: async () => ({ kind: 'closed' }),
+  status: async () => ({ runningVersion: '0.1.66', available: false, import: { state: 'idle' }, buildDate: null, drive: { kind: 'none' } }),
+  cancel: async () => ({ kind: 'idle' }),
+  discardStaged: async () => ({ kind: 'not-staged' }),
+  setAuditHook: () => undefined
+}
 
 /** The runner's dependencies as `index.ts` hands them over (the paths are the seam for the update plan's P6; the
- *  version goes into the failed-start line of `update.log`, W-14). */
-const deps = { trustedSenders: ANY_SENDER, isDev: false, appVersion: '0.1.66', paths: () => null }
+ *  version goes into the failed-start line of `update.log`, W-14; the update service's getter, W-82). */
+const deps = { trustedSenders: ANY_SENDER, isDev: false, appVersion: '0.1.66', paths: () => null, updates: () => STAND_IN_SERVICE }
 
 /** The first two steps of `initBackend` over `root`: resolve the layout, create its four folders. */
 function startOver(root: string): () => void {
@@ -96,6 +129,7 @@ beforeEach(() => {
   releaseGuardedHandlers()
   handlers.clear()
   registerSpy.mockClear()
+  registerUpdatesSpy.mockClear()
   initLogging(join(tempRoot('backend-start-logs'), 'logs')) // a fresh, empty in-memory buffer
 })
 
@@ -237,9 +271,223 @@ describe('a back-end start that throws answers the gate with the failure state (
     }
     runBackendStart(start, { ...deps, isDev: true, paths: () => layout })
     expect(registerSpy).toHaveBeenCalledTimes(1)
+    // App-update W-82: also the app version and the update service's getter, which the update channels' narrow context
+    // and their service are made from.
     expect(registerSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ paths: layout, isDev: true, failure: { cause: 'other', code: null } })
+      expect.objectContaining({ paths: layout, isDev: true, failure: { cause: 'other', code: null }, appVersion: '0.1.66', updates: deps.updates })
     )
+  })
+})
+
+// App-update W-82 (F-14, frozen; T6.3): the four update channels answer in the failure state too, on the process's one
+// update service: the one `initBackend` built when the start threw after it (the channels the partial start registered
+// are removed with the rest, then registered again), or built there, start step included, when the throw came before
+// it (record §3.5 "The service and its start"). The update part is registered last, in a `try` of its own, so nothing
+// in it can take the gate's card with it. The three throw points of the T6.3 sheet's answer 9: before the service,
+// after its channels were registered, and inside the update part itself. The service is the real one, on a scratch
+// prepared drive, with the golden update file and its public key set.
+const GOLDEN_KEYS = keySet((JSON.parse(readFileSync(join(UPDATES_FIXTURES, 'golden-keys.json'), 'utf8')) as { keys: string[] }).keys)
+const GOLDEN_VERSION = (
+  JSON.parse(readFileSync(join(UPDATES_FIXTURES, 'import', 'f5-staged.json'), 'utf8')) as { staged: Array<{ file: string; version: string }> }
+).staged.find((s) => s.file === 'golden.hrupdate')!.version
+/** The case table's win32 host (cases.json `schema.host`): the system, the versions and the clock of these rows. */
+const WIN32 = hostOf({ id: 'the failure state\u{2019}s update channels', host: 'win32' })
+
+/** The update service as index.ts builds it, with the win32 host and its clock and a dialog that answers `file`; `build`
+ *  counts the builds, and `updates` is the one-service getter the runner is handed (backend-start.ts). */
+function realUpdates(file: string | null) {
+  const build = vi.fn((layout: ResolvedPaths | null) =>
+    createUpdateService({
+      paths: layout,
+      keys: GOLDEN_KEYS,
+      runningVersion: semver(WIN32.runningVersion),
+      host: { platform: WIN32.os, osVersion: () => WIN32.osVersion, glibc: () => WIN32.glibc, uiLanguage: () => WIN32.uiLanguage },
+      clock: { now: () => Date.parse(WIN32.now), monotonic: () => performance.now() },
+      reads: { policy: readUpdatePolicy, driveRelease: readDriveRelease, rootApps, kitSupport: readKitSupport, buildDate: () => null },
+      chooseFile: async () => file,
+      appendLog: appendUpdateLogLine,
+      fs: { bundle: NODE_BUNDLE_FS, staging: NODE_STAGING_FS, start: NODE_START_FS }
+    })
+  )
+  return { build, updates: oneUpdateService(build) }
+}
+
+/** A prepared drive as the win32 host has it (its drive-release record and its root app). */
+function updatableLayout(root: string): ResolvedPaths {
+  const layout = preparedLayout(root)
+  writeFileSync(join(root, 'config', 'drive-release.json'), JSON.stringify({ format: 1, app_version: WIN32.driveAppVersion }))
+  for (const name of WIN32.rootApps ?? []) writeFileSync(join(root, name), '')
+  return layout
+}
+
+/** The golden update file, copied off the drive. */
+function goldenCopy(): string {
+  const path = join(tempRoot('backend-start-update-file'), 'golden.hrupdate')
+  writeFileSync(path, readFileSync(join(UPDATES_FIXTURES, 'golden.hrupdate')))
+  return path
+}
+
+const updateLogEvents = (root: string): string[] =>
+  readFileSync(join(root, 'updates', 'update.log'), 'latin1')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => line.split(' ')[2]!)
+
+/** The update part's own failure line, by its fixed reason, and its fields. */
+function updatePartLines(lines: string[]): Array<{ line: string; fields: Record<string, unknown> }> {
+  return lines
+    .filter((l) => l.includes('[ERROR] Backend start: the update channels could not be registered'))
+    .map((line) => ({ line, fields: JSON.parse(line.slice(line.indexOf('{'))) as Record<string, unknown> }))
+}
+
+describe('a back-end start that throws still answers the update channels, on the one update service (W-82, F-14)', () => {
+  it('a throw before the service: the failure state builds it once, on its layout, and an import stages the golden file', async () => {
+    const root = tempRoot('backend-start-updates-before')
+    const layout = updatableLayout(root)
+    writeFileSync(join(root, 'workspace'), 'not a folder')
+    const { build, updates } = realUpdates(goldenCopy())
+    expect(runBackendStart(startOver(root), { ...deps, paths: () => layout, updates })).toEqual({ cause: 'other', code: 'EEXIST' })
+    expect([...handlers.keys()].sort()).toEqual(FAILURE_CHANNELS)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(build.mock.calls[0]![0]).toBe(layout)
+    expect((await invoke(handlers, IPC.updatesImportFile)).result).toMatchObject({ kind: 'staged', update: { version: GOLDEN_VERSION } })
+    expect(existsSync(join(root, 'updates', 'staging', GOLDEN_VERSION, 'staged.json'))).toBe(true)
+    expect(updateLogEvents(root)).toEqual(['start-failed', 'import-staged'])
+    expect(build).toHaveBeenCalledTimes(1)
+  })
+
+  it('a throw after the channels were registered: removed with the partial start, registered again on the service built once', async () => {
+    const root = tempRoot('backend-start-updates-after')
+    const layout = updatableLayout(root)
+    ensureWorkspaceDirs(layout)
+    writeFileSync(layout.dbPath, Buffer.alloc(8192, 0x41)) // not a database; no workspace.json, so the start opens plaintext
+    const { build, updates } = realUpdates(null)
+    const start = (): void => {
+      // initBackend's order: the service and its channels right after the Update keys line, the workspace's start later.
+      registerUpdatesIpc({ trustedSenders: ANY_SENDER, paths: layout, isDev: true, appVersion: '0.1.66' }, updates(layout))
+      new WorkspaceController(vaultPathsFrom(layout), DEFAULT_POLICY, true).init()
+    }
+    expect(runBackendStart(start, { ...deps, isDev: true, paths: () => layout, updates })).toEqual({ cause: 'other', code: 'SQLITE_26' })
+    expect([...handlers.keys()].sort()).toEqual(FAILURE_CHANNELS)
+    expect(build).toHaveBeenCalledTimes(1)
+    const lines = await copiedLines()
+    expect(lines.some((l) => l.endsWith('Backend start: removed the channels the partial start had registered {"released":4}'))).toBe(true)
+    // Electron's second-handler refusal never met: nothing failed to register.
+    expect(lines.filter((l) => l.includes('could not be registered'))).toEqual([])
+    expect((await invoke(handlers, IPC.updatesStatus)).result).toMatchObject({
+      runningVersion: WIN32.runningVersion,
+      available: true,
+      drive: { kind: 'prepared', staged: null, sweeping: false }
+    })
+  })
+
+  it('an update service that cannot be built: the card keeps its state and Copy details, no update channel, one fixed line', async () => {
+    const root = tempRoot('backend-start-updates-throw')
+    const updates = vi.fn((): UpdateService => {
+      throw Object.assign(new Error(`EIO: i/o error, scandir '${root}'`), { code: 'EIO', syscall: 'scandir', path: root })
+    })
+    const start = (): void => {
+      throw new TypeError('a fault')
+    }
+    expect(runBackendStart(start, { ...deps, updates })).toEqual({ cause: 'other', code: null })
+    expect(updates).toHaveBeenCalledTimes(1)
+    expect([...handlers.keys()].sort()).toEqual([...GATE_CHANNELS].sort())
+    expect((await gateState()).state).toBe('start_failed')
+    const lines = await copiedLines()
+    const failed = updatePartLines(lines)
+    expect(failed.map((f) => f.fields)).toEqual([{ error: 'Error', code: 'EIO', syscall: 'scandir' }])
+    expectNoPath(failed[0]!.line, root)
+    expect(lines.filter((l) => l.includes('the failure state could not be registered'))).toEqual([])
+  })
+
+  // P7's carried fact CF-58: a channel registered before the start survives the release, so the failure state's second
+  // registration of it meets Electron's second-handler refusal. The update part then leaves none of its own channels.
+  it('a second-handler refusal inside the update part: the card stays, and the update part leaves none of its channels', async () => {
+    guardedHandle(IPC.updatesDiscardStaged, () => 'registered before the start', { trustedSenders: ANY_SENDER })
+    const start = (): void => {
+      throw new TypeError('a fault')
+    }
+    expect(runBackendStart(start, deps)).toEqual({ cause: 'other', code: null })
+    expect([...handlers.keys()].sort()).toEqual([...GATE_CHANNELS, IPC.updatesDiscardStaged].sort())
+    expect((await gateState()).state).toBe('start_failed')
+    const lines = await copiedLines()
+    expect(updatePartLines(lines).map((f) => f.fields)).toEqual([
+      { error: 'Error', message: `Attempted to register a second handler for '${IPC.updatesDiscardStaged}'`, code: null, sqliteCode: null, sqlite: null }
+    ])
+    expect(lines.filter((l) => l.includes('the failure state could not be registered'))).toEqual([])
+  })
+
+  // T6.3 review m-6 (fix round 1, F4): the update part takes back what it registered before it writes its line, so the
+  // all-or-none holds even when the line itself throws (not reachable with today's logger; the order is the guarantee).
+  it('a throw part-way and a line that throws too: the update part still leaves none of its channels', async () => {
+    guardedHandle(IPC.updatesDiscardStaged, () => 'registered before the start', { trustedSenders: ANY_SENDER })
+    const writeLine = log.error
+    const spy = vi.spyOn(log, 'error').mockImplementation((message, meta) => {
+      if (message.startsWith('Backend start: the update channels')) throw new Error('the line could not be written')
+      writeLine(message, meta)
+    })
+    try {
+      const start = (): void => {
+        throw new TypeError('a fault')
+      }
+      expect(runBackendStart(start, deps)).toEqual({ cause: 'other', code: null })
+    } finally {
+      spy.mockRestore()
+    }
+    expect([...handlers.keys()].sort()).toEqual([...GATE_CHANNELS, IPC.updatesDiscardStaged].sort())
+    expect((await gateState()).state).toBe('start_failed')
+  })
+
+  // T6.3 review m-1 (fix round 1, F3): the failure state hands the update channels a narrow context of its own fields,
+  // the senders and the layout the very objects it holds, and nothing else (no failure, no getter), on the one service.
+  it('the failure state hands the update channels the narrow context of its own four fields, the layout by identity', () => {
+    const root = tempRoot('backend-start-updates-narrow')
+    const layout = resolvePaths({ envRoot: root, fallbackRoot: root })
+    const senders: TrustedSenders = { isTrusted: () => true } // a set of its own, held by identity
+    const start = (): void => {
+      throw new TypeError('a fault after the layout was resolved')
+    }
+    runBackendStart(start, { ...deps, trustedSenders: senders, isDev: true, appVersion: '0.1.67', paths: () => layout })
+    expect(registerUpdatesSpy).toHaveBeenCalledTimes(1)
+    const [narrow, service] = registerUpdatesSpy.mock.calls[0]! as [Record<string, unknown>, unknown]
+    expect(narrow).toStrictEqual({ trustedSenders: senders, paths: layout, isDev: true, appVersion: '0.1.67' })
+    expect(narrow.trustedSenders).toBe(senders)
+    expect(narrow.paths).toBe(layout)
+    expect(service).toBe(STAND_IN_SERVICE)
+  })
+})
+
+// T6.3 review m-6 (fix round 1, F4): the two rules of the one-service getter (backend-start.ts's oneUpdateService), which
+// index.ts's updateServiceFor is. Both starts name the same layout in production, so neither rule is met there today:
+// these rows hold them for the day a caller names another.
+describe('oneUpdateService: one update service per process (W-82)', () => {
+  /** A build that makes a new service at every call, so a second build shows as a second object. */
+  const freshBuild = () => vi.fn((_layout: ResolvedPaths | null): UpdateService => ({ ...STAND_IN_SERVICE }))
+
+  it.each<[string, () => Array<ResolvedPaths | null>]>([
+    ['no layout first', () => [null, null, preparedLayout(tempRoot('one-service-a')), null]],
+    ['a layout first', () => [preparedLayout(tempRoot('one-service-b')), null, preparedLayout(tempRoot('one-service-c'))]]
+  ])('%s: every later call answers the service the first call built, whatever layout it names', (_label, layouts) => {
+    const named = layouts()
+    const build = freshBuild()
+    const updates = oneUpdateService(build)
+    const services = named.map((layout) => updates(layout))
+    expect(services.every((service) => service === services[0])).toBe(true)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(build.mock.calls[0]![0]).toBe(named[0])
+  })
+
+  it('a build that throws builds nothing: the next call tries again, and the service it builds is kept', () => {
+    const layout = preparedLayout(tempRoot('one-service-throw'))
+    const build = freshBuild().mockImplementationOnce(() => {
+      throw Object.assign(new Error('EIO: i/o error, scandir'), { code: 'EIO' })
+    })
+    const updates = oneUpdateService(build)
+    expect(() => updates(layout)).toThrow('EIO')
+    const service = updates(layout)
+    expect(updates(null)).toBe(service)
+    expect(build).toHaveBeenCalledTimes(2)
+    expect(build.mock.calls.map(([named]) => named === layout)).toEqual([true, true])
   })
 })
 

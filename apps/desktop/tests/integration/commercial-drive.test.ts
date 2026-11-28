@@ -1935,13 +1935,27 @@ describe('assertCommercialDrive', () => {
     })
 
     // The Windows start file finds its app without case (cmd's glob), so a second app in another case is a second app to
-    // it (#235): the gate's own rule for any other root file named like an app ignores case (the T3.8 sheet F5, Q8; the
-    // classifier stays exact until P6, CF-33).
+    // it (#235): since P6's case rule (T6.2 part 1b, CF-33; record §4.4) the classifier says so itself, and the gate
+    // refuses it as a second Windows app; the gate's own rule for any other root file named like an app ignores case (the
+    // T3.8 sheet F5, Q8). _Was:_ an older app in another case was refused as no release artifact of any platform.
+    it('refuses an older Windows app in another case as a second Windows app (T3.8; T6.2 part 1b, CF-33)', async () => {
+      const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-twocase-')
+      provisionApp(root)
+      writeFileSync(join(root, 'hilbertraum-0.1.58-portable.exe'), 'app-bytes')
+      const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+      expect(res.checks.appArtifactsPresent).toBe(false)
+      const lines = appLines(res.problems)
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatch(/^win-x64: more than one app artifact at the drive root \(.+\) — a drive must carry exactly one; delete the others$/)
+      expect(lines[0]).toContain(ARTIFACT['win-x64'])
+      expect(lines[0]).toContain('hilbertraum-0.1.58-portable.exe')
+    })
+
     const notAnArtifactLine = (name: string): string =>
       `app artifact "${name}" is not a release artifact of any platform (expected HilbertRaum-<version>-portable.exe, ` +
       'HilbertRaum-<version>-mac-arm64.app.zip, HilbertRaum-<version>.AppImage)'
     it.each([
-      ['an older app in another case', 'hilbertraum-0.1.58-portable.exe'],
+      ['an older macOS app in another case (its bash glob matches case-exactly)', 'hilbertraum-0.1.58-mac-arm64.app.zip'],
       ['a name no platform uses', `HilbertRaum-${APP_VERSION}-mac-x64.app.zip`]
     ])('refuses any other root file named like an app: %s (T3.8)', async (_title, name) => {
       const { root, chat } = otherwiseValidDrive('hilbertraum-commercial-notanapp-')
@@ -2083,7 +2097,8 @@ describe('assertCommercialDrive', () => {
     })
 
     // T3.8 review m-3: with no versioned app at the root (-SkipPackage, then -VerifyOnly before the apps are copied; or the
-    // apps named in another case, which the record's rule does not count), writing the record again gives the same record,
+    // macOS and Linux apps named in another case, which their start files and the record's rule do not count), writing the
+    // record again gives the same record,
     // so the line says to fix the apps first, as for apps of no single version.
     const NO_APPS_LINE =
       'config/drive-release.json records no app version, and the apps on the drive carry no single version — fix the ' +
@@ -2096,12 +2111,13 @@ describe('assertCommercialDrive', () => {
         }
       ],
       [
-        'the apps named in another case',
+        // T6.2 part 1b (CF-33): a Windows app in another case is an app now (its start file finds it), so only the macOS and
+        // Linux apps in another case leave the root without a versioned app; the Windows one is removed. _Was:_ all three in
+        // another case.
+        'the macOS and Linux apps named in another case, no Windows app',
         (root) => {
-          for (const p of ALL_PLATFORMS) {
-            rmSync(join(root, ARTIFACT[p]))
-            writeFileSync(join(root, ARTIFACT[p].toLowerCase()), 'app-bytes')
-          }
+          for (const p of ALL_PLATFORMS) rmSync(join(root, ARTIFACT[p]))
+          for (const p of ['mac-arm64', 'linux-x64'] as const) writeFileSync(join(root, ARTIFACT[p].toLowerCase()), 'app-bytes')
         }
       ]
     ])('refuses a record without an app version over no versioned app, saying to fix the apps first: %s (T3.8 review m-3)', async (_title, edit) => {

@@ -21,6 +21,12 @@
 // envelope.ts) has accepted that value; no line here spells it. Main never imports this file (it is in no app.asar). The
 // release tools load it through Node's own type stripping (with scripts/lib/ts-sibling-imports.mjs), so it imports only
 // envelope.ts and types, reads no file and no environment, and holds only TypeScript that stripping can erase.
+//
+// T6.4a adds the build date (W-17; §5.10, "The guard's build-date check"; CF-48 (3)): `checkBundleBuildDate`, the same
+// byte search through the same occurrence reader (now exported, with the byte before and after each hit), for the
+// release commit's committer date written as UTC to the second. The caller hands git's `%cI` of the checkout; the UTC
+// text is computed here, apart from the build step's own reading (`%ct`). Its bounded claim is the key check's: the
+// literal is in the bundle, not what the code makes of it. No marker: the value keeps the file's approved shape.
 
 import { parseKeySet, readJsonObject } from './envelope'
 import type { KeySetFault, UpdateKey } from './envelope'
@@ -61,12 +67,18 @@ export interface MarkerHit {
 }
 
 /** A hit with the byte directly before the marker and the byte directly after its run; -1 at the file's start or end. */
-interface Occurrence extends MarkerHit {
+export interface Occurrence extends MarkerHit {
   readonly before: number
   readonly after: number
 }
 
-function occurrences(files: readonly BundleFile[], marker: string, isValueByte: (byte: number) => boolean): Occurrence[] {
+/**
+ * The occurrence reader (CF-48 (3)): every occurrence of `marker` (its UTF-8 bytes) in every file, in file order and then
+ * offset order, each with the longest run of value bytes that follows it, the byte directly before the marker and the
+ * byte directly after the run (-1 at the file's start or end). Occurrences may overlap. An empty marker finds nothing.
+ * Never throws.
+ */
+export function occurrences(files: readonly BundleFile[], marker: string, isValueByte: (byte: number) => boolean): Occurrence[] {
   const needle = Buffer.from(marker, 'utf8')
   if (needle.length === 0) return []
   const hits: Occurrence[] = []
@@ -170,4 +182,71 @@ export function checkBundleKeys(files: readonly BundleFile[], committedKeysJson:
     })
   }
   return { ok: true, path: hit.path, keyCount: committed.keys.length }
+}
+
+// ---- the build date (T6.4a; §5.10, "The guard's build-date check")
+
+/** git's `%cI`: strict ISO 8601, `YYYY-MM-DDTHH:MM:SS` and then `Z` or an offset `+HH:MM` / `-HH:MM`. */
+const COMMITTER_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:Z|([+-])([0-9]{2}):([0-9]{2}))$/
+
+/**
+ * git's `%cI` of the release commit written as UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`: a real local time (a day its
+ * month has, hour 00-23, minute and second 00-59, an offset of at most 23:59) with its offset taken off, and that UTC
+ * time in §2.4's `issued` grammar (a year from 2000 to 9999); else null. Nothing else is accepted: no fraction, no line
+ * end (the caller trims git's), no other form.
+ */
+function expectedBuildDate(committerDate: string): string | null {
+  const m = COMMITTER_DATE.exec(committerDate)
+  if (m === null) return null
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number]
+  const offsetHours = m[8] === undefined ? 0 : Number(m[8])
+  const offsetMinutes = m[9] === undefined ? 0 : Number(m[9])
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const days = month === 2 ? (leap ? 29 : 28) : month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31
+  if (month < 1 || month > 12 || day < 1 || day > days || hour > 23 || minute > 59 || second > 59 || offsetHours > 23 || offsetMinutes > 59) return null
+  const sign = m[7] === '-' ? -1 : 1
+  const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second) - sign * (offsetHours * 60 + offsetMinutes) * 60_000)
+  const y = utc.getUTCFullYear()
+  if (y < 2000 || y > 9999) return null
+  const two = (n: number): string => String(n).padStart(2, '0')
+  return `${y}-${two(utc.getUTCMonth() + 1)}-${two(utc.getUTCDate())}T${two(utc.getUTCHours())}:${two(utc.getUTCMinutes())}:${two(utc.getUTCSeconds())}Z`
+}
+
+/** Why the build-date check fails; `expected` is the UTC text looked for (a date is public). */
+export type BundleBuildDateFailure =
+  | { readonly check: 'build-date'; readonly reason: 'expected-unreadable' }
+  | { readonly check: 'build-date'; readonly reason: 'date-not-found'; readonly expected: string }
+  | { readonly check: 'build-date'; readonly reason: 'date-repeated'; readonly expected: string; readonly paths: readonly string[] }
+  | { readonly check: 'build-date'; readonly reason: 'date-not-in-code'; readonly expected: string; readonly path: string }
+  | { readonly check: 'build-date'; readonly reason: 'date-not-quoted'; readonly expected: string; readonly path: string }
+
+export type BundleBuildDateResult =
+  | { readonly ok: true; readonly path: string; readonly date: string }
+  | { readonly ok: false; readonly failure: BundleBuildDateFailure }
+
+/**
+ * The release guard's build-date check (§5.10, "The guard's build-date check"), over the same files as `checkBundleKeys`
+ * (every file under out/main), in this order, the first failure deciding:
+ * 1. `committerDate` (git's `%cI` of the checkout's release commit) must give a UTC text (`expectedBuildDate`), else
+ *    `expected-unreadable`, whatever the bundle holds;
+ * 2. that text is found across all files together: never is `date-not-found` (a build with no release date embeds null,
+ *    so it fails here, on the safe side); more than once (two in one file included) is `date-repeated`, one path per
+ *    occurrence;
+ * 3. the one occurrence must be in a file whose name ends `.js`, `.mjs` or `.cjs` in any letter case, else
+ *    `date-not-in-code`;
+ * 4. the byte directly before it and the byte directly after its 20 characters must be the same quote (`"`, `'` or a
+ *    backtick), else `date-not-quoted` (the string the app reads is then the date and nothing more).
+ * Never throws.
+ */
+export function checkBundleBuildDate(files: readonly BundleFile[], committerDate: string): BundleBuildDateResult {
+  const fail = (failure: BundleBuildDateFailure): BundleBuildDateResult => ({ ok: false, failure })
+  const expected = expectedBuildDate(committerDate)
+  if (expected === null) return fail({ check: 'build-date', reason: 'expected-unreadable' })
+  const hits = occurrences(files, expected, () => false)
+  if (hits.length === 0) return fail({ check: 'build-date', reason: 'date-not-found', expected })
+  if (hits.length > 1) return fail({ check: 'build-date', reason: 'date-repeated', expected, paths: hits.map((h) => h.path) })
+  const hit = hits[0]
+  if (!CODE_FILE.test(hit.path)) return fail({ check: 'build-date', reason: 'date-not-in-code', expected, path: hit.path })
+  if (!QUOTES.includes(hit.before) || hit.after !== hit.before) return fail({ check: 'build-date', reason: 'date-not-quoted', expected, path: hit.path })
+  return { ok: true, path: hit.path, date: expected }
 }

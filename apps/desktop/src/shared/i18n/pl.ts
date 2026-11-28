@@ -3122,6 +3122,8 @@ export const pl: UiCatalog<'pl'> = {
   'main.dialog.exportLog': 'Zapisz dzienniki diagnostyczne',
   'main.dialog.filterDocuments': 'Dokumenty',
   'main.dialog.filterAll': 'Wszystkie pliki',
+  'main.dialog.importUpdate': 'Zainstaluj aktualizację z pliku',
+  'main.dialog.filterUpdate': 'Plik aktualizacji',
   'main.zim.unavailable': 'Pakiety wiedzy nie są dostępne w tej sesji.',
   'main.zim.articleUnavailable':
     'Ten artykuł jest teraz niedostępny, więc nie udało się go zapisać. Pakiet mógł zostać ' +

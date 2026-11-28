@@ -124,16 +124,23 @@
     { "name": "HilbertRaum-0.2.0-portable.exe", "kind": "folder", "artifact": null, "why": "the start files count only files" },
     { "name": "HilbertRaum-0.2.0-portable.exe", "kind": "other", "artifact": null, "why": "a link at the root is never followed" },
     { "name": "HilbertRaum-0.2.0-mac-arm64.app.zip", "kind": "folder", "artifact": null, "why": "only a file" },
-    { "name": "hilbertraum-0.2.0-portable.exe", "kind": "file", "artifact": null, "why": "§4.4: exactly the name, byte for byte" },
-    { "name": "HilbertRaum-0.2.0-Portable.exe", "kind": "file", "artifact": null, "why": "§4.4" },
-    { "name": "HilbertRaum-0.2.0-portable.EXE", "kind": "file", "artifact": null, "why": "§4.4" },
-    { "name": "HilbertRaum-0.2.0.appimage", "kind": "file", "artifact": null, "why": "§4.4" },
+    { "name": "hilbertraum-0.2.0-portable.exe", "kind": "file", "artifact": { "system": "win32", "version": "0.2.0" }, "why": "§4.4 case rule (T6.2, CF-33): the Windows start file's glob matches without case, so a win32 name is compared after an ASCII fold of the glob's fixed parts (was: no app, byte for byte)" },
+    { "name": "HilbertRaum-0.2.0-Portable.exe", "kind": "file", "artifact": { "system": "win32", "version": "0.2.0" }, "why": "§4.4 case rule (T6.2, CF-33): the suffix folded (was: no app)" },
+    { "name": "HilbertRaum-0.2.0-portable.EXE", "kind": "file", "artifact": { "system": "win32", "version": "0.2.0" }, "why": "§4.4 case rule (T6.2, CF-33): the extension folded (was: no app)" },
+    { "name": "HilbertRaum-0.2.0.appimage", "kind": "file", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): the Linux start file is a bash glob, byte for byte: no artifact" },
     { "name": "._HilbertRaum-0.2.0-portable.exe", "kind": "file", "artifact": null, "why": "macOS litter (W-25), outside the glob" },
     { "name": "HilbertRaum-0.2.0-portable.exe.bak", "kind": "file", "artifact": null, "why": "§4.4: never by prefix" },
     { "name": "HilbertRaum-0.2.0.AppImage.part", "kind": "file", "artifact": null, "why": "§4.4: never by prefix" },
     { "name": "xHilbertRaum-0.2.0-portable.exe", "kind": "file", "artifact": null, "why": "§4.4: never by substring" },
     { "name": "HilbertRaum-0.2.0-mac-x64.app.zip", "kind": "file", "artifact": null, "why": "outside all three globs" },
-    { "name": "HilbertRaum-portable.exe", "kind": "file", "artifact": null, "why": "the glob needs both dashes" }
+    { "name": "HilbertRaum-portable.exe", "kind": "file", "artifact": null, "why": "the glob needs both dashes" },
+    { "name": "hilbertraum-1.4.0-PORTABLE.EXE", "kind": "file", "artifact": { "system": "win32", "version": "1.4.0" }, "why": "§4.4 case rule (T6.2, CF-33): the record's own example, a win32 artifact carrying 1.4.0" },
+    { "name": "HILBERTRAUM-1.4.0-RC.1-PORTABLE.EXE", "kind": "file", "artifact": { "system": "win32", "version": "1.4.0-RC.1" }, "why": "§4.4 case rule (T6.2, CF-33): an upper-case version segment is taken as written (1.4.0-RC.1, never 1.4.0-rc.1)" },
+    { "name": "HılbertRaum-0.2.0-portable.exe", "kind": "file", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): the fold is ASCII only, never a locale's (a dotless i, which upper-cases to I, is no i)" },
+    { "name": "HilbertRaum-0.2.0-mac-arm64.app.ZIP", "kind": "file", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): the macOS start file is a bash glob, byte for byte: an upper-case .ZIP is no artifact" },
+    { "name": "hilbertraum-0.2.0-mac-arm64.app.zip", "kind": "file", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): darwin byte for byte, the prefix too" },
+    { "name": "hilbertraum-0.2.0.AppImage", "kind": "file", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): linux byte for byte, the prefix too" },
+    { "name": "HilbertRaum.APP", "kind": "folder", "artifact": null, "why": "§4.4 case rule (T6.2, CF-33): a folder's .app suffix byte for byte: .APP is no macOS app" }
   ],
   "tree": {
     "why": "the golden drive root: each path a file holding its ASCII text (no line end), folders implied. Recorded: the three root apps, the four start files, every regular file under runtime/. Never recorded: config/, models/, docs, logs/, workspace/, updates/, the root's other files, macOS litter",
@@ -213,9 +220,9 @@
         "stdout": "drive-release.json: app_version=omitted (no single version) systems=darwin,linux,win32 files=12", "why": "the glob's * matches nothing too"
       },
       {
-        "id": "W10a", "name": "a lower-case Windows app name is no app", "remove": ["HilbertRaum-0.2.0-portable.exe"], "add": { "hilbertraum-0.2.0-portable.exe": "win app" }, "exit": 0,
-        "record": { "app_version": "0.2.0", "systems": ["darwin", "linux"], "paths": ["HilbertRaum-0.2.0-mac-arm64.app.zip", "HilbertRaum-0.2.0.AppImage", "READ ME FIRST.txt", "Start HilbertRaum.cmd", "Start HilbertRaum.command", "runtime/llama.cpp/linux/llama-server", "runtime/llama.cpp/mac/llama-server", "runtime/llama.cpp/win/.hilbertraum-runtime.json", "runtime/llama.cpp/win/cpu/llama-server.exe", "runtime/llama.cpp/win/llama-server.exe", "start-hilbertraum.sh"] },
-        "stdout": "drive-release.json: app_version=0.2.0 systems=darwin,linux files=11", "why": "§4.4: exactly the name"
+        "id": "W10a", "name": "a lower-case Windows app name is the Windows app", "remove": ["HilbertRaum-0.2.0-portable.exe"], "add": { "hilbertraum-0.2.0-portable.exe": "win app" }, "exit": 0,
+        "record": { "app_version": "0.2.0", "systems": ["darwin", "linux", "win32"], "paths": ["HilbertRaum-0.2.0-mac-arm64.app.zip", "HilbertRaum-0.2.0.AppImage", "READ ME FIRST.txt", "Start HilbertRaum.cmd", "Start HilbertRaum.command", "hilbertraum-0.2.0-portable.exe", "runtime/llama.cpp/linux/llama-server", "runtime/llama.cpp/mac/llama-server", "runtime/llama.cpp/win/.hilbertraum-runtime.json", "runtime/llama.cpp/win/cpu/llama-server.exe", "runtime/llama.cpp/win/llama-server.exe", "start-hilbertraum.sh"] },
+        "stdout": "drive-release.json: app_version=0.2.0 systems=darwin,linux,win32 files=12", "why": "§4.4 case rule (T6.2, CF-33): the Windows start file's glob matches without case, so the lower-case name is the win32 app carrying 0.2.0 and is recorded (was: no app, systems darwin,linux, files=11)"
       },
       {
         "id": "W10b", "name": "names that are no app: a folder at the Windows name, a .bak, a .part, litter, a file named x.app, a hidden .app folder", "remove": ["HilbertRaum-0.2.0-portable.exe"], "add": { "HilbertRaum-0.2.0-portable.exe/x": "folder", "HilbertRaum-0.2.0-portable.exe.bak": "win app", "HilbertRaum-0.2.0.AppImage.part": "linux app", "._HilbertRaum-0.2.0.AppImage": "apple double", "x.app": "a file", ".hidden.app/x": "folder" }, "exit": 0,

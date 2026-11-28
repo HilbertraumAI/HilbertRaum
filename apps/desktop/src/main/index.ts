@@ -4,7 +4,8 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot, type ResolvedPaths } from './services/workspace'
-import { runBackendStart, runWindowStart } from './backend-start'
+import { oneUpdateService, runBackendStart, runWindowStart } from './backend-start'
+import { updateServiceDepsFor } from './update-service-deps'
 import { safeFailureForLog } from './services/failure-for-log'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
@@ -87,6 +88,7 @@ import {
 } from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
+import { registerUpdatesIpc } from './ipc/registerUpdatesIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
@@ -105,6 +107,7 @@ import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
 import { writeStartupLine } from './services/updates/update-log'
 import { embeddedKeySet } from './services/updates/keys'
+import { createUpdateService } from './services/updates/service'
 import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
@@ -216,6 +219,18 @@ let ctx: AppContext | null = null
 // carries it (`backend-start.ts`), for the update plan's channels to find the drive.
 let backendPaths: ResolvedPaths | null = null
 
+// App-update W-4 (F-14; docs/app-updates.md §3.5 "Who picks the file", "The service and its start"): what the update
+// service is handed (update-service-deps.ts: main's own dialog, this computer and its runtime glibc, the clock, the
+// drive's readers, the update.log appender, node:fs, and the embedded keys, none when this app's version does not
+// parse), made once here from Electron's parts, so the glibc hook in it reads once per process. Nothing is added to it
+// here: no start hook (P7) and no audit sink (PR-6b).
+const updateServiceDeps = updateServiceDepsFor({ app, dialog, BrowserWindow, process })
+
+// App-update W-82 (record §3.5 "The service and its start"): the process's one update service. initBackend builds it,
+// start step included, right after the Update keys line; the failure state gets that one, or builds it when the start
+// threw before that (backend-start.ts's oneUpdateService).
+const updateServiceFor = oneUpdateService((layout) => createUpdateService(updateServiceDeps(layout)))
+
 // The three model resolvers + the four availability-driven service selectors that used to
 // live inline here were extracted (M-A3): `resolveModelByRole` (services/resolve-model.ts)
 // collapses the embeddings/reranker/transcriber resolvers; `composeServices`
@@ -275,6 +290,11 @@ function initBackend(): void {
   // embeds none, so every update file answers "not available"). A count and a flag only: never a key or an id. This use
   // also keeps the key set in the main bundle, where the release guard looks for it (docs/app-updates.md §2.7).
   log.info('Update keys', { count: embeddedKeySet.keys.length, valid: embeddedKeySet.valid })
+  // App-update W-4, W-82 (F-14; record §3.5 "The service and its start"): the process's one update service, its start
+  // step run now, before the policy and the workspace's start, so a start that throws there keeps it for the failure
+  // state; and its four channels, callable while locked, on their narrow context (never `ctx`).
+  const updates = updateServiceFor(paths)
+  registerUpdatesIpc({ trustedSenders, paths, isDev, appVersion: app.getVersion() }, updates)
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
@@ -1275,7 +1295,8 @@ app.whenReady().then(() => {
     trustedSenders,
     isDev,
     appVersion: app.getVersion(),
-    paths: () => backendPaths
+    paths: () => backendPaths,
+    updates: updateServiceFor
   })
   // #1024 review M-2: everything after the back end runs inside `runWindowStart`. A throw here (the app's own renderer
   // files, the menu, the window) used to open no window at all while this process held the single-instance lock, so

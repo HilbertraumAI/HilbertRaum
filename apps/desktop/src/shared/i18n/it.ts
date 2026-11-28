@@ -3152,6 +3152,8 @@ export const it: UiCatalog<'it'> = {
   'main.dialog.exportLog': 'Salva i log di diagnostica',
   'main.dialog.filterDocuments': 'Documenti',
   'main.dialog.filterAll': 'Tutti i file',
+  'main.dialog.importUpdate': 'Installa aggiornamento da file',
+  'main.dialog.filterUpdate': 'File di aggiornamento',
   'main.zim.unavailable': 'I pacchetti di conoscenze non sono disponibili in questa sessione.',
   'main.zim.articleUnavailable':
     'Questo articolo non è disponibile in questo momento, quindi non è stato possibile salvarlo. ' +

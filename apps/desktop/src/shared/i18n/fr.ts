@@ -3286,6 +3286,8 @@ export const fr: UiCatalog<'fr'> = {
   'main.dialog.exportLog': 'Enregistrer les journaux de diagnostic',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'Tous les fichiers',
+  'main.dialog.importUpdate': 'Installer une mise à jour depuis un fichier',
+  'main.dialog.filterUpdate': 'Fichier de mise à jour',
   'main.zim.unavailable': 'Les packs de connaissances ne sont pas disponibles dans cette session.',
   'main.zim.articleUnavailable':
     'Cet article n’est pas disponible pour le moment\u00A0: il n’a donc pas pu être enregistré. ' +

@@ -4,6 +4,7 @@ import { safeFailureForLog } from './services/failure-for-log'
 import { tMain } from './services/i18n'
 import { log } from './services/logging'
 import { startFailureFrom } from './services/start-failure'
+import type { UpdateService } from './services/updates/service'
 import { writeStartFailedLine } from './services/updates/update-log'
 import type { ResolvedPaths } from './services/workspace'
 import type { BackendStartFailure } from '../shared/types'
@@ -30,6 +31,24 @@ export interface BackendStartDeps {
   appVersion: string
   /** The drive layout the start resolved before it threw, or null; read only after a throw. */
   paths: () => ResolvedPaths | null
+  /** The process's one update service (index.ts's `updateServiceFor`, made by {@link oneUpdateService}): the failure
+   *  state registers the update channels again on it (app-update W-82). */
+  updates: UpdateServiceGetter
+}
+
+/** The update service for a layout, built at most once per process (record §3.5 "The service and its start"). */
+export type UpdateServiceGetter = (layout: ResolvedPaths | null) => UpdateService
+
+/**
+ * App-update W-82 (docs/app-updates.md §3.5 "The service and its start"): one update service per process, so its start
+ * step runs once. `build` runs at the first call that does not throw, with the layout that call names; every later call
+ * answers that service, whatever layout it names. `initBackend` calls it right after the `Update keys` line with the
+ * layout it resolved; the failure state calls it again with the same layout, and gets the one built, or builds it, start
+ * step included, when the start threw before that. A `build` that throws builds nothing: the next call tries again.
+ */
+export function oneUpdateService(build: UpdateServiceGetter): UpdateServiceGetter {
+  let built: UpdateService | null = null
+  return (layout) => (built ??= build(layout))
 }
 
 /** What the gate is told when even the thrown value cannot be read (a getter that throws on `code`). */
@@ -42,7 +61,8 @@ const UNREADABLE_FAILURE: BackendStartFailure = { cause: 'other', code: null }
  * - every handler the partial start had registered is removed (a throw after some registrars ran), and their count is
  *   logged, so a late throw (a back end half started behind the card) can be told apart; a channel registered before
  *   the start began stays (final round);
- * - the failure state's channels are registered (`registerStartFailureIpc`), so the gate shows why, in its language.
+ * - the failure state's channels are registered (`registerStartFailureIpc`), so the gate shows why, in its language,
+ *   and the update channels answer again, on the process's one update service (app-update W-82).
  * Returns the failure, or null when the start went through. Never throws: nothing in the catch may throw out of it
  * (review L-1), and a failure state that cannot be registered is logged too, and the window still opens onto the
  * renderer's fatal screen.
@@ -76,7 +96,9 @@ export function runBackendStart(start: () => void, deps: BackendStartDeps): Back
         trustedSenders: deps.trustedSenders,
         failure,
         paths: deps.paths(),
-        isDev: deps.isDev
+        isDev: deps.isDev,
+        appVersion: deps.appVersion,
+        updates: deps.updates
       })
     } catch (registerErr) {
       log.error('Backend start: the failure state could not be registered', safeFailureForLog(registerErr))

@@ -97,6 +97,14 @@ import type {
   WorkspaceStateInfo
 } from '../shared/types'
 import type { RendererSettingsPatch } from '../shared/settings-writers'
+import type {
+  CancelAnswer,
+  DiscardStagedAnswer,
+  DiscardStagedArgument,
+  ImportFileAnswer,
+  ImportFileArgument,
+  UpdatesStatus
+} from '../shared/updates/import-types'
 
 // The single, typed bridge between renderer and main. The renderer has no
 // direct Node or network access — it can only call what is exposed here.
@@ -165,6 +173,20 @@ const api = {
     nextPassword: string
   ): Promise<WorkspaceActionResult> =>
     ipcRenderer.invoke(IPC.changeWorkspacePassword, currentPassword, nextPassword),
+
+  // ---- App-update F-14 (T6.3; docs/app-updates.md §3.5): the update channels, callable while the workspace is locked
+  // and on the start-failure card. Each hands its argument on untouched; none takes a path (main opens the file dialog).
+  /** Run one update file's import: with no argument main's file dialog opens; `{ confirmToken }` answers the old-file
+   *  question of an earlier `confirm` answer. One answer per call, when the run ends. */
+  updatesImportFile: (argument?: ImportFileArgument): Promise<ImportFileAnswer> =>
+    ipcRenderer.invoke(IPC.updatesImportFile, argument),
+  /** The update state (the running version, the run's state, the drive part); poll it at most every 250 ms. */
+  updatesStatus: (): Promise<UpdatesStatus> => ipcRenderer.invoke(IPC.updatesStatus),
+  /** Stop the run at its next check point. */
+  updatesCancel: (): Promise<CancelAnswer> => ipcRenderer.invoke(IPC.updatesCancel),
+  /** "Don't install this update": remove the merely staged update of that version. */
+  updatesDiscardStaged: (argument: DiscardStagedArgument): Promise<DiscardStagedAnswer> =>
+    ipcRenderer.invoke(IPC.updatesDiscardStaged, argument),
 
   // ---- Models + runtime ----
   // `lazyVerify` (RT-3): every routine caller passes true so only the active model is hashed

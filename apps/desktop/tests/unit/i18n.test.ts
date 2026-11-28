@@ -1271,6 +1271,37 @@ describe('a quoted label is the real one — the partial re-index toast (#805 W1
   })
 })
 
+describe('a quoted label is the real one — the update file dialog (app-update CF-24, T6.6a)', () => {
+  // Release 1's unlock texts C01 (`main.workspace.schemaUnreadable`) and X01 (`main.workspace.newer`) are frozen (no
+  // later update can change what release 1 says there) and tell the user to choose "Install update from a file…".
+  // Main's file dialog for an update file is titled `main.dialog.importUpdate` (docs/app-updates.md §3.5 "Who picks the
+  // file"): that label without its ellipsis, which belongs to the button that opens the dialog. So in every language
+  // the title plus the ellipsis is the label both texts name, set off as the language sets a label in a sentence: its
+  // own quotation marks (French with a no-break space inside them); English quotes it not at all and lets the label end
+  // its sentence ("choose Install update from a file… If", the M1 copy deck). The mapped type makes a newly registered
+  // language list its marks here. PR-6b's button and tab labels join this row (CF-24).
+  const TEXTS = ['main.workspace.schemaUnreadable', 'main.workspace.newer'] as const
+  const SET_OFF: { readonly [C in UiLanguage]: readonly [before: string, after: string] } = {
+    en: ['choose ', ' '],
+    de: ['„', '“'],
+    es: ['«', '»'],
+    fr: ['«\u{A0}', '\u{A0}»'],
+    it: ['«', '»'],
+    nl: ['“', '”'],
+    pl: ['„', '”'],
+    tr: ['“', '”'],
+    ru: ['«', '»'],
+    uk: ['«', '»']
+  }
+
+  it.each(UI_LANGUAGE_CODES)('%s: C01 and X01 name the dialog title plus "…"', (code) => {
+    const catalog = catalogOf(code)
+    const [before, after] = SET_OFF[code]
+    const label = `${before}${catalog['main.dialog.importUpdate']}…${after}`
+    expect(TEXTS.filter((key) => !catalog[key].includes(label)), `the texts that do not name ${label}`).toEqual([])
+  })
+})
+
 describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
   // A sentence-level break uses a real dash: English the em dash "—", German the em dash or
   // the en dash "–"; a bare ASCII hyphen standing in for one (space-hyphen-space) is a typo,

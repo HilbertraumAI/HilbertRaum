@@ -16,6 +16,15 @@ import { join } from 'node:path'
 // - (review M-2) the protocol, the menu and the window start inside `runWindowStart`, whose rows are
 //   tests/integration/window-start-failure.test.ts;
 // - and, outside the callback (review L-3), the crash and rejection lines log `safeFailureForLog`.
+//
+// App-update T6.3 (F-14, W-82; docs/app-updates.md §3.5 "The service and its start", "Who picks the file"): the update
+// service is built once per process, by one factory, inside `initBackend` right after the `Update keys` line and before
+// the policy and the workspace's start, and its four channels are registered right after it on a narrow context written
+// as an object literal, never `ctx`; the runner is handed the same factory for the failure state; and (fix round 1, F2)
+// the service's dependencies are update-service-deps.ts's, handed Electron's `app`, `dialog`, `BrowserWindow` and
+// `process`, and nothing else: index.ts adds no dependency of its own and sets no audit sink. What each dependency is
+// (main's dialog, the host, the glibc hook, the readers, the fail-closed version) is tests/unit/update-service-deps.test.ts;
+// what the channels do is updates-ipc.test.ts; the failure state's use of the factory, backend-start-failure.test.ts.
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
@@ -87,6 +96,120 @@ function crashLinesContentFree(src: string): boolean {
     !/String\((err|reason)\)/.test(crash + rejection.slice(0, rejection.indexOf('})') + 2))
   )
 }
+
+/** The body of `function initBackend(`, up to the next top-level function. */
+function initBackendBody(src: string): string {
+  const at = src.indexOf('\nfunction initBackend(')
+  const end = src.indexOf('\nfunction ', at + 1)
+  return at === -1 ? '' : src.slice(at, end === -1 ? undefined : end)
+}
+
+/** T6.3: the file's one `createUpdateService(` inside its one factory (`updateServiceFor = oneUpdateService(…)`, at module
+ *  scope above initBackend); inside initBackend one call of the factory, after the Update keys line and before the
+ *  policy and the workspace's start (record §3.5). */
+function oneServiceInItsPlace(src: string): boolean {
+  if (src.split('createUpdateService(').length - 1 !== 1 || src.split('oneUpdateService(').length - 1 !== 1) return false
+  const factory = src.match(/\nconst updateServiceFor = oneUpdateService\(/)
+  const initAt = src.indexOf('\nfunction initBackend(')
+  if (!factory || factory.index === undefined || initAt === -1 || factory.index > initAt) return false
+  const made = callArgs(src, 'oneUpdateService', factory.index)
+  if (made === null || !made.args.includes('createUpdateService(')) return false
+  const body = initBackendBody(src)
+  const calls = [...body.matchAll(/\bupdateServiceFor\(/g)]
+  if (calls.length !== 1) return false
+  const at = calls[0]!.index!
+  const keys = body.indexOf("log.info('Update keys'")
+  return keys !== -1 && keys < at && ['loadPolicy(', 'workspace.init()'].every((s) => body.indexOf(s) > at)
+}
+
+/** T6.3: the file's one `registerUpdatesIpc(`, the statement right after the factory's call in initBackend, handed an
+ *  object literal of the narrow context's four fields (never `ctx`) and that service. */
+function channelsOnTheNarrowContext(src: string): boolean {
+  if (src.split('registerUpdatesIpc(').length - 1 !== 1) return false
+  const body = initBackendBody(src)
+  const made = body.match(/const (\w+) = updateServiceFor\(paths\)\n\s*registerUpdatesIpc\(/)
+  if (!made || made.index === undefined) return false
+  const register = callArgs(body, 'registerUpdatesIpc', made.index)
+  const literal = /^\{\s*trustedSenders,\s*paths,\s*isDev,\s*appVersion:\s*app\.getVersion\(\)\s*\},\s*(\w+)$/
+  return register !== null && literal.exec(register.args.trim())?.[1] === made[1]
+}
+
+/** T6.3 (W-82): the runner is handed the same factory, so a failed start gets the one service or builds it there. */
+function runnerHandedTheFactory(src: string): boolean {
+  const run = callArgs(whenReady(src), 'runBackendStart')
+  return run !== null && /^\s*initBackend\s*,/.test(run.args) && /\bupdates:\s*updateServiceFor\s*\}\s*$/.test(run.args)
+}
+
+/** T6.3 fix round 1 (F2, review m-2): the service's dependencies are update-service-deps.ts's, made once at module scope
+ *  from Electron's `app`, `dialog`, `BrowserWindow` and `process` and above the factory, which hands the service exactly
+ *  what they build for the layout; index.ts names no dependency of its own (no dialog, no report, no reader, no
+ *  appender, no node:fs object, no start hook) and sets no audit sink (answer 3; T6.10b's, PR-6b). */
+function serviceBuiltThroughTheDepsModule(src: string): boolean {
+  const made = src.match(/\nconst updateServiceDeps = updateServiceDepsFor\(\{ app, dialog, BrowserWindow, process \}\)\n/)
+  const factory = src.match(/\nconst updateServiceFor = oneUpdateService\(\(layout\) => createUpdateService\(updateServiceDeps\(layout\)\)\)\n/)
+  return (
+    /\nimport \{ updateServiceDepsFor \} from '\.\/update-service-deps'\n/.test(src) &&
+    made?.index !== undefined &&
+    factory?.index !== undefined &&
+    made.index < factory.index &&
+    src.split('updateServiceDepsFor(').length - 1 === 1 &&
+    src.split('updateServiceDeps(').length - 1 === 1 &&
+    !/\b(UpdateServiceDeps|chooseFile|showOpenDialog|getReport|getSystemVersion|readUpdatePolicy|readDriveRelease|rootApps|readKitSupport|appendUpdateLogLine|NODE_BUNDLE_FS|NODE_STAGING_FS|NODE_START_FS|startHook|setAuditHook)\b/.test(src)
+  )
+}
+
+describe('wiring pin: index.ts builds the update service once and registers its channels on the narrow context (T6.3)', () => {
+  it('one factory, called once in initBackend after the Update keys line and before the policy and the workspace start', () => {
+    expect(oneServiceInItsPlace(indexSrc)).toBe(true)
+    // Controls: the service built after the workspace's start (a start that throws there would have none) ...
+    const late = indexSrc
+      .replace(/\n(\s*)const updates = updateServiceFor\(paths\)\n/, '\n')
+      .replace(/\n(\s*)workspace\.init\(\)\n/, '\n$1workspace.init()\n$1const updates = updateServiceFor(paths)\n')
+    expect(late).not.toBe(indexSrc)
+    expect(oneServiceInItsPlace(late)).toBe(false)
+    // ... and a second service built for the failure state (its start step would run twice).
+    const second = indexSrc.replace(/\bupdates:\s*updateServiceFor\b/, 'updates: oneUpdateService((layout) => createUpdateService(updateServiceDeps(layout)))')
+    expect(second).not.toBe(indexSrc)
+    expect(oneServiceInItsPlace(second)).toBe(false)
+  })
+
+  it('the four channels registered right after it, on an object literal of the narrow context, never ctx', () => {
+    expect(channelsOnTheNarrowContext(indexSrc)).toBe(true)
+    const full = indexSrc.replace(/registerUpdatesIpc\(\{[^}]*\}/, 'registerUpdatesIpc(ctx')
+    expect(full).not.toBe(indexSrc)
+    expect(channelsOnTheNarrowContext(full)).toBe(false)
+    const later = indexSrc.replace(/(updateServiceFor\(paths\)\n)(\s*)registerUpdatesIpc\(/, '$1$2void 0\n$2registerUpdatesIpc(')
+    expect(later).not.toBe(indexSrc)
+    expect(channelsOnTheNarrowContext(later)).toBe(false)
+  })
+
+  it('the runner is handed the same factory for the failure state (W-82)', () => {
+    expect(runnerHandedTheFactory(indexSrc)).toBe(true)
+    const none = indexSrc.replace(/,\s*updates:\s*updateServiceFor\b/, '')
+    expect(none).not.toBe(indexSrc)
+    expect(runnerHandedTheFactory(none)).toBe(false)
+  })
+
+  it('the dependencies are update-service-deps.ts\u{2019}s, handed Electron\u{2019}s parts, and nothing else: no field of index.ts\u{2019}s own, no audit sink', () => {
+    expect(serviceBuiltThroughTheDepsModule(indexSrc)).toBe(true)
+    // Controls: a dependency written over in index.ts (the review's example: an appender that writes nothing) ...
+    const over = indexSrc.replace('createUpdateService(updateServiceDeps(layout))', 'createUpdateService({ ...updateServiceDeps(layout), appendLog: () => false })')
+    expect(over).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(over)).toBe(false)
+    // ... a P7 start hook added in index.ts ...
+    const hook = indexSrc.replace('createUpdateService(updateServiceDeps(layout))', 'createUpdateService({ ...updateServiceDeps(layout), startHook: () => undefined })')
+    expect(hook).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(hook)).toBe(false)
+    // ... a part of Electron that is not Electron's ...
+    const stand = indexSrc.replace('updateServiceDepsFor({ app, dialog, BrowserWindow, process })', 'updateServiceDepsFor({ app, dialog, BrowserWindow: { fromWebContents: () => null }, process })')
+    expect(stand).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(stand)).toBe(false)
+    // ... and an audit sink set from index.ts in PR-6a.
+    const audit = indexSrc.replace(/(\n\s*)(registerUpdatesIpc\()/, '$1updates.setAuditHook(() => undefined)$1$2')
+    expect(audit).not.toBe(indexSrc)
+    expect(serviceBuiltThroughTheDepsModule(audit)).toBe(false)
+  })
+})
 
 describe('wiring pin: index.ts starts the back end through the failure-state runner (#1024)', () => {
   it('the protocol, the menu and the window start inside runWindowStart, with the error box and the exit (review M-2)', () => {

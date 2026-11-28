@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
+import { buildDatePlugin } from './build-date-plugin'
 import { canonicalCase, oneModulePerFile } from './path-casing'
 import { buildMetaCsp } from './src/main/window-security'
 
@@ -59,10 +60,13 @@ function cspMetaPlugin(): Plugin {
 // pdfjs-dist / mammoth / papaparse) OUT of the main/preload bundles — they are
 // require()'d from node_modules at runtime. This avoids fragile bundling of pdfjs's
 // large ESM build (BUILD_STATE R3) and is the idiomatic electron-vite setup.
+//
+// `buildDatePlugin` (app-update W-17, docs/app-updates.md §5.10) writes the release commit's
+// date into src/main/services/updates/build-date.json at the main build's start; main only.
 export default defineConfig({
   main: {
     root: appDir,
-    plugins: [externalizeDepsPlugin(), oneModulePerFile()],
+    plugins: [externalizeDepsPlugin(), oneModulePerFile(), buildDatePlugin()],
     build: {
       outDir: 'out/main',
       lib: { entry: resolve(appDir, 'src/main/index.ts') },

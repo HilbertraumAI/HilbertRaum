@@ -3108,6 +3108,8 @@ export const ru: UiCatalog<'ru'> = {
   'main.dialog.exportLog': 'Сохранение диагностических журналов',
   'main.dialog.filterDocuments': 'Документы',
   'main.dialog.filterAll': 'Все файлы',
+  'main.dialog.importUpdate': 'Установить обновление из файла',
+  'main.dialog.filterUpdate': 'Файл обновления',
   'main.zim.unavailable': 'Пакеты знаний недоступны в этом сеансе.',
   'main.zim.articleUnavailable':
     'Эта статья сейчас недоступна, поэтому ее не удалось сохранить. Возможно, пакет выключен или ' +

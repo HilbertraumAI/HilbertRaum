@@ -142,3 +142,110 @@ export function makeTarGz(entries: TarEntry[]): Buffer {
   blocks.push(Buffer.alloc(1024)) // two zero blocks end the archive
   return gzipSync(Buffer.concat(blocks))
 }
+
+// ---- The byte-level ustar writer (app-update T6.0b; docs/app-updates.md §4.3, table A.2; F-16) ----------------------
+// The update file is a strict subset of ustar, and release 1's reader is judged against files written here, byte by
+// byte: good ones in the writer's own bytes (table A.2: not `makeTarGz`'s, whose mtime and missing devmajor/devminor
+// are another archiver's) and hostile ones with any field set to anything. Nothing is gzipped and nothing streams; the
+// 2 GiB file of the performance row is not built here. P5's release writer is never used for a golden (plan C14).
+
+/** Each ustar header field's offset and length. `padding` is bytes 500–511. */
+export const USTAR_FIELDS = {
+  name: [0, 100],
+  mode: [100, 8],
+  uid: [108, 8],
+  gid: [116, 8],
+  size: [124, 12],
+  mtime: [136, 12],
+  checksum: [148, 8],
+  typeflag: [156, 1],
+  linkname: [157, 100],
+  magic: [257, 6],
+  version: [263, 2],
+  uname: [265, 32],
+  gname: [297, 32],
+  devmajor: [329, 8],
+  devminor: [337, 8],
+  prefix: [345, 155],
+  padding: [500, 12]
+} as const satisfies Record<string, readonly [number, number]>
+export type UstarField = keyof typeof USTAR_FIELDS
+
+/**
+ * What a header holds. A field left out takes the writer's own bytes (table A.2); one given is written as is at the
+ * field's start, the rest of the field NUL (a string is latin1 text). `size` may be a number: 11 octal digits and NUL.
+ * A `checksum` left out is computed last, over the header as written; one given is written as is, right or wrong.
+ */
+export type UstarHeaderFields = { [F in Exclude<UstarField, 'size'>]?: Buffer | string } & { size?: Buffer | string | number }
+
+/** The writer's bytes for the fields the reader ignores, the type and the magic (record §4.3, "Ignored fields"). */
+const USTAR_WRITER_BYTES: { [F in UstarField]?: string } = {
+  mode: '0000644\0',
+  uid: '0000000\0',
+  gid: '0000000\0',
+  mtime: '00000000000\0',
+  typeflag: '0',
+  magic: 'ustar\0',
+  version: '00',
+  devmajor: '0000000\0',
+  devminor: '0000000\0'
+}
+
+/** The unsigned sum of a header's 512 bytes with the checksum field counted as eight spaces. */
+export function ustarChecksum(header: Buffer): number {
+  const [at, length] = USTAR_FIELDS.checksum
+  let sum = 0
+  for (let i = 0; i < 512; i++) sum += i >= at && i < at + length ? 0x20 : header[i]
+  return sum
+}
+
+/** One 512-byte header. Throws when a value is longer than its field. */
+export function ustarHeader(fields: UstarHeaderFields): Buffer {
+  const header = Buffer.alloc(512)
+  const put = (field: UstarField, value: Buffer | string): void => {
+    const [at, length] = USTAR_FIELDS[field]
+    const bytes = typeof value === 'string' ? Buffer.from(value, 'latin1') : value
+    if (bytes.length > length) throw new Error(`ustar ${field}: ${bytes.length} bytes do not fit its ${length}`)
+    header.fill(0, at, at + length)
+    bytes.copy(header, at)
+  }
+  for (const [field, value] of Object.entries(USTAR_WRITER_BYTES) as Array<[UstarField, string]>) put(field, value)
+  for (const [field, value] of Object.entries(fields) as Array<[UstarField, Buffer | string | number | undefined]>) {
+    if (value === undefined || field === 'checksum') continue
+    put(field, typeof value === 'number' ? `${value.toString(8).padStart(11, '0')}\0` : value)
+  }
+  put('checksum', fields.checksum ?? `${ustarChecksum(header).toString(8).padStart(6, '0')}\0 `)
+  return header
+}
+
+/** A member: its header (the size is the data's unless given), the data, then zero bytes to a multiple of 512 or `pad` as is. */
+export function ustarMember(fields: UstarHeaderFields, data: Buffer, pad?: Buffer): Buffer {
+  return Buffer.concat([ustarHeader({ size: data.length, ...fields }), data, pad ?? Buffer.alloc((512 - (data.length % 512)) % 512)])
+}
+
+/** The reserved first 8 bytes of a future container (record §4.3, "The reserved prefix"). */
+export const HRUPDATE_PREFIX = Buffer.from('HRUPDATE', 'latin1')
+
+export interface UstarFileParts {
+  /** Bytes before the first header. */
+  prefix?: Buffer
+  /** Members and raw blocks, written in order as they are. */
+  members: Buffer[]
+  /** The end: two zero blocks (the default), one, or none. */
+  end?: 'two' | 'one' | 'none'
+  /** Bytes after the end. */
+  after?: Buffer
+  /** Every byte from this offset on is set to zero (a preallocated download that stopped there), before `cut`. */
+  zeroFrom?: number
+  /** Only the first `cut` bytes are kept. */
+  cut?: number
+}
+
+/** A whole file from its parts, hostile ones included. */
+export function makeUstarFile(parts: UstarFileParts): Buffer {
+  const end = Buffer.alloc({ two: 1024, one: 512, none: 0 }[parts.end ?? 'two'])
+  let file = Buffer.concat([parts.prefix ?? Buffer.alloc(0), ...parts.members, end, parts.after ?? Buffer.alloc(0)])
+  if (parts.zeroFrom !== undefined) file.fill(0, Math.min(parts.zeroFrom, file.length))
+  if (parts.cut !== undefined) file = file.subarray(0, parts.cut)
+  return file
+}

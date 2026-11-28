@@ -79,6 +79,10 @@ jobs:
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
+      # App-update W-17 (docs/app-updates.md 5.10): a tree with tracked changes builds no release date, and the key
+      # check below then fails with date-not-found. This prints those changes before the build (nothing on a clean tree).
+      - name: Show tracked changes before the build (app-update W-17)
+        run: git status --porcelain --untracked-files=no
       # Build BEFORE packaging, same reason as test-win above (AUD-18); the full suite
       # already ran, sharded, in test-win above on this exact checkout.
       - run: npm run build
@@ -191,6 +195,9 @@ jobs:
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
+      # App-update W-17: the same print as build-win's, before the build.
+      - name: Show tracked changes before the build (app-update W-17)
+        run: git status --porcelain --untracked-files=no
       - name: Package .app (unsigned dir target)
         # Stage 0: skip Developer ID lookup; remove when the APPLE_*/CSC_* secrets exist.
         env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
@@ -238,6 +245,9 @@ jobs:
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
+      # App-update W-17: the same print as build-win's, before the build.
+      - name: Show tracked changes before the build (app-update W-17)
+        run: git status --porcelain --untracked-files=no
       # AppImage target from electron-builder.yml (default filename HilbertRaum-<version>.AppImage).
       - run: npm run package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -1,0 +1,22 @@
+{
+  "contract": "F-14, the update channels callable while the workspace is locked (app-update task T6.0b; record docs/app-updates.md 3.5, rows \"The list (PR-6a)\" and \"The service and its start\"): the channels registerUpdatesIpc registers are exactly `pr6a`. F-14 is final in P7",
+  "pr6a": [
+    "updates:importFile",
+    "updates:status",
+    "updates:cancel",
+    "updates:discardStaged"
+  ],
+  "later": {
+    "PR-6b": "the \"Copy details for support\" channel (record 5.9)",
+    "P7": "the hand-off channel (record 5.4)"
+  },
+  "each": [
+    "goes through guardedHandle",
+    "never calls requireUnlocked()",
+    "takes the narrow context (the senders, the layout or null, isDev, the app version), never AppContext",
+    "never reads or writes workspace/",
+    "takes no path argument",
+    "is registered again by registerStartFailureIpc in a run whose start failed (W-82)"
+  ],
+  "lockCoverage": "registerUpdatesIpc stands in ipc-lock-coverage.test.ts's COVERED_ELSEWHERE"
+}

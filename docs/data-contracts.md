@@ -210,6 +210,10 @@ dir (`listDocuments(db, embedderId, storeDir)`; the docs IPC passes it), derived
 carry it, and every consumer must treat absence as unknown. Backed by the additive
 `documents.stored_name` column (the stored copy's leaf name, RELATIVE to the store dir; NULL until
 the resolver heals the row) — see architecture.md "Portable stored copies — design record".
+App-update P6 (PR-6a, T6.3; `docs/app-updates.md` §3.5): `updatesImportFile` / `updatesStatus` /
+`updatesCancel` / `updatesDiscardStaged` (`updates:importFile`, `updates:status`, `updates:cancel`,
+`updates:discardStaged`), the update channels callable while the workspace is locked and on the start-failure
+card; their shapes are in `shared/updates/import-types.ts` ("The update import" below), not `shared/types.ts`.
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -2066,8 +2070,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   value it cannot read, and then the failure is `{ cause: 'other', code: null }`), removes every handler the partial
   start registered (`releaseGuardedHandlers`, `ipc/guarded-handle.ts`; their count is logged when there were any; a
   channel registered before the start began, `guardedChannels`, stays), and registers the failure state
-  (`ipc/registerStartFailureIpc.ts`, which takes a `StartFailureContext { trustedSenders, failure, paths, isDev }` and no
-  `AppContext`):
+  (`ipc/registerStartFailureIpc.ts`, which takes a `StartFailureContext { trustedSenders, failure, paths, isDev,
+  appVersion, updates }` and no `AppContext`; app-update P6 added `appVersion`, the running version from
+  `app.getVersion()`, and `updates`, the process's one update service for a layout: `UpdateServiceGetter`, the
+  `oneUpdateService` getter of `backend-start.ts` that `BackendStartDeps.updates` hands over):
   - `getWorkspaceState` → `{ state: 'start_failed', mode: null, plaintextAllowed: false, encryptionRequired: true,
     startFailure }`, with `startFailure: BackendStartFailure { cause, code }` (`services/start-failure.ts`): `cause` is
     `drive_not_writable` (`EROFS`, `EPERM`, `EACCES` from a write: `mkdir`, `rename`, `write`, `unlink`, `rmdir`,
@@ -2078,16 +2084,23 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
     property of any other shape, or longer than 40 characters, reads as null). No message, no path.
   - `getLogTail` and `writeClipboard`: "Copy details for support", the same pair Diagnostics' Copy uses
     (`ipc/log-copy.ts`), with the same #975 redaction.
+  - The four update channels (app-update W-82, F-14; "The update import" below): `registerUpdatesIpc` on the narrow
+    context `{ trustedSenders, paths, isDev, appVersion }` built from this one, over `fctx.updates(fctx.paths)`: the
+    service the start built, or one built now, start step included, when the start threw before that. Registered
+    last, in a `try` of their own, all or none: a throw there is logged (`Backend start: the update channels could not
+    be registered`, `safeFailureForLog`) and leaves none of them registered, so they then answer Electron's own
+    refusal like the channels below.
   - Every other `handle` channel has no handler: Electron refuses the invoke ("No handler registered for '<channel>'",
-    the channel only). The renderer calls nothing else in this state (the engine-problems read takes the refusal).
+    the channel only). The renderer calls nothing else in this state (the engine-problems read takes the refusal; the
+    update import on the card is PR-6b's).
   The gate (`WorkspaceGate.tsx`) shows the card for `start_failed`: the cause's text from `START_FAILURE_KEYS`
   (`shared/workspace-failure-keys.ts`, own-property read; an unknown cause reads as `other`), "Error code: {code}" when
   there is one, and the copy button. `index.ts` installs the offline tripwire after a failed start, always offline.
-  **Constraint for the update plan (W-82, P6 task T6.3):** F-14's update channels (and P7's hand-off channel) are
-  registered inside `registerStartFailureIpc`, so a release that cannot start can still take the update that repairs
-  it. Their registrar takes a narrow context built from `StartFailureContext` (the senders, the drive root from
-  `paths`, `isDev`, the app version), **never the full `AppContext`**: that context does not exist in this state, and
-  the same registrar call serves the normal start. The `update.log` failed-start line (app-update W-14, F-11) is
+  **The update channels (W-82; as built in app-update P6, T6.3):** F-14's update channels are registered inside
+  `registerStartFailureIpc` (P7's hand-off channel joins the same registrar), so a release that cannot start can
+  still take the update that repairs it. Their registrar takes a narrow context built from `StartFailureContext`
+  (the senders, the layout from `paths`, `isDev`, the app version), **never the full `AppContext`**: that context does
+  not exist in this state, and the same registrar call serves the normal start. The `update.log` failed-start line (app-update W-14, F-11) is
   written in `runBackendStart`'s catch (`writeStartFailedLine`, best-effort, never throws, only on a prepared drive
   and only when the start had resolved its paths): `start-failed` with `version` (the app version the runner was
   handed), `cause` (`drive_not_writable` | `drive_full` | `other`; anything else reads as `other`), `err` (the gate's
@@ -2203,6 +2216,11 @@ support reads it before any unlock). Golden: `tests/fixtures/readers/f11-update-
   | `startup` | `version` (V; `unknown`), `llama`, `whisper`, `kiwix` (P; `absent`, `unreadable`), `release` (V; `absent`, `unreadable`), `release_format` (I), `drive_format` (I; `absent`, `unreadable`), `sqlite` (S; `unknown`) | once per start, `writeStartupLine` in `initBackend`, after logging exists and before the policy and the workspace's start (perf mark `update_log_startup`) |
   | `start-failed` | `version` (V; `unknown`), `cause` (`drive_not_writable`, `drive_full`, `other`), `err` (E), `syscall` (C) | `writeStartFailedLine`, in `runBackendStart`'s catch ("Start failure (#1024)" above) |
   | `unlock` | `result` (`ok`, `wrong_password`, `vault_damaged`, `workspace_schema_unreadable`, `vault_open_failed`, `vault_missing`, `vault_descriptor_missing`, `vault_descriptor_unreadable`, `vault_recovery_blocked`, `workspace_newer`, else `error`), `user_version` (N), `writer` (V; `none`, `unreadable`), `applied` (A), `damage` (`failed-authentication`, `not-a-database`), `what` (`database`, `descriptor`, `kdf`, `frame`, `journal`), `found` (I), `err` (E), `syscall` (C) | `writeUnlockLine`, after every unlock attempt the handler answers (`ipc/registerWorkspaceIpc.ts`, whose `updateLog` option is the startup line's drive), and at the start's plaintext open (developer builds only) |
+  | `import-refused` (P6) | `code` (the 26 codes an import answers: `UPD-NOT-AVAILABLE`, `UPD-NOT-A-DRIVE`, `UPD-POLICY-MANAGED`, `UPD-POLICY-INVALID`, `UPD-IN-PROGRESS`, `UPD-DRIVE-READ-ONLY`, `UPD-DRIVE-FULL`, `UPD-TOO-NEW`, `UPD-FILE-DAMAGED`, `UPD-NOT-GENUINE`, `UPD-UNKNOWN-SIGNER`, `UPD-FOR-NEWER-HILBERTRAUM`, `UPD-NOT-AN-UPDATE`, `UPD-WRONG-CHANNEL`, `UPD-NEEDS-IN-BETWEEN`, `UPD-SAME-OR-OLDER`, `UPD-ABOVE-MAX-VERSION`, `UPD-CANT-CHECK-LINUX-FLOOR`, `UPD-OS-TOO-OLD`, `UPD-DOWNLOAD-INCOMPLETE`, `UPD-NO-HELPER`, `UPD-PATH-TOO-LONG`, `UPD-FILE-TOO-BIG-FOR-DRIVE`, `UPD-CANT-READ-FILE`, `UPD-CANT-WRITE-DRIVE`, `UPD-OLD-FILE`), `version` (V; `unknown`), `stale_drive_version` (`yes`, `no`), `err` (E), `syscall` (C), `link` (`updates`, `staging`, `version`, `incoming`, `probe`) | by the update service (`services/updates/service.ts`): one line for a run that read the file and ended refused, or by asking (`UPD-OLD-FILE`), and for a run a check before the file dialog refused, except while the last import line this process wrote was the same code from such a check; none for `closed`, `busy`, `expired`, a cancel before the file was read, P7's `UPD-OLDER-THAN-DRIVE`, or any answer off a prepared drive (so none for `UPD-NOT-A-DRIVE`, which stands in the closed list only) |
+  | `import-staged` (P6) | `version` (V; `unknown`), `stale_drive_version` (`yes`, `no`), `files` (I: the `files[]` members staged, member 0 not counted), `old_file` (`confirmed`, `no`), `issued_in_future` (`yes`, `no`), `other_floors` (`yes`, `no`) | by the update service, once for a run that staged its update |
+  | `import-cancelled` (P6) | `version` (V; `unknown`) | by the update service, once for a run the user cancelled after the file was read (`version` when the payload was accepted before the cancel) |
+  | `staging-swept` (P6) | `n` (I), `reason` (`incoming`, `no-marker`, `invalid-marker`, `member-missing`, `not-a-folder`, `link`), `code` (`UPD-FILE-DAMAGED-ON-DRIVE`, with `member-missing` only) | by the start step's sweep (`services/updates/staging.ts`'s `sweptLogFields`), after its removals: one line per reason that counted an entry, in that order |
+  | `staging-discarded` (P6) | `version` (V; `unknown`) | by the update service, after "Don't install this update" (`updates:discardStaged`) removed the staged update |
 
 - **`startup`'s sources:** `version` from `app.getVersion()`; the pins from the app's own bundled
   `runtime-sources.yaml` (`absent`: no file or no block; `unreadable`: a read error, text that does not
@@ -2226,11 +2244,24 @@ support reads it before any unlock). Golden: `tests/fixtures/readers/f11-update-
   a password that is not a string; a create writes none. The plaintext start's newer-database line has
   no `found`. A refused unlock's only write is this line. Each event's line fits 256 bytes by its actual
   fields: `startup` (longest 252 bytes, golden `s46`) and `start-failed` by their whole schema, `unlock`
-  per result (all nine keys at their caps would not fit; the longest real line is 210 bytes, golden `u61`).
+  per result (all nine keys at their caps would not fit; the longest real line is 210 bytes, golden `u61`), and
+  P6's import events by their whole schema (the longest, `import-refused` with every key at its cap and an 8-byte
+  OS token, is 226 bytes: golden `i54` of `vectors-import.json`).
+- **P6's import events** (record §4.5 "`update.log` events of the import"; golden
+  `tests/fixtures/readers/f11-update-log/vectors-import.json`, 108 vectors): the service passes `unknown` itself
+  for a valid version of 25 to 64 bytes, which V cannot hold; the formatter checks each key alone and writes a
+  pairing as given (`link` beside `UPD-CANT-WRITE-DRIVE` only, `code` beside `member-missing` only: the service's
+  duty, held by its rows); a count is passed as its decimal text and kept only when it passes I. `err` and
+  `syscall` stand only beside the codes an I/O error gives (`UPD-DRIVE-READ-ONLY`, `UPD-DRIVE-FULL`,
+  `UPD-FILE-TOO-BIG-FOR-DRIVE`, `UPD-CANT-READ-FILE`, `UPD-CANT-WRITE-DRIVE`). `appendUpdateLogLine` answers
+  whether it wrote the line (`true` only once the append returned), so the repeated-refusal rule counts only lines
+  that reached the file.
 - **Data-fed keys** (a value read from a file another program or build wrote, bounded by its rule):
   `startup`'s `release` and `release_format` (`drive-release.json`) and `drive_format` (`drive.json`);
   `unlock`'s `writer` and `applied` (the stamp) and `user_version` and `found` (the header, a
-  newer-format refusal). The word-shaped rules: P (`Steuer_2026.xlsx` passes it) and C (`peter`) are fed
+  newer-format refusal); P6's `staging-discarded` `version`, and the `version` of any line about a staged update
+  found at a start, from a `staged.json` under `updates/staging/` that release 1 does not verify again (a run's own
+  lines carry its verified payload's version). The word-shaped rules: P (`Steuer_2026.xlsx` passes it) and C (`peter`) are fed
   only from their own source (the bundled yaml's pins, an error's `syscall`); V (`1.0.0-peter`) and E
   (`EMMA`) admit a word in their own shapes; A is word-shaped outright. `applied` is the one data-fed key
   whose rule is neither numeric nor a closed list (release 1's exception to CF-41): release 1 writes
@@ -2249,7 +2280,7 @@ support reads it before any unlock). Golden: `tests/fixtures/readers/f11-update-
   removed by its name first) and a rename; a failed trim is tried again at the next append. Start files
   and apply scripts only append; readers accept any size. No quit line and no line for the
   unavailable-model notice.
-- **Later events** (P6, P7; CF-41): registered in `UPDATE_LOG_EVENTS`, in this module, as data, each key
+- **Later events** (P7, as P6's five were; CF-41): registered in `UPDATE_LOG_EVENTS`, in this module, as data, each key
   with one token rule or a closed list (an `UPD-*` code as the closed list of table B.9); a data-fed key
   is named in the module's header; a new token rule is numeric-shaped or a closed list, and a golden
   change. A later app writes its own writer token.
@@ -2275,10 +2306,14 @@ support reads it before any unlock). Golden: `tests/fixtures/readers/f11-update-
   constraint); `format` and `highest_version_seen` are returned for the log only, so a record with
   `format` 2 or 99 has its `app_version` read as usual. In this build the readers are the startup line,
   Diagnostics' "Version recorded on the drive" (`DriveStatus.driveAppVersion`) and the sell gate.
-- `rootArtifactOf` / `rootApps` / `chooseAppVersion` (unfrozen until P6's F-18, CF-33): which app per
-  system is at a root and its version, by exact, case-sensitive name; a folder `*.app` (not starting
-  with a dot) is a macOS app of no known version; a file named `*.app`, a folder named like an app file
-  and a link are no app.
+- `rootArtifactOf` / `rootApps` / `chooseAppVersion` (frozen with F-18's root-glob half in P6, CF-33): which
+  app per system is at a root and its version, each system's name compared as its own start file finds it: a
+  `win32` name after an ASCII fold of the glob's fixed parts (`hilbertraum-1.4.0-PORTABLE.EXE` carries `1.4.0`;
+  the version segment taken as written), a `darwin` or `linux` name byte for byte; the star matches any
+  characters, line ends included; a version only when the whole segment is one (never by prefix or substring); a
+  folder `*.app` (not starting with a dot) is a macOS app of no known version; a file named `*.app`, a folder
+  named like an app file and a link are no app (record §4.4 "The root globs release 1 reads"; golden
+  `f13-drive-release/vectors.json`). The import's version rule reads `rootApps` (record §2.5).
 ✅ **`scripts/lib/write-drive-release.mjs`** — the one writer of the record, run by `prepare-drive` and
 the Kit builder as `node --no-warnings` (node 22.18 or later), only lines starting `drive-release.json`
 shown. Writes UTF-8 without a byte-order mark, LF, two-space indent: its own fields first (`format: 1`,
@@ -2320,10 +2355,11 @@ member names, frozen: release 1 applies them to every update file for ever). The
 exact rule; this entry is the shape P5 and P6 build on. Verdicts are typed (`shared/updates/types.ts`): a
 reference code of record §5.8 with its parameters, never copy and never an address; record §2.10 lists
 every code, the stage that gives it, its parameters and the four flags. Goldens:
-`tests/fixtures/updates/vectors/` (`spec/`, `negative/`, `positive/`; record §10.7). In this build main
-only reads the embedded set, for the startup line (`log.info('Update keys', { count, valid })` in
-`index.ts`: a count and a flag, never a key or an id); nothing calls the verifier yet, P6's import is its
-first caller.
+`tests/fixtures/updates/vectors/` (`spec/`, `negative/`, `positive/`; record §10.7). Main reads the
+embedded set for the startup line (`log.info('Update keys', { count, valid })` in `index.ts`: a count and
+a flag, never a key or an id) and, since P6's first half, hands its keys to the update service, whose
+reader calls the verifier and the payload check (`services/updates/bundle.ts`, "The update import"
+below).
 
 - **The payload** (record §2.4), read from the verified bytes with the envelope's JSON rules (strict
   UTF-8, no byte-order mark, one object, own keys only, the last of a duplicate key, unknown keys
@@ -2405,7 +2441,90 @@ first caller.
   TypeScript that stripping can erase (no `enum`, no `namespace`, no parameter property); `envelope.ts`
   takes the key set as an argument and never imports `keys.ts`; host values are arguments, never read
   inside them. `member-name.ts` imports nothing and `version.ts` no value, so both also load without the
-  hook. Each module has a load row in its test file.
+  hook. Each module has a load row in its test file. P6's reader, `bundle.ts`, keeps the same rule (siblings,
+  `import type` and `node:*` only; its load row in `updates-bundle.test.ts`), for release 1's import-reader
+  snapshot (W-53).
+
+### The update import: channels, reader, staging, build date (app-update P6, PR-6a; `docs/app-updates.md` §3.5, §4, §5.10, §8.4)
+✅ **`ipc/registerUpdatesIpc.ts` over `services/updates/service.ts`** — the update channels callable while the
+workspace is locked, also in a start that failed (W-4, W-82; F-14's PR-6a list, frozen: the channels, what each
+does to the drive and the codes it answers; golden `tests/fixtures/updates/import/f14-locked-channels.json`). The
+argument and answer shapes are this build's own contract between its main process and its renderer
+(`shared/updates/import-types.ts`, types only), which ship together. Record §3.5 is the exact rule; this entry is
+the shape.
+- **Registration:** `registerUpdatesIpc(uctx, service)`, `uctx: UpdatesIpcContext { trustedSenders, paths:
+  ResolvedPaths | null, isDev, appVersion }`, never `AppContext`, so a channel cannot reach `workspace/` or the
+  database; `service` is `Pick<UpdateService, 'importFile' | 'status' | 'cancel' | 'discardStaged'>`, so the
+  registrar cannot reach the audit sink. Each channel goes through `guardedHandleFor({ trustedSenders })` (#252)
+  and calls no `requireUnlocked()`; `registerUpdatesIpc` stands in `ipc-lock-coverage.test.ts`'s
+  `COVERED_ELSEWHERE`, its own rows in `updates-ipc.test.ts`. `initBackend` calls it right after the `Update keys`
+  line on the process's one service (`oneUpdateService` in `backend-start.ts`, from `updateServiceDepsFor` in
+  `main/update-service-deps.ts`), and `registerStartFailureIpc` calls it again ("Start failure (#1024)" above). A
+  service method that rejects reaches the renderer as `UpdateChannelError` with an empty message; `app.log` gets
+  `Update channel: a call failed` with `{ channel, code }` (an errno-shaped code or null), never the message.
+- **Preload** (`window.api`): `updatesImportFile(argument?)`, `updatesStatus()`, `updatesCancel()`,
+  `updatesDiscardStaged(argument)`, each handing its argument on untouched; no renderer call until PR-6b.
+
+  | Channel | Argument | Answer |
+  |---|---|---|
+  | `updates:importFile` | `ImportFileArgument`: none, or `{ confirmToken: string }`; only an own `confirmToken` is read, any other value opens main's file dialog (one file, the `hrupdate` filter and "All files", no default folder); no argument carries a path | `ImportFileAnswer`, one per call when its run ends: `{ kind: 'staged', update, notices }`; `{ kind: 'confirm', token, update, notice, notices }` (`notice` the old-file question `UPD-OLD-FILE`, `token` one-time, minted in main); `{ kind: 'refused', refusal: ImportRefusal }`; `{ kind: 'cancelled' \| 'closed' \| 'busy' \| 'expired' }`. `update` is `ImportUpdateFacts { version, issued \| null, summary \| null }`, `notices` the warnings `UPD-ISSUED-IN-FUTURE` and `UPD-OTHER-SYSTEM-FLOOR` with their parameters |
+  | `updates:status` | none (any is ignored) | `UpdatesStatus { runningVersion, available, import, buildDate, drive }`: `import` is `ImportRunStatus` (`{ state: 'idle' \| 'checking' \| 'choosing' }`, `{ state: 'copying', done, total, update, notices }` or `{ state: 'committing', update, notices }`), `buildDate` the build date or null, `drive` `{ kind: 'none' }` off a prepared drive, else `{ kind: 'prepared', updatesFolder: 'real' \| 'not-real', policy: { install: 'allowed' \| 'managed' \| 'invalid', maxVersion, file: 'read' \| 'none' \| 'unreadable' }, inProgress, staged: { version } \| null, notice, sweeping, supportEnd }`, `notice` the sweep's `UPD-FILE-DAMAGED-ON-DRIVE` or null, `supportEnd` `{ state: 'month', month }` or `{ state: 'absent' \| 'unreadable' }` |
+  | `updates:cancel` | none | `CancelAnswer { kind: 'stopping' \| 'committing' \| 'idle' }`; every answer spends a live confirmation token |
+  | `updates:discardStaged` | `DiscardStagedArgument { version: string }`: an own string, compared byte for byte with the staged version, never a path | `DiscardStagedAnswer`: `{ kind: 'not-staged' \| 'busy' }`, `{ kind: 'discarded', version }`, or `{ kind: 'refused', refusal }` with `UPD-NOT-A-DRIVE`, `UPD-IN-PROGRESS` or `UPD-CANT-WRITE-DRIVE` |
+
+- **The codes** (`import-types.ts`): `ImportRefusal` is P4's `UpdateRefusal` (`shared/updates/types.ts`,
+  unchanged) or one of P6's twelve, `ImportOnlyRefusal`: `UPD-DOWNLOAD-INCOMPLETE`, `UPD-NO-HELPER`,
+  `UPD-PATH-TOO-LONG`, `UPD-DRIVE-READ-ONLY`, `UPD-FILE-TOO-BIG-FOR-DRIVE`, `UPD-CANT-READ-FILE`,
+  `UPD-CANT-WRITE-DRIVE`, `UPD-IN-PROGRESS`, `UPD-POLICY-MANAGED` and `UPD-POLICY-INVALID` with no parameters;
+  `UPD-DRIVE-FULL { requiredBytes, freeBytes }`, integers from 0 to 2^53 − 1, both null after an `ENOSPC`;
+  `UPD-NOT-A-DRIVE { runningVersion }`. The sweep's notice `UPD-FILE-DAMAGED-ON-DRIVE` has none. Every parameter
+  is a number or text the reader or the service computed or the payload signed, never a path and never user text;
+  the renderer turns a code into copy. The file also holds the reader's and staging's own verdict shapes
+  (`ContainerEnd`, `StagingEnd`, `StagingRefused`, `SweepFacts`, `DiscardEnd`), main's alone.
+- **What the four do, in brief** (record §3.5, §4.5): one run at a time, from the call to its answer, the dialog's
+  time included; a second `importFile` or a discard meanwhile answers `busy`, and so does a call while the start
+  step's sweep outlasts the channels' 10 s wait (`START_WAIT_MS`); every method waits for that sweep at most until
+  then. A refusal known before the file is read comes before the dialog. `status`'s drive reads (`updatesFolder`,
+  `policy`, `inProgress`, `supportEnd`) are taken at most once per 250 ms by a monotonic clock (`DRIVE_READS_MS`)
+  and not at all while a run or a discard goes; `staged`, `notice` and `sweeping` are the service's own state. Off a
+  prepared drive, or in a failure state with no layout, `status` answers `{ kind: 'none' }`, `discardStaged` refuses
+  `UPD-NOT-A-DRIVE`, and `importFile` refuses `UPD-NOT-A-DRIVE` (in a build that embeds no key, `UPD-NOT-AVAILABLE`
+  instead, which it checks first; a call that carries a `confirmToken` answers `expired` before either, since no token
+  is ever live there), reading and writing nothing under the root (F-21).
+✅ **`services/updates/bundle.ts`** — the update file's reader (F-16's reader side, frozen; golden
+`tests/fixtures/updates/golden.hrupdate`, `golden-win32-only.hrupdate` and `import/cases.json`, record §10.8).
+`readUpdateFile(path, options)` → `{ kind: 'checked', file }` or a `ContainerEnd` (`refused` with its
+`ContainerRefusal` and the thrown error's `{ code, syscall }`, or `cancelled`; both with the facts the run's log line
+takes: the accepted payload or null, `staleDriveVersion` or null). The open is asynchronous, read-only,
+`O_NONBLOCK` on macOS and Linux, a regular file by `fstat` on its descriptor; member 0 is read whole (at most
+4 MiB) and verified on this thread (`verifyEnvelope`, CF-47); `checkPayload` gets `verifyEnvelope`'s own result in
+the same turn (CF-51); then the header walk and this system's apply script. `file.stage(...)` then runs the data
+pass into the two folders the caller made, 1 MiB at a time through one reused buffer (`READ_SLICE_BYTES`), each
+member hashed while written, moved on a match, and answers a `StagingEnd`. It takes every host value and the
+file-system calls (`BundleFileSystem { open, rename, unlink }`) as arguments, logs nothing and never throws.
+✅ **`services/updates/staging.ts` + `services/updates/last-result.ts`** — staging on the drive (F-5, frozen;
+goldens `import/f5-staged.json`, `import/last-result.json`): `checkDriveBeforeDialog` (`updates/` found or made,
+`updates/staging/`, `updates/applying/`, the probe `updates/.write-probe`, the 64 MiB margin `MARGIN_BYTES`),
+`checkBeforeDataPass` (the Windows path length, the two staging folders, free space), `startDataPass`,
+`commitStaged` (the `cleared` line through `last-result.ts`'s `clearMarkOf`, then `hilbertraum-release.dsse.json`,
+`staged.txt` and, last, `staged.json`, each through its `.tmp` name), `removeStagingFolders`, the sweep's
+`planSweep` and `carryOutSweep`, and `discardStaged`. Typed, stateless, never a throw, never a path in an answer;
+nothing listed, read, written or removed through a link under `updates/` (record §4.5 "Links under `updates/`");
+the bytes of `staged.txt` and `staged.json` and `staged.json`'s cap (`STAGED_JSON_MAX_BYTES`, 4,063,232) are record
+§4.6's. `last-result.ts` reads `updates/last-result.txt` by table B.2's grammar (`readLastValidLine`,
+`marksVersion`) and appends `cleared <v> <16 hex>`; P7 extends it (CF-53).
+✅ **`services/updates/build-date.ts` + `apps/desktop/build-date-plugin.ts`** — the build date (W-17; F-12's input;
+record §5.10). The build step writes `src/main/services/updates/build-date.json` (git-ignored):
+`{"commit_date":"YYYY-MM-DDTHH:MM:SSZ"}` or `{"commit_date":null}`, one LF, ASCII, no space; `embeddedBuildDate`
+is its `commit_date` when that reads as §2.4's `issued` grammar, else null; `updates:status` answers it as
+`buildDate`. The release guard's `checkBundleBuildDate(files, committerDate)` (`bundle-check.ts`) → `{ ok: true, … }`
+or `{ ok: false, failure }` with `check: 'build-date'` and its `reason` (`expected-unreadable`, `date-not-found`,
+`date-repeated`, `date-not-in-code`, `date-not-quoted`).
+✅ **`shared/updates/support.ts`** — `supportNotice(input) → SupportNotice | null` (F-12, frozen; golden
+`import/f12-support-dates.json`): `SupportInput { buildDate, supportMonth, today: CalendarDate, dismissed }`, the
+answer `{ code: 'UPD-AGE-REMINDER', params: { ageMonths } }`, `{ code: 'UPD-SUPPORT-ENDED', params: { supportEnd } }`
+or `{ code: 'UPD-SUPPORT-ENDED-LONG-AGO', params: { supportEnd, ageMonths } }`. Pure, imports nothing, never throws;
+record §8.4's table is the exact rule. No caller yet (PR-6b's notices).
 
 ### Provisioning / asset loader (Phase 12 live)
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
@@ -3627,7 +3746,7 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (158 channels since #888 added `app:saveBeforeCloseDone`; 157 since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (162 channels since app-update P6 added the four `updates:*` channels, "The update import" above; 158 since #888 added `app:saveBeforeCloseDone`; 157 since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
 (7 since #888 added `app:saveBeforeClose`; 3 at the sweep, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented

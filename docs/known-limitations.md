@@ -1104,7 +1104,7 @@ password recovery — are documented in
     complete `.part` in place instead: a matching hash renames it into place, a mismatch discards it
     and restarts clean (the same treatment as a wrong-offset 206).
 - **Drive updates are manual — signed offline update files (spec §12.3) cannot be imported yet;
-  there is no update mechanism.** Nothing in this version imports an update file, so drives are
+  there is no update mechanism.** No screen in this version imports an update file, so drives are
   updated by hand, as [`drive-layout.md`](drive-layout.md) ("Updating a drive") describes. The
   in-field update is being built on the integration branch `feat/app-updates` (BUILD_STATE §5
   item 3); its design record [`app-updates.md`](app-updates.md) settles the key-management
@@ -1113,8 +1113,10 @@ password recovery — are documented in
   K1–K5, §2). What exists so far: the drive's support log `updates/update.log` (so a prepared
   drive now has an `updates/` folder), the drive-release record and the update policy keys ("App
   updates: support log, policy keys and drive record" below), and the check that decides whether
-  an update file is genuine and applicable, against public keys built into the app, with nothing
-  yet that hands it a file ("App updates: the trust core" below). This build's key set is empty
+  an update file is genuine and applicable, against public keys built into the app ("App updates:
+  the trust core" below), and the import that reads a picked update file and stages it under
+  `updates/staging/`, callable before an unlock, with no screen yet that offers it ("App updates: the
+  import and staging" below). This build's key set is empty
   until the owner's key ceremony. `workspace/backups/` is not created. One constraint already
   understood from that discussion: a trust anchor cannot be retroactively strengthened, so no
   development or test key may ever anchor a build. Test keys are made at test time and never
@@ -4831,16 +4833,23 @@ reviews accepted as built is below, grouped by part.
 The update wave's fourth phase (P4) built the check an update file must pass before anything in it is
 used: its signed envelope, its payload and the version rule, the public keys each build embeds, and the
 release guard that checks those keys in every release build ([`security-model.md`](security-model.md)
-"Update trust"). Nothing in this version hands it a file yet (the import is P6's), so these limits apply
-from then on. What P4's reviews accepted as built:
+"Update trust"). Since P6's first half the update import hands it the file a user picks (no screen offers
+that yet: "App updates: the import and staging" below), so these limits apply to every import. What
+P4's reviews accepted as built:
 
 **The verifier and the payload check**
 - **A hostile file at the caps holds the check for about a second.** The check is synchronous, and an
   update file whose signed envelope is at the 4 MiB cap and whose 64 signatures verify under no key
   costs 64 signature checks per embedded key. Measured in a packaged build (Electron 43.8.10,
   BoringSSL): about 0.9 s with release 1's three keys and 4.8 to 4.9 s with sixteen, the most a key
-  set may hold; a genuine file takes 14 to 23 ms. Whether the import runs the check off the app's main
-  thread is P6's decision; until then this is the bound.
+  set may hold; a genuine file takes 14 to 23 ms. P6 decided to keep the check on the app's main
+  thread, with no worker: what is bounded is the work (at most 64 signature checks for each of the
+  three keys), and a worker would be a second bundle that receives the keys as data, one more way to
+  fail kept for ever, against about a second on a file that is refused anyway. Through the import as
+  built such a file holds the main process for 866 to 897 ms: the window keeps drawing (it is its own
+  process), but the import's progress and its cancel answer only once the check ends; a slower computer
+  takes several times that. Only an import the user starts, or its one confirming call, reaches it
+  ([`app-updates.md`](app-updates.md) §4.5 "The verification's cost", §11.3).
 - **A forged file can read "signed with a newer key".** When no signature verifies and none names a key
   the app embeds, the answer is "signed with a newer key: install the in-between update first", also for
   a forgery or a file with no signature at all. It is refused either way, but the message may send
@@ -4887,3 +4896,43 @@ from then on. What P4's reviews accepted as built:
   already in npm's own npx cache. CI always has its local vitest after `npm ci`. The older #769
   packaged-app step still runs plain `npx vitest`, which would install a missing vitest (a follow-up;
   [`packaging.md`](packaging.md) "The release workflow").
+
+## App updates: the import and staging ([`app-updates.md`](app-updates.md) §3, §4)
+
+The update wave's sixth phase, in its first half (PR-6a), built the import that runs before any unlock: the
+update file's reader, staging under `updates/staging/`, the start-up sweep, the four update channels, the
+support computation and the build date ([`security-model.md`](security-model.md) "The update import").
+No screen offers the import yet (PR-6b), so for a user drives are still updated by hand (above). What its
+reviews and measurements accepted as built, each limit also stated in the record:
+
+- **A sweep can outlast the channels' 10 s wait on a cap-sized or hostile drive.** A start whose sweep
+  must remove an `.incoming-<v>/` of thousands of members (an import of a file near the 4,096-member cap,
+  cut by a kill) took 33.6 s for 4,096 members on an exFAT USB 3 stick; a drive someone filled with 2,000
+  folders that each look staged took 41 s (they survive and are read again at every start) to 96 s (they
+  are removed), with the main process's memory up by 163 to 210 MB for a while. Meanwhile the import and
+  the discard of a staged update answer "busy" (the status reports `sweeping`, which PR-6b's screens show),
+  and each status read reaches the drive behind the removals, holding the main process up to 67 ms as
+  measured (by a 1 ms interval; 88.8 ms by the event-loop delay monitor). A genuine drive (up to 400 members) finished in 2.4 to 3.5 s, inside the wait
+  ([`app-updates.md`](app-updates.md) §4.5 "The start step", §11.3).
+- **A probe leftover that another program holds on exFAT reads as a read-only drive.** exFAT keeps a
+  deleted file's name until the program holding it lets go, so the import's one-byte write check waits
+  out its retry (about 12 s on Windows) and then says the drive is read-only: a misleading message for a
+  stuck scanner, never a write through a link ([`app-updates.md`](app-updates.md) §4.2, the probe's row).
+- **An update file held by a cloud provider or a lease is not measured.** On macOS and Linux the file is
+  opened without waiting on a pipe, which does not cover every regular file, and on any system a read of
+  such a file can wait for it: such a call waits off the main process, the import stays where it was
+  ("checking", or copying) until it returns, and meanwhile another import or a discard answers "busy"
+  ([`app-updates.md`](app-updates.md) §4.5 "The update file's open").
+- **Staging's order holds for a kill, not for a power cut.** A drive pulled, or a power cut, before the
+  system has written its cache can lose a just-staged update or bring back a discarded one (never one
+  this version did not verify); on macOS and Linux a folder sync, or the folder's open for it, that fails
+  after the commit marker's rename refuses the commit while the marker stands, so when the clean-up after it fails too, the next
+  start offers an update the import reported as refused. The folder sync on exFAT under macOS and Linux
+  is first run on real media before release 1 ([`app-updates.md`](app-updates.md) §4.5 "The commit",
+  §11.3).
+- **A drive that drops out during the start-up sweep and comes straight back** can lose its staged update
+  (with the "damaged on the drive" notice once when a member was missing); it can be imported again
+  ([`app-updates.md`](app-updates.md) §4.5 "The start-up sweep").
+- **On Linux the system's glibc version is read once per run of the app.** A report that could not be
+  read is kept too, so every update that names a Linux minimum is refused as "can't check" until the app
+  is started again ([`app-updates.md`](app-updates.md) §3.5 "The service and its start").

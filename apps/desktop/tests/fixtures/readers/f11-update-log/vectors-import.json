@@ -1,0 +1,188 @@
+{
+  "contract": "F-11, the updates/update.log lines of the import (app-update task T6.0b; record docs/app-updates.md 4.5 \"update.log events of the import\", 3.5, 5.3 \"The app's lines\"): the five events P6 registers in UPDATE_LOG_EVENTS, each key in a fixed order with one token rule or a closed list. The frame, the time and the token rules V, I, E and C are vectors.json's; this file adds the five events and their vectors. Written from the record before the events were registered",
+  "events": {
+    "import-refused": {
+      "order": [
+        "code",
+        "version",
+        "stale_drive_version",
+        "err",
+        "syscall",
+        "link"
+      ],
+      "rules": {
+        "code": "closed: the 26 codes an import answers, from table B.9: UPD-NOT-AVAILABLE, UPD-NOT-A-DRIVE, UPD-POLICY-MANAGED, UPD-POLICY-INVALID, UPD-IN-PROGRESS, UPD-DRIVE-READ-ONLY, UPD-DRIVE-FULL, UPD-TOO-NEW, UPD-FILE-DAMAGED, UPD-NOT-GENUINE, UPD-UNKNOWN-SIGNER, UPD-FOR-NEWER-HILBERTRAUM, UPD-NOT-AN-UPDATE, UPD-WRONG-CHANNEL, UPD-NEEDS-IN-BETWEEN, UPD-SAME-OR-OLDER, UPD-ABOVE-MAX-VERSION, UPD-CANT-CHECK-LINUX-FLOOR, UPD-OS-TOO-OLD, UPD-DOWNLOAD-INCOMPLETE, UPD-NO-HELPER, UPD-PATH-TOO-LONG, UPD-FILE-TOO-BIG-FOR-DRIVE, UPD-CANT-READ-FILE, UPD-CANT-WRITE-DRIVE, UPD-OLD-FILE",
+        "version": "V, with the sentinel `unknown` for a version of 25 to 64 bytes; present when the run knows the update's version (an accepted payload, or the refusal's own version parameter: UPD-SAME-OR-OLDER, UPD-ABOVE-MAX-VERSION), else left out",
+        "stale_drive_version": "closed: yes, no; present when the run reached checkPayload",
+        "err": "E: the thrown error's code, for the codes an I/O error gives; left out when none was thrown or it fails E",
+        "syscall": "C: the thrown error's bare system call; left out when none was thrown or it fails C",
+        "link": "closed: updates, staging, version, incoming, probe; with UPD-CANT-WRITE-DRIVE only"
+      }
+    },
+    "import-staged": {
+      "order": [
+        "version",
+        "stale_drive_version",
+        "files",
+        "old_file",
+        "issued_in_future",
+        "other_floors"
+      ],
+      "rules": {
+        "version": "as import-refused",
+        "stale_drive_version": "closed: yes, no",
+        "files": "I: the `files[]` members staged, member 0 not counted",
+        "old_file": "closed: confirmed, no",
+        "issued_in_future": "closed: yes, no",
+        "other_floors": "closed: yes, no"
+      }
+    },
+    "import-cancelled": {
+      "order": [
+        "version"
+      ],
+      "rules": {
+        "version": "as import-refused; present when the payload was accepted before the cancel"
+      }
+    },
+    "staging-swept": {
+      "order": [
+        "n",
+        "reason",
+        "code"
+      ],
+      "rules": {
+        "n": "I: the entries of this reason",
+        "reason": "closed: incoming, no-marker, invalid-marker, member-missing, not-a-folder, link",
+        "code": "closed: UPD-FILE-DAMAGED-ON-DRIVE; with member-missing only"
+      }
+    },
+    "staging-discarded": {
+      "order": [
+        "version"
+      ],
+      "rules": {
+        "version": "as import-refused; data-fed (the discarded folder's staged.json)"
+      }
+    }
+  },
+  "size": "a line is at most 226 bytes without its two LFs (import-refused with every key at its cap and an 8-byte OS token: i54), so none reaches the frame's 256",
+  "formatter": "record 4.5 \"What the formatter writes\" (T6.0 fix 4, which ruled the five points T6.0b had asked): the formatter takes each key's first value that the key's rule or list admits, drops every other value, and checks each key alone, never one key against another; a line is not written only for an unregistered event or a line over 256 bytes. A version that fails V (no SemVer, or over 24 bytes) is dropped; the caller passes `unknown` itself for a valid version of 25 to 64 bytes. A link beside another code and a code beside another reason are written as given (the pairing is the service's duty). A syscall that fails C is dropped. A count is passed as its decimal text and kept only when it passes I",
+  "emit": {
+    "how": "`line` is the exact line the writer emits for the event and `fields` (platform and time are inputs; platform win32 unless given). `fields` holds what the formatter is handed for the event's keys, before the token rules: a count as its decimal text, a version as text. Where a vector has `run`, it is what the run knew and the caller turned into the field beside it: `run.version` is a valid version of 25 to 64 bytes, for which the caller passes `unknown`. A value its key's rule refuses, and a key the event does not name, never reaches the file (5.3 \"Registered events only\"); the frame drops that field and still writes the line",
+    "base": {
+      "platform": "win32",
+      "now": "2026-11-27T10:00:00.999Z"
+    },
+    "vectors": [
+      {"name":"i1","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-NOT-AVAILABLE"},"line":"r1-app win32 import-refused code=UPD-NOT-AVAILABLE t=2026-11-27T10:00:00Z"},
+      {"name":"i2","why":"the code alone; UPD-NOT-A-DRIVE stands in the list though no file receives it (off a prepared drive the appender writes nothing): a formatter golden only","event":"import-refused","fields":{"code":"UPD-NOT-A-DRIVE"},"line":"r1-app win32 import-refused code=UPD-NOT-A-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i3","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-POLICY-MANAGED"},"line":"r1-app win32 import-refused code=UPD-POLICY-MANAGED t=2026-11-27T10:00:00Z"},
+      {"name":"i4","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-POLICY-INVALID"},"line":"r1-app win32 import-refused code=UPD-POLICY-INVALID t=2026-11-27T10:00:00Z"},
+      {"name":"i5","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-IN-PROGRESS"},"line":"r1-app win32 import-refused code=UPD-IN-PROGRESS t=2026-11-27T10:00:00Z"},
+      {"name":"i6","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-DRIVE-READ-ONLY"},"line":"r1-app win32 import-refused code=UPD-DRIVE-READ-ONLY t=2026-11-27T10:00:00Z"},
+      {"name":"i7","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-DRIVE-FULL"},"line":"r1-app win32 import-refused code=UPD-DRIVE-FULL t=2026-11-27T10:00:00Z"},
+      {"name":"i8","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-TOO-NEW"},"line":"r1-app win32 import-refused code=UPD-TOO-NEW t=2026-11-27T10:00:00Z"},
+      {"name":"i9","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-FILE-DAMAGED"},"line":"r1-app win32 import-refused code=UPD-FILE-DAMAGED t=2026-11-27T10:00:00Z"},
+      {"name":"i10","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-NOT-GENUINE"},"line":"r1-app win32 import-refused code=UPD-NOT-GENUINE t=2026-11-27T10:00:00Z"},
+      {"name":"i11","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-UNKNOWN-SIGNER"},"line":"r1-app win32 import-refused code=UPD-UNKNOWN-SIGNER t=2026-11-27T10:00:00Z"},
+      {"name":"i12","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-FOR-NEWER-HILBERTRAUM"},"line":"r1-app win32 import-refused code=UPD-FOR-NEWER-HILBERTRAUM t=2026-11-27T10:00:00Z"},
+      {"name":"i13","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-NOT-AN-UPDATE"},"line":"r1-app win32 import-refused code=UPD-NOT-AN-UPDATE t=2026-11-27T10:00:00Z"},
+      {"name":"i14","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-WRONG-CHANNEL"},"line":"r1-app win32 import-refused code=UPD-WRONG-CHANNEL t=2026-11-27T10:00:00Z"},
+      {"name":"i15","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-NEEDS-IN-BETWEEN"},"line":"r1-app win32 import-refused code=UPD-NEEDS-IN-BETWEEN t=2026-11-27T10:00:00Z"},
+      {"name":"i16","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-SAME-OR-OLDER"},"line":"r1-app win32 import-refused code=UPD-SAME-OR-OLDER t=2026-11-27T10:00:00Z"},
+      {"name":"i17","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-ABOVE-MAX-VERSION"},"line":"r1-app win32 import-refused code=UPD-ABOVE-MAX-VERSION t=2026-11-27T10:00:00Z"},
+      {"name":"i18","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-CANT-CHECK-LINUX-FLOOR"},"line":"r1-app win32 import-refused code=UPD-CANT-CHECK-LINUX-FLOOR t=2026-11-27T10:00:00Z"},
+      {"name":"i19","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-OS-TOO-OLD"},"line":"r1-app win32 import-refused code=UPD-OS-TOO-OLD t=2026-11-27T10:00:00Z"},
+      {"name":"i20","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-DOWNLOAD-INCOMPLETE"},"line":"r1-app win32 import-refused code=UPD-DOWNLOAD-INCOMPLETE t=2026-11-27T10:00:00Z"},
+      {"name":"i21","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-NO-HELPER"},"line":"r1-app win32 import-refused code=UPD-NO-HELPER t=2026-11-27T10:00:00Z"},
+      {"name":"i22","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-PATH-TOO-LONG"},"line":"r1-app win32 import-refused code=UPD-PATH-TOO-LONG t=2026-11-27T10:00:00Z"},
+      {"name":"i23","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-FILE-TOO-BIG-FOR-DRIVE"},"line":"r1-app win32 import-refused code=UPD-FILE-TOO-BIG-FOR-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i24","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE t=2026-11-27T10:00:00Z"},
+      {"name":"i25","why":"the code alone: a code of the closed list","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i26","why":"the code alone; UPD-OLD-FILE is the line of a run that ends by asking (record 3.5)","event":"import-refused","fields":{"code":"UPD-OLD-FILE"},"line":"r1-app win32 import-refused code=UPD-OLD-FILE t=2026-11-27T10:00:00Z"},
+      {"name":"i27","why":"version from the refusal's own parameter, and the flag of a run that reached checkPayload","event":"import-refused","fields":{"code":"UPD-SAME-OR-OLDER","version":"1.0.0","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-SAME-OR-OLDER version=1.0.0 stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i28","why":"stale_drive_version=yes: the version rule ran and found the drive's app_version stale","event":"import-refused","fields":{"code":"UPD-SAME-OR-OLDER","version":"1.0.0","stale_drive_version":"yes"},"line":"r1-app win32 import-refused code=UPD-SAME-OR-OLDER version=1.0.0 stale_drive_version=yes t=2026-11-27T10:00:00Z"},
+      {"name":"i29","why":"checkPayload ran and refused before any version was known: the flag without a version","event":"import-refused","fields":{"code":"UPD-WRONG-CHANNEL","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-WRONG-CHANNEL stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i30","why":"a refusal after an accepted payload carries its version","event":"import-refused","fields":{"code":"UPD-NO-HELPER","version":"1.1.0","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-NO-HELPER version=1.1.0 stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i31","why":"a version of 24 bytes is V's longest","event":"import-refused","fields":{"code":"UPD-ABOVE-MAX-VERSION","version":"100.200.300-rc.123456789","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-ABOVE-MAX-VERSION version=100.200.300-rc.123456789 stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i32","why":"a version of 25 bytes is logged as the sentinel unknown (V holds 24 bytes)","event":"import-refused","run":{"version":"100.200.300-rc.1234567890"},"fields":{"code":"UPD-ABOVE-MAX-VERSION","version":"unknown","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-ABOVE-MAX-VERSION version=unknown stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i33","why":"a version of 64 bytes, the longest a payload may carry, is logged as unknown","event":"import-refused","run":{"version":"1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"fields":{"code":"UPD-SAME-OR-OLDER","version":"unknown","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-SAME-OR-OLDER version=unknown stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i34","why":"a pre-release version and build-free SemVer pass V as written","event":"import-refused","fields":{"code":"UPD-FILE-DAMAGED","version":"1.1.0-rc.1","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-FILE-DAMAGED version=1.1.0-rc.1 stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i35","why":"err and syscall: the thrown error's code and bare system call","event":"import-refused","fields":{"code":"UPD-DRIVE-FULL","version":"1.1.0","stale_drive_version":"no","err":"ENOSPC","syscall":"write"},"line":"r1-app win32 import-refused code=UPD-DRIVE-FULL version=1.1.0 stale_drive_version=no err=ENOSPC syscall=write t=2026-11-27T10:00:00Z"},
+      {"name":"i36","why":"err and syscall before the dialog: no version, no flag","event":"import-refused","fields":{"code":"UPD-DRIVE-READ-ONLY","err":"EROFS","syscall":"open"},"line":"r1-app win32 import-refused code=UPD-DRIVE-READ-ONLY err=EROFS syscall=open t=2026-11-27T10:00:00Z"},
+      {"name":"i37","why":"EFBIG","event":"import-refused","fields":{"code":"UPD-FILE-TOO-BIG-FOR-DRIVE","version":"1.1.0","stale_drive_version":"no","err":"EFBIG","syscall":"write"},"line":"r1-app win32 import-refused code=UPD-FILE-TOO-BIG-FOR-DRIVE version=1.1.0 stale_drive_version=no err=EFBIG syscall=write t=2026-11-27T10:00:00Z"},
+      {"name":"i38","why":"a read error on the update file","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE","version":"1.1.0","stale_drive_version":"no","err":"EIO","syscall":"read"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE version=1.1.0 stale_drive_version=no err=EIO syscall=read t=2026-11-27T10:00:00Z"},
+      {"name":"i39","why":"libuv's UNKNOWN (a Windows error it does not map) passes E","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","version":"1.1.0","stale_drive_version":"no","err":"UNKNOWN","syscall":"rename"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE version=1.1.0 stale_drive_version=no err=UNKNOWN syscall=rename t=2026-11-27T10:00:00Z"},
+      {"name":"i40","why":"an err that fails E (lower case) is left out; the syscall stays","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE","err":"eio","syscall":"read"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE syscall=read t=2026-11-27T10:00:00Z"},
+      {"name":"i41","why":"an err that is a message, not a code, is left out: no free text reaches the file","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE","err":"EIO: i/o error, read","syscall":"read"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE syscall=read t=2026-11-27T10:00:00Z"},
+      {"name":"i42","why":"no error was thrown: err and syscall are left out","event":"import-refused","fields":{"code":"UPD-DRIVE-FULL","version":"1.1.0","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-DRIVE-FULL version=1.1.0 stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i43","why":"link=updates without an error: the formatter writes it; no file receives this line while updates/ is not a real folder, since the appender then writes nothing (record 4.5, T6.0 fix 6)","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","link":"updates"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE link=updates t=2026-11-27T10:00:00Z"},
+      {"name":"i44","why":"link=staging: updates/staging/ is not a real folder (before the dialog)","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","link":"staging"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE link=staging t=2026-11-27T10:00:00Z"},
+      {"name":"i45","why":"link=version: updates/staging/<v>/ is not a real folder","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","version":"1.1.0","stale_drive_version":"no","link":"version"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE version=1.1.0 stale_drive_version=no link=version t=2026-11-27T10:00:00Z"},
+      {"name":"i46","why":"link=incoming: updates/staging/.incoming-<v>/ is not a real folder","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","version":"1.1.0","stale_drive_version":"no","link":"incoming"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE version=1.1.0 stale_drive_version=no link=incoming t=2026-11-27T10:00:00Z"},
+      {"name":"i47","why":"link=probe: updates/.write-probe still occupied, with the thrown error","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","err":"ENOTEMPTY","syscall":"rmdir","link":"probe"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE err=ENOTEMPTY syscall=rmdir link=probe t=2026-11-27T10:00:00Z"},
+      {"name":"i48","why":"a link value outside the closed list never reaches the file","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","link":"applying"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i49","why":"a stale_drive_version value outside yes and no never reaches the file","event":"import-refused","fields":{"code":"UPD-TOO-NEW","stale_drive_version":"true"},"line":"r1-app win32 import-refused code=UPD-TOO-NEW t=2026-11-27T10:00:00Z"},
+      {"name":"i50","why":"a code outside the closed list (another message's code of table B.9) never reaches the file; the frame drops the field and writes the line","event":"import-refused","fields":{"code":"UPD-UPDATED"},"line":"r1-app win32 import-refused t=2026-11-27T10:00:00Z"},
+      {"name":"i51","why":"UPD-OLDER-THAN-DRIVE is not in the list (P7's answer writes no line)","event":"import-refused","fields":{"code":"UPD-OLDER-THAN-DRIVE"},"line":"r1-app win32 import-refused t=2026-11-27T10:00:00Z"},
+      {"name":"i52","why":"a code in lower case is not in the list","event":"import-refused","fields":{"code":"upd-too-new"},"line":"r1-app win32 import-refused t=2026-11-27T10:00:00Z"},
+      {"name":"i53","why":"a key the event does not name (a path, a file name) never reaches the file","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE","path":"E:/Downloads/update.hrupdate","file":"update.hrupdate","files":"5"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE t=2026-11-27T10:00:00Z"},
+      {"name":"i54","why":"every key at its cap and an eight-byte OS token: 226 bytes, the longest line of the five events (no run writes this set of keys together)","platform":"abcdefgh","event":"import-refused","fields":{"code":"UPD-FILE-TOO-BIG-FOR-DRIVE","version":"100.200.300-rc.123456789","stale_drive_version":"yes","err":"ERR_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","syscall":"abcdefghijklmnop","link":"incoming"},"line":"r1-app abcdefgh import-refused code=UPD-FILE-TOO-BIG-FOR-DRIVE version=100.200.300-rc.123456789 stale_drive_version=yes err=ERR_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA syscall=abcdefghijklmnop link=incoming t=2026-11-27T10:00:00Z"},
+      {"name":"i55","why":"the OS token rule applies (an invalid platform reads unknown)","platform":"Windows NT","event":"import-refused","fields":{"code":"UPD-TOO-NEW"},"line":"r1-app unknown import-refused code=UPD-TOO-NEW t=2026-11-27T10:00:00Z"},
+      {"name":"i56","why":"a plain staged update","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"5","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=5 old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i57","why":"old_file=confirmed: the payload had oldFile and the call redeemed a token for it","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"5","old_file":"confirmed","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=5 old_file=confirmed issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i58","why":"both warnings shown, a stale drive version","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"yes","files":"5","old_file":"no","issued_in_future":"yes","other_floors":"yes"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=yes files=5 old_file=no issued_in_future=yes other_floors=yes t=2026-11-27T10:00:00Z"},
+      {"name":"i59","why":"4,096 members, the cap","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"4096","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=4096 old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i60","why":"one member","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"1","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=1 old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i61","why":"a version of 25 bytes is logged as unknown","event":"import-staged","run":{"version":"100.200.300-rc.1234567890"},"fields":{"version":"unknown","stale_drive_version":"no","files":"5","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=unknown stale_drive_version=no files=5 old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i62","why":"a count of seven digits fails I and never reaches the file","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"1000000","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i63","why":"a count that is no integer fails I","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"5.5","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i64","why":"a negative count fails I","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"-1","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i65","why":"an old_file value outside confirmed and no never reaches the file","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"5","old_file":"yes","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=5 issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i66","why":"issued_in_future and other_floors outside yes and no never reach the file","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"5","old_file":"no","issued_in_future":"true","other_floors":1},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=5 old_file=no t=2026-11-27T10:00:00Z"},
+      {"name":"i67","why":"every key at its cap and an eight-byte OS token: 179 bytes","platform":"abcdefgh","event":"import-staged","fields":{"version":"100.200.300-rc.123456789","stale_drive_version":"yes","files":"999999","old_file":"confirmed","issued_in_future":"yes","other_floors":"yes"},"line":"r1-app abcdefgh import-staged version=100.200.300-rc.123456789 stale_drive_version=yes files=999999 old_file=confirmed issued_in_future=yes other_floors=yes t=2026-11-27T10:00:00Z"},
+      {"name":"i68","why":"a cancel after the payload was accepted carries the version","event":"import-cancelled","fields":{"version":"1.1.0"},"line":"r1-app win32 import-cancelled version=1.1.0 t=2026-11-27T10:00:00Z"},
+      {"name":"i69","why":"a cancel after the file was read and before the payload was accepted: no version","event":"import-cancelled","fields":{},"line":"r1-app win32 import-cancelled t=2026-11-27T10:00:00Z"},
+      {"name":"i70","why":"a version of 25 bytes is logged as unknown","event":"import-cancelled","run":{"version":"100.200.300-rc.1234567890"},"fields":{"version":"unknown"},"line":"r1-app win32 import-cancelled version=unknown t=2026-11-27T10:00:00Z"},
+      {"name":"i71","why":"a key the event does not name never reaches the file","event":"import-cancelled","fields":{"version":"1.1.0","code":"UPD-TOO-NEW"},"line":"r1-app win32 import-cancelled version=1.1.0 t=2026-11-27T10:00:00Z"},
+      {"name":"i72","why":"reason=incoming: no code","event":"staging-swept","fields":{"n":"1","reason":"incoming"},"line":"r1-app win32 staging-swept n=1 reason=incoming t=2026-11-27T10:00:00Z"},
+      {"name":"i73","why":"reason=no-marker: no code","event":"staging-swept","fields":{"n":"1","reason":"no-marker"},"line":"r1-app win32 staging-swept n=1 reason=no-marker t=2026-11-27T10:00:00Z"},
+      {"name":"i74","why":"reason=invalid-marker: no code","event":"staging-swept","fields":{"n":"1","reason":"invalid-marker"},"line":"r1-app win32 staging-swept n=1 reason=invalid-marker t=2026-11-27T10:00:00Z"},
+      {"name":"i75","why":"reason=not-a-folder: no code","event":"staging-swept","fields":{"n":"1","reason":"not-a-folder"},"line":"r1-app win32 staging-swept n=1 reason=not-a-folder t=2026-11-27T10:00:00Z"},
+      {"name":"i76","why":"reason=link: no code","event":"staging-swept","fields":{"n":"1","reason":"link"},"line":"r1-app win32 staging-swept n=1 reason=link t=2026-11-27T10:00:00Z"},
+      {"name":"i77","why":"member-missing carries the code of the notice it shows","event":"staging-swept","fields":{"n":"1","reason":"member-missing","code":"UPD-FILE-DAMAGED-ON-DRIVE"},"line":"r1-app win32 staging-swept n=1 reason=member-missing code=UPD-FILE-DAMAGED-ON-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i78","why":"n counts the entries of the reason","event":"staging-swept","fields":{"n":"2000","reason":"invalid-marker"},"line":"r1-app win32 staging-swept n=2000 reason=invalid-marker t=2026-11-27T10:00:00Z"},
+      {"name":"i79","why":"a reason outside the closed list never reaches the file","event":"staging-swept","fields":{"n":"1","reason":"stale"},"line":"r1-app win32 staging-swept n=1 t=2026-11-27T10:00:00Z"},
+      {"name":"i80","why":"a code outside the closed list (an import code) never reaches the file","event":"staging-swept","fields":{"n":"1","reason":"member-missing","code":"UPD-FILE-DAMAGED"},"line":"r1-app win32 staging-swept n=1 reason=member-missing t=2026-11-27T10:00:00Z"},
+      {"name":"i81","why":"a count of seven digits fails I","event":"staging-swept","fields":{"n":"1234567","reason":"incoming"},"line":"r1-app win32 staging-swept reason=incoming t=2026-11-27T10:00:00Z"},
+      {"name":"i82","why":"every key at its cap and an eight-byte OS token: 114 bytes","platform":"abcdefgh","event":"staging-swept","fields":{"n":"999999","reason":"member-missing","code":"UPD-FILE-DAMAGED-ON-DRIVE"},"line":"r1-app abcdefgh staging-swept n=999999 reason=member-missing code=UPD-FILE-DAMAGED-ON-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i83","why":"the discarded folder's version (data-fed: read from a staged.json, not verified again)","event":"staging-discarded","fields":{"version":"1.1.0"},"line":"r1-app win32 staging-discarded version=1.1.0 t=2026-11-27T10:00:00Z"},
+      {"name":"i84","why":"a version of 24 bytes","event":"staging-discarded","fields":{"version":"100.200.300-rc.123456789"},"line":"r1-app win32 staging-discarded version=100.200.300-rc.123456789 t=2026-11-27T10:00:00Z"},
+      {"name":"i85","why":"a version of 25 bytes is logged as unknown","event":"staging-discarded","run":{"version":"100.200.300-rc.1234567890"},"fields":{"version":"unknown"},"line":"r1-app win32 staging-discarded version=unknown t=2026-11-27T10:00:00Z"},
+      {"name":"i86","why":"a version of 64 bytes, the longest a valid staged.json may hold, is logged as unknown","event":"staging-discarded","run":{"version":"1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"fields":{"version":"unknown"},"line":"r1-app win32 staging-discarded version=unknown t=2026-11-27T10:00:00Z"},
+      {"name":"i87","why":"a version that is no SemVer fails V and is dropped; the line is written without it","event":"import-refused","fields":{"code":"UPD-FILE-DAMAGED","version":"1.0","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-FILE-DAMAGED stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i88","why":"a version of 25 bytes handed to the formatter as it is fails V and is dropped (the caller passes unknown itself)","event":"import-refused","fields":{"code":"UPD-ABOVE-MAX-VERSION","version":"100.200.300-rc.1234567890","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-ABOVE-MAX-VERSION stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i89","why":"a version of 65 bytes fails V and is dropped","event":"import-refused","fields":{"code":"UPD-SAME-OR-OLDER","version":"1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stale_drive_version":"no"},"line":"r1-app win32 import-refused code=UPD-SAME-OR-OLDER stale_drive_version=no t=2026-11-27T10:00:00Z"},
+      {"name":"i90","why":"a version that is a word fails V and is dropped","event":"import-refused","fields":{"code":"UPD-TOO-NEW","version":"latest"},"line":"r1-app win32 import-refused code=UPD-TOO-NEW t=2026-11-27T10:00:00Z"},
+      {"name":"i91","why":"a link beside a code other than UPD-CANT-WRITE-DRIVE is written as given: the pairing is the service's duty, not the formatter's","event":"import-refused","fields":{"code":"UPD-DRIVE-FULL","link":"probe"},"line":"r1-app win32 import-refused code=UPD-DRIVE-FULL link=probe t=2026-11-27T10:00:00Z"},
+      {"name":"i92","why":"a link beside another code, with a version: written as given","event":"import-refused","fields":{"code":"UPD-NO-HELPER","version":"1.1.0","stale_drive_version":"no","link":"version"},"line":"r1-app win32 import-refused code=UPD-NO-HELPER version=1.1.0 stale_drive_version=no link=version t=2026-11-27T10:00:00Z"},
+      {"name":"i93","why":"a syscall of 17 letters fails C and is dropped; the err stays","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","err":"EPERM","syscall":"abcdefghijklmnopq"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE err=EPERM t=2026-11-27T10:00:00Z"},
+      {"name":"i94","why":"a syscall with an upper-case letter fails C and is dropped","event":"import-refused","fields":{"code":"UPD-CANT-READ-FILE","err":"EIO","syscall":"Read"},"line":"r1-app win32 import-refused code=UPD-CANT-READ-FILE err=EIO t=2026-11-27T10:00:00Z"},
+      {"name":"i95","why":"a syscall with a space and an argument (not bare) fails C and is dropped","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","err":"ENOENT","syscall":"spawn cmd.exe"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE err=ENOENT t=2026-11-27T10:00:00Z"},
+      {"name":"i96","why":"a count given as a number, not as its decimal text, is dropped","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":5,"old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i97","why":"a count that is a word is dropped","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"many","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i98","why":"a count with a plus sign is dropped","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"+5","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i99","why":"a count of six digits, the longest I takes, is kept; leading zeros are digits","event":"import-staged","fields":{"version":"1.1.0","stale_drive_version":"no","files":"000005","old_file":"no","issued_in_future":"no","other_floors":"no"},"line":"r1-app win32 import-staged version=1.1.0 stale_drive_version=no files=000005 old_file=no issued_in_future=no other_floors=no t=2026-11-27T10:00:00Z"},
+      {"name":"i100","why":"a code beside a reason other than member-missing is written as given: the pairing is the service's duty","event":"staging-swept","fields":{"n":"1","reason":"incoming","code":"UPD-FILE-DAMAGED-ON-DRIVE"},"line":"r1-app win32 staging-swept n=1 reason=incoming code=UPD-FILE-DAMAGED-ON-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i101","why":"a code with no reason at all: each key is checked alone","event":"staging-swept","fields":{"n":"1","code":"UPD-FILE-DAMAGED-ON-DRIVE"},"line":"r1-app win32 staging-swept n=1 code=UPD-FILE-DAMAGED-ON-DRIVE t=2026-11-27T10:00:00Z"},
+      {"name":"i102","why":"a count given as a number is dropped","event":"staging-swept","fields":{"n":1,"reason":"incoming"},"line":"r1-app win32 staging-swept reason=incoming t=2026-11-27T10:00:00Z"},
+      {"name":"i103","why":"a sweep that decided 1,000,000 entries of one reason: seven digits fail I, the line is written without n","event":"staging-swept","fields":{"n":"1000000","reason":"no-marker"},"line":"r1-app win32 staging-swept reason=no-marker t=2026-11-27T10:00:00Z"},
+      {"name":"i104","why":"a count of 999,999, the largest I takes","event":"staging-swept","fields":{"n":"999999","reason":"no-marker"},"line":"r1-app win32 staging-swept n=999999 reason=no-marker t=2026-11-27T10:00:00Z"},
+      {"name":"i105","why":"a version that is no SemVer fails V and is dropped; the line is written with no field","event":"staging-discarded","fields":{"version":"junk"},"line":"r1-app win32 staging-discarded t=2026-11-27T10:00:00Z"},
+      {"name":"i106","why":"a version of 65 bytes fails V and is dropped","event":"import-cancelled","fields":{"version":"1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"line":"r1-app win32 import-cancelled t=2026-11-27T10:00:00Z"},
+      {"name":"i107","why":"link=updates with the listing's error: the import's listing of the drive root failed while updates/ is a real folder, so the appender writes the line (record 4.5, T6.0 fix 6)","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","err":"EIO","syscall":"scandir","link":"updates"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE err=EIO syscall=scandir link=updates t=2026-11-27T10:00:00Z"},
+      {"name":"i108","why":"link=staging with the listing's error: scandir is the system call Node names for readdir (record 4.5, T6.0 fix 6)","event":"import-refused","fields":{"code":"UPD-CANT-WRITE-DRIVE","err":"EIO","syscall":"scandir","link":"staging"},"line":"r1-app win32 import-refused code=UPD-CANT-WRITE-DRIVE err=EIO syscall=scandir link=staging t=2026-11-27T10:00:00Z"}
+    ]
+  }
+}

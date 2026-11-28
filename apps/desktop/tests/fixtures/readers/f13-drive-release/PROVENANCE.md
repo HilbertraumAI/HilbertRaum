@@ -32,9 +32,9 @@ its own lines.
 What is frozen and what is not: `read` and `noCache` are F-13, release 1's reader, for ever; no answer there ever
 changes, and a new case is a new vector. `artifacts`, `tree` and `writes` (with `expected-record.json`) pin the HEAD
 helper and the root-name rule `rootArtifactOf`, which are replaceable: a later builder's helper may write differently
-within F-13's field meanings, and P6 freezes the root names (F-18). The case rule is P6's to decide (CF-33; review m7:
-`rootArtifactOf` matches a name byte for byte, while the Windows start file's glob ignores case). A change there
-updates those vectors and this folder's manifest lines, never `read` or `noCache`.
+within F-13's field meanings, and P6 freezes the root names (F-18). The case rule was P6's to decide (CF-33; review m7:
+`rootArtifactOf` matched a name byte for byte, while the Windows start file's glob ignores case); P6 decided it (below).
+A change there updates those vectors and this folder's manifest lines, never `read` or `noCache`.
 
 Added in T3.3a's fix round 1 (2026-11-25, at `6f1b388f`), by hand like the rest: `R27` (review m1: a `config/` that is
 itself a link is followed, the sheet's residual R27) and `W30` (review M1: what the helper makes of kept values that a
@@ -43,3 +43,19 @@ integer arithmetic, never taken from the helper's output). The test file's rows 
 the reader's `lstat` and its open), R29 (a close that fails), W31 (a reader that cannot be loaded) and W32 (a record
 that does not read back) take their expected values from `read` (R12a), `expected-record.json` and the helper's
 documented lines; they add no file here.
+
+Changed in app-update T6.2 part 1b (2026-11-27, at `cfcc2b42`; Opus 5.5), by hand from the record's ruling of CF-33
+(`docs/app-updates.md` §4.4 "The root globs release 1 reads", its **Case** sentence, and §5.7 "Which systems have a
+root artifact"): each system's own start file decides, so a `win32` name is compared after an ASCII fold of the glob's
+fixed parts, its version segment taken as written, and a `darwin` or `linux` name and a folder's `.app` byte for byte.
+Each changed or new vector's `why` cites "§4.4 case rule (T6.2, CF-33)"; no expected value was taken from the code.
+`artifacts`: `hilbertraum-0.2.0-portable.exe`, `HilbertRaum-0.2.0-Portable.exe` and `HilbertRaum-0.2.0-portable.EXE`
+changed from no app to `win32` carrying `0.2.0`; `HilbertRaum-0.2.0.appimage` stays no app (its `why` now cites the
+rule); seven vectors added (`hilbertraum-1.4.0-PORTABLE.EXE`, the record's example; `HILBERTRAUM-1.4.0-RC.1-PORTABLE.EXE`,
+an upper-case segment carried as written; a name whose `i` is a dotless i, U+0131 written raw in the JSON, which no
+ASCII fold reads as `i`; an upper-case `.ZIP`; the macOS and Linux names with a lower-case prefix; a folder
+`HilbertRaum.APP`). `writes`: `W10a` (a lower-case Windows app) now records it as the `win32` app: `systems`
+darwin,linux,win32, its path among `paths`, and `stdout` `files=12` (was: no app, darwin,linux, `files=11`). `tree`,
+`read`, `noCache`, `expected-record.json` and `kit-support.json` unchanged. Two Windows apps that differ only in case
+can stand side by side only where the file system keeps case apart, so that row is
+`tests/integration/commercial-drive-updates-scan.test.ts`'s (run on such a file system), not a `writes` vector here.

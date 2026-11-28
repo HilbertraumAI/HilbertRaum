@@ -484,7 +484,19 @@ export const IPC = {
   createWorkspace: 'workspace:create',
   lockWorkspace: 'workspace:lock',
   /** Change the encrypted vault's password. Runs unlocked only. */
-  changeWorkspacePassword: 'workspace:changePassword'
+  changeWorkspacePassword: 'workspace:changePassword',
+  // ---- App-update F-14 (T6.3; docs/app-updates.md §3.5): the update channels callable while the workspace is locked,
+  // and in a start that failed (W-82). Registered by main/ipc/registerUpdatesIpc.ts; the argument and answer shapes are
+  // shared/updates/import-types.ts's. No channel takes a path: main opens the file dialog itself.
+  /** Run one update file's import: no argument (opens main's file dialog), or `{ confirmToken }` (the old-file answer). */
+  updatesImportFile: 'updates:importFile',
+  /** The update state: the running version, the run's state, the drive part (no argument). */
+  updatesStatus: 'updates:status',
+  /** Stop the run at its next check point (no argument). */
+  updatesCancel: 'updates:cancel',
+  /** Remove a merely staged update: `{ version }`, compared byte for byte, never a path. */
+  updatesDiscardStaged: 'updates:discardStaged'
+  // ---- end of F-14's block
 } as const
 
 // Renderer-bound streaming event channels (main -> renderer).
