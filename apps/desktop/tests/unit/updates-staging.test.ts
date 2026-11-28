@@ -200,12 +200,15 @@ function snapshot(path: string): unknown {
   return { file: sha256(readFileSync(path)) }
 }
 
+/** No entry at the path: `ENOENT`, or `ENOTDIR` where a part of the path is a plain file (macOS and Linux answer that
+ *  for a name under a file, Windows `ENOENT`; the case `pre-updates-is-a-file` reads `updates/last-result.txt` so). */
 const isAbsent = (path: string): boolean => {
   try {
     lstatSync(path)
     return false
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT'
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR'
   }
 }
 
